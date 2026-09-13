@@ -4,6 +4,10 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useLocale } from "../../../hooks/useLocale";
 import { UsageSpendDailyLedger } from "../../../components/UsageSpendDailyLedger";
 import {
+  formatUsageSpendMetric,
+  formatUsageSpendUsd,
+} from "../../../lib/usageSpendFormatters";
+import {
   getSettingsSnapshot,
   getUsageSpendSummary,
   updateSettings,
@@ -12,41 +16,6 @@ import {
 import type { CostSummaryDisplayStyle, SettingsSnapshot, SpendContract, UsageSpendSummary } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
 import type { TabProps } from "../settingsTabs";
-
-const currencyFormatters = new Map<string, Intl.NumberFormat>();
-
-function formatUsd(value: number | null | undefined, currency: string): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-  const code = currency || "USD";
-  try {
-    let formatter = currencyFormatters.get(code);
-    if (!formatter) {
-      formatter = new Intl.NumberFormat(undefined, {
-        style: "currency",
-        currency: code,
-        maximumFractionDigits: 2,
-      });
-      currencyFormatters.set(code, formatter);
-    }
-    return formatter.format(value);
-  } catch {
-    return `$${value.toFixed(2)}`;
-  }
-}
-
-function formatSpendMetric(
-  cost: number | null | undefined,
-  tokens: number | null | undefined,
-  currency: string,
-  tokenLabel: string,
-): string {
-  const parts: string[] = [];
-  if (cost != null && Number.isFinite(cost)) parts.push(formatUsd(cost, currency));
-  if (tokens != null && Number.isFinite(tokens)) {
-    parts.push(`${Math.max(0, tokens).toLocaleString()} ${tokenLabel}`);
-  }
-  return parts.length > 0 ? parts.join(" · ") : "—";
-}
 
 /** Sanitized share-card PNG (no account emails) — upstream #2112. */
 function renderSharePng(summary: UsageSpendSummary, title: string): string {
@@ -104,8 +73,8 @@ function renderSharePng(summary: UsageSpendSummary, title: string): string {
       const y = y0 + (idx + 1) * rowH;
       const cells = [
         row.displayName,
-        formatSpendMetric(row.sevenDay, row.sevenDayTokens, row.currency, "tokens"),
-        formatSpendMetric(row.thirtyDay, row.thirtyDayTokens, row.currency, "tokens"),
+        formatUsageSpendMetric(row.sevenDay, row.sevenDayTokens, row.currency, "tokens"),
+        formatUsageSpendMetric(row.thirtyDay, row.thirtyDayTokens, row.currency, "tokens"),
         row.currency || "USD",
         row.source,
       ];
@@ -366,8 +335,8 @@ export default function UsageSpendTab(_props: TabProps) {
             {(summary?.rows ?? []).map((row) => (
               <tr key={row.providerId}>
                 <td>{row.displayName}</td>
-                <td>{formatSpendMetric(row.sevenDay, row.sevenDayTokens, row.currency, t("UsageSpendTokens"))}</td>
-                <td>{formatSpendMetric(row.thirtyDay, row.thirtyDayTokens, row.currency, t("UsageSpendTokens"))}</td>
+                <td>{formatUsageSpendMetric(row.sevenDay, row.sevenDayTokens, row.currency, t("UsageSpendTokens"))}</td>
+                <td>{formatUsageSpendMetric(row.thirtyDay, row.thirtyDayTokens, row.currency, t("UsageSpendTokens"))}</td>
                 <td>{row.currency || "USD"}</td>
                 <td className="usage-spend-table__source">
                   {row.source}
@@ -432,7 +401,7 @@ function SpendContractOverview({ contract, t }: { contract: SpendContract; t: (k
         : t("UsageSpendUnknown");
   const total = contract.knownCostUsd == null
     ? "—"
-    : `${contract.priceCoverage.unpriced > 0 ? "~" : ""}${formatUsd(contract.knownCostUsd, "USD")}`;
+    : `${contract.priceCoverage.unpriced > 0 ? "~" : ""}${formatUsageSpendUsd(contract.knownCostUsd, "USD")}`;
   const tokenParts = [
     contract.tokenMix.inputTokens == null ? null : `${contract.tokenMix.inputTokens.toLocaleString()} input`,
     contract.tokenMix.outputTokens == null ? null : `${contract.tokenMix.outputTokens.toLocaleString()} output`,
@@ -522,7 +491,7 @@ function ContractModelsPanel({ contract, showAll, onToggleAll, t }: { contract: 
                   {model.totalTokens.toLocaleString()} {t("UsageSpendTokens")}{model.customPricing ? " · " + t("UsageSpendCustomPricing") : ""}
                 </span>
               </span>
-              <span>{model.costUsd == null ? t("UsageSpendUnpriced") : formatUsd(model.costUsd, "USD")}</span>
+              <span>{model.costUsd == null ? t("UsageSpendUnpriced") : formatUsageSpendUsd(model.costUsd, "USD")}</span>
             </div>
           ))}
         </div>
