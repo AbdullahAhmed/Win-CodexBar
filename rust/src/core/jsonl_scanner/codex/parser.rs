@@ -71,7 +71,10 @@ impl CodexParserState {
 
     pub(super) fn process_line(&mut self, line: &str, range: &CostUsageDayRange) {
         let event_candidate = is_candidate_codex_line(line);
-        let bare_candidate = !event_candidate && line.contains("\"usage\"");
+        // Event candidacy is only a fast-path hint. It must not suppress the
+        // independent bare-usage record family when a model value happens to
+        // contain an event marker such as "turn_context".
+        let bare_candidate = line.contains("\"usage\"");
         if !event_candidate && !bare_candidate {
             return;
         }
