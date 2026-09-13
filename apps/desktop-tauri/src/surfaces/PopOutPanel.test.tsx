@@ -145,6 +145,7 @@ function settings(): SettingsSnapshot {
     switcherShowsIcons: true,
     menuBarShowsHighestUsage: false,
     menuBarShowsPercent: false,
+    menuBarColorPace: false,
     showAsUsed: true,
     showAllTokenAccountsInMenu: false,
     enableAnimations: true,
