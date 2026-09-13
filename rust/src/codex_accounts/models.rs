@@ -376,6 +376,26 @@ pub fn display_names_by_id(accounts: &[CodexAccount]) -> HashMap<Uuid, String> {
     labels
 }
 
+/// Assign stable, opaque ordinals for account surfaces that hide personal data.
+///
+/// The account UUID is never displayed. Sorting it here keeps tray and React
+/// consumers consistent even when discovery returns accounts in a different
+/// order.
+pub fn ordinals_by_id(accounts: &[CodexAccount]) -> HashMap<Uuid, usize> {
+    let mut ordered: Vec<(String, usize, Uuid)> = accounts
+        .iter()
+        .enumerate()
+        .map(|(index, account)| (account.id.to_string(), index, account.id))
+        .collect();
+    ordered.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+
+    ordered
+        .into_iter()
+        .enumerate()
+        .map(|(index, (_, _, id))| (id, index + 1))
+        .collect()
+}
+
 /// Identity of a previously-removed account, kept to avoid re-adding it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -830,6 +850,19 @@ mod tests {
         assert!(!label.contains("secret-workspace"));
         assert!(!label.contains("secret-subject"));
         assert!(!label.contains("C:/private"));
+    }
+
+    #[test]
+    fn ordinals_are_stable_when_account_discovery_order_changes() {
+        let first = display_account("22222222-2222-2222-2222-222222222222", "workspace-alpha");
+        let second = display_account("11111111-1111-1111-1111-111111111111", "workspace-beta");
+
+        let forward = ordinals_by_id(&[first.clone(), second.clone()]);
+        let reversed = ordinals_by_id(&[second.clone(), first.clone()]);
+
+        assert_eq!(forward, reversed);
+        assert_eq!(forward[&second.id], 1);
+        assert_eq!(forward[&first.id], 2);
     }
 
     #[test]

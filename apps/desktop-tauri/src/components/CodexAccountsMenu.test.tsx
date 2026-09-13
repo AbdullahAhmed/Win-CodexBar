@@ -22,10 +22,7 @@ const eventMocks = vi.hoisted(() => ({
 vi.mock("../lib/tauri", () => tauriMocks);
 vi.mock("@tauri-apps/api/event", () => eventMocks);
 
-import CodexAccountsMenu, {
-  buildCodexAccountOrdinals,
-  buildPrivateCodexAccountLabel,
-} from "./CodexAccountsMenu";
+import CodexAccountsMenu from "./CodexAccountsMenu";
 
 function account(id: string, extra: Partial<CodexAccount> = {}): CodexAccount {
   return {
@@ -88,6 +85,7 @@ describe("CodexAccountsMenu", () => {
   it("renders nothing for a single-account setup (single-account fallback)", async () => {
     const { container } = renderMenu(false, {
       accounts: [account("1", { source: "ambient" })],
+      accountOrdinals: { "1": 1 },
       snapshots: {},
     });
     await waitFor(() => {
@@ -103,6 +101,7 @@ describe("CodexAccountsMenu", () => {
         account("1", { source: "ambient" }),
         account("2"),
       ],
+      accountOrdinals: { "1": 1, "2": 2 },
       snapshots: { "1": snapshot(30), "2": snapshot(70) },
     });
     await screen.findByText("user-1@example.com");
@@ -143,6 +142,7 @@ describe("CodexAccountsMenu", () => {
     };
     const { container } = renderMenu(false, {
       accounts: [account("1", { source: "ambient" }), account("2")],
+      accountOrdinals: { "1": 1, "2": 2 },
       snapshots: { "1": weeklyOnly },
     });
     await screen.findByText("user-1@example.com");
@@ -167,6 +167,7 @@ describe("CodexAccountsMenu", () => {
       false,
       {
         accounts: [account("1", { source: "ambient" }), account("2")],
+        accountOrdinals: { "1": 1, "2": 2 },
         snapshots: { "1": snapshot(30, resetAt), "2": snapshot(70, resetAt) },
       },
       false,
@@ -181,6 +182,7 @@ describe("CodexAccountsMenu", () => {
   it("switches an account and kicks a provider refresh", async () => {
     renderMenu(false, {
       accounts: [account("1", { source: "ambient" }), account("2")],
+      accountOrdinals: { "1": 1, "2": 2 },
       snapshots: {},
     });
     await screen.findByText("user-1@example.com");
@@ -188,6 +190,7 @@ describe("CodexAccountsMenu", () => {
     tauriMocks.codexAccountSwitch.mockResolvedValue({});
     tauriMocks.getCodexAccountsState.mockResolvedValue({
       accounts: [account("1", { source: "ambient" }), account("2")],
+      accountOrdinals: { "1": 1, "2": 2 },
       snapshots: {},
     });
     const switchButtons = screen.getAllByText("CodexAccountsSwitchButton");
@@ -202,6 +205,7 @@ describe("CodexAccountsMenu", () => {
   it("uses opaque ordinal labels and matching tooltips while hideEmail is on", async () => {
     const { container: hidden } = renderMenu(true, {
       accounts: [account("1", { source: "ambient" }), account("2")],
+      accountOrdinals: { "1": 1, "2": 2 },
       snapshots: {},
     });
     await waitFor(() => {
@@ -219,6 +223,7 @@ describe("CodexAccountsMenu", () => {
 
     const { container: visible } = renderMenu(false, {
       accounts: [account("1", { source: "ambient" }), account("2")],
+      accountOrdinals: { "1": 1, "2": 2 },
       snapshots: {},
     });
     await waitFor(() => {
@@ -232,7 +237,7 @@ describe("CodexAccountsMenu", () => {
     expect(rawEmail.getAttribute("title")).toBe("user-2@example.com");
   });
 
-  it("redacts email-like account metadata and keeps ordinals stable across refresh order", () => {
+  it("uses canonical opaque ordinals supplied by the account bridge", async () => {
     const first = account("uuid-b", {
       emailHint: "alice@example.com",
       nickname: "team@example.com",
@@ -242,24 +247,17 @@ describe("CodexAccountsMenu", () => {
       nickname: "Private workspace",
     });
 
-    const forward = buildCodexAccountOrdinals([first, second]);
-    const reversed = buildCodexAccountOrdinals([second, first]);
-    expect(forward).toEqual(reversed);
-    expect(forward[first.id]).toBe(2);
-    expect(forward[second.id]).toBe(1);
-
-    const privateLabel = buildPrivateCodexAccountLabel(
-      first,
-      "alice@example.com — team@example.com",
-      forward[first.id],
-      true,
-    );
-    expect(privateLabel).toEqual({
-      label: "Account 2",
-      tooltip: "Account 2",
+    const { container } = renderMenu(true, {
+      accounts: [first, second],
+      accountOrdinals: { "uuid-b": 2, "uuid-a": 1 },
+      snapshots: {},
     });
-    expect(privateLabel.label).not.toContain("@");
-    expect(privateLabel.label).not.toContain("example.com");
+    await screen.findByText("Account 2");
+    const labels = container.querySelectorAll(".codex-menu-accounts__email");
+    expect(labels[0].textContent).toBe("Account 2");
+    expect(labels[1].textContent).toBe("Account 1");
+    expect(labels[0].textContent).not.toContain("@");
+    expect(labels[1].textContent).not.toContain("example.com");
   });
 });
 

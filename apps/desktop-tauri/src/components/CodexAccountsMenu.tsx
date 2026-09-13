@@ -14,7 +14,7 @@ import {
   refreshProviders,
 } from "../lib/tauri";
 
-export interface PrivateCodexAccountLabel {
+interface PrivateCodexAccountLabel {
   label: string;
   tooltip: string;
 }
@@ -24,7 +24,7 @@ export interface PrivateCodexAccountLabel {
  * this switcher surface. The shared display-name builder remains unchanged so
  * settings and other account-facing surfaces keep their existing behavior.
  */
-export function buildPrivateCodexAccountLabel(
+function buildPrivateCodexAccountLabel(
   account: CodexAccount,
   displayName: string,
   ordinal: number,
@@ -37,31 +37,6 @@ export function buildPrivateCodexAccountLabel(
 
   const label = displayName || account.nickname || "Workspace";
   return { label, tooltip: label };
-}
-
-/**
- * Assign ordinals from the opaque stable account id rather than the current
- * discovery order. This keeps hidden labels stable when the backend refreshes
- * or reorders account rows.
- */
-export function buildCodexAccountOrdinals(
-  accounts: readonly CodexAccount[],
-): Record<string, number> {
-  const ordered = accounts
-    .map((account, index) => ({ account, index }))
-    .sort((left, right) => {
-      const leftId = left.account.id.trim().toLowerCase();
-      const rightId = right.account.id.trim().toLowerCase();
-      if (leftId < rightId) return -1;
-      if (leftId > rightId) return 1;
-      return left.index - right.index;
-    });
-
-  const ordinals: Record<string, number> = {};
-  ordered.forEach(({ account }, index) => {
-    ordinals[account.id] = index + 1;
-  });
-  return ordinals;
 }
 
 /**
@@ -88,6 +63,7 @@ export default function CodexAccountsMenu({
     Record<string, CodexAccountUsageSnapshot>
   >({});
   const [displayNames, setDisplayNames] = useState<Record<string, string>>({});
+  const [accountOrdinals, setAccountOrdinals] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -98,6 +74,7 @@ export default function CodexAccountsMenu({
       const next: CodexAccountsStateBridge = await getCodexAccountsState();
       setAccounts(next.accounts);
       setDisplayNames(next.displayNames ?? {});
+      setAccountOrdinals(next.accountOrdinals);
       setSnapshots(next.snapshots);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -148,7 +125,6 @@ export default function CodexAccountsMenu({
     accounts,
     displayNames,
   );
-  const accountOrdinals = buildCodexAccountOrdinals(accounts);
 
   return (
     <details className="codex-menu-accounts" onToggle={onLayoutChange}>
@@ -162,11 +138,11 @@ export default function CodexAccountsMenu({
         </div>
       )}
       <ul className="codex-menu-accounts__list">
-        {accounts.map((account, index) => {
+        {accounts.map((account) => {
           const privateLabel = buildPrivateCodexAccountLabel(
             account,
             accountDisplayNames[account.id] ?? "",
-            accountOrdinals[account.id] ?? index + 1,
+            accountOrdinals[account.id],
             hideEmail,
           );
           return (

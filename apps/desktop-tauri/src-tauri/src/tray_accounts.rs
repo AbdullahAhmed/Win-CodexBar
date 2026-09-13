@@ -3,12 +3,11 @@
 //! Keep provider/account workflows out of the generic tray shell so adding a
 //! new account action does not grow `tray_bridge.rs` into another controller.
 
-use std::collections::HashMap;
-
-use codexbar::codex_accounts::CodexAccount;
+use codexbar::codex_accounts::{CodexAccount, ordinals_by_id};
 use codexbar::locale::{self, LocaleKey};
 use codexbar::settings::{Language, Settings};
 use tauri::AppHandle;
+#[cfg(test)]
 use uuid::Uuid;
 
 use crate::tray_menu::TrayMenuEntry;
@@ -165,18 +164,14 @@ fn codex_accounts_menu(
     hide_personal_info: bool,
 ) -> TrayMenuEntry {
     let text = |key| locale::get_text(lang, key);
-    let ordinals = codex_account_ordinals(accounts);
+    let ordinals = ordinals_by_id(accounts);
     let mut children: Vec<_> = accounts
         .iter()
         .map(|account| {
             let is_active = active.is_some_and(|current| current.matches(account));
             let mut entry = TrayMenuEntry::check_item(
                 format!("switch_codex_account:{}", account.id),
-                codex_account_menu_label(
-                    account,
-                    hide_personal_info,
-                    ordinals.get(&account.id).copied(),
-                ),
+                codex_account_menu_label(account, hide_personal_info, ordinals[&account.id]),
                 is_active,
             );
             entry.disabled = is_active;
@@ -204,33 +199,12 @@ fn codex_accounts_menu(
 fn codex_account_menu_label(
     account: &CodexAccount,
     hide_personal_info: bool,
-    ordinal: Option<usize>,
+    ordinal: usize,
 ) -> String {
     if hide_personal_info {
-        return format!("Account {}", ordinal.unwrap_or(1));
+        return format!("Account {ordinal}");
     }
     account.display_name()
-}
-
-fn codex_account_ordinals(accounts: &[CodexAccount]) -> HashMap<Uuid, usize> {
-    let mut ordered: Vec<(String, usize, Uuid)> = accounts
-        .iter()
-        .enumerate()
-        .map(|(index, account)| {
-            (
-                account.id.to_string().to_ascii_lowercase(),
-                index,
-                account.id,
-            )
-        })
-        .collect();
-    ordered.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-
-    ordered
-        .into_iter()
-        .enumerate()
-        .map(|(index, (_, _, id))| (id, index + 1))
-        .collect()
 }
 
 fn claude_accounts_menu(
@@ -396,23 +370,15 @@ mod tests {
         );
 
         let accounts = [with_nickname.clone(), without_nickname.clone()];
-        let ordinals = codex_account_ordinals(&accounts);
+        let ordinals = ordinals_by_id(&accounts);
         assert_eq!(ordinals[&without_nickname.id], 1);
         assert_eq!(ordinals[&with_nickname.id], 2);
         assert_eq!(
-            codex_account_menu_label(
-                &with_nickname,
-                true,
-                ordinals.get(&with_nickname.id).copied(),
-            ),
+            codex_account_menu_label(&with_nickname, true, ordinals[&with_nickname.id],),
             "Account 2"
         );
         assert_eq!(
-            codex_account_menu_label(
-                &without_nickname,
-                true,
-                ordinals.get(&without_nickname.id).copied(),
-            ),
+            codex_account_menu_label(&without_nickname, true, ordinals[&without_nickname.id],),
             "Account 1"
         );
 
