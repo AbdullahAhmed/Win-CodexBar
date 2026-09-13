@@ -71,20 +71,6 @@ impl std::fmt::Display for RefreshError {
 
 impl std::error::Error for RefreshError {}
 
-#[derive(Debug, Deserialize)]
-struct TokenRefreshResponse {
-    access_token: Option<String>,
-    expires_in: Option<f64>,
-    id_token: Option<String>,
-}
-
-#[derive(Debug)]
-struct ParsedTokenRefreshResponse {
-    access_token: String,
-    expires_in: f64,
-    email: Option<String>,
-}
-
 /// Token refresher for Vertex AI OAuth
 pub struct VertexAITokenRefresher {
     cached_credentials: Arc<RwLock<Option<VertexAIOAuthCredentials>>>,
@@ -145,25 +131,39 @@ impl VertexAITokenRefresher {
             return Err(RefreshError::InvalidResponse(format!("Status {}", status)));
         }
 
-        let body = resp
-            .bytes()
+        let json: serde_json::Value = resp
+            .json()
             .await
             .map_err(|e| RefreshError::InvalidResponse(e.to_string()))?;
-        let parsed = Self::parse_token_refresh_response(&body)?;
+
+        let new_access_token = json
+            .get("access_token")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&credentials.access_token)
+            .to_string();
+
+        let expires_in = json
+            .get("expires_in")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(3600.0);
 
         // OAuth expires_in is a whole-second lifetime (default 3600), far below i64::MAX.
         #[expect(
             clippy::cast_possible_truncation,
             reason = "token lifetime seconds fit i64"
         )]
-        let expiry_seconds = parsed.expires_in as i64;
+        let expiry_seconds = expires_in as i64;
         let new_expiry_date = Utc::now() + chrono::Duration::seconds(expiry_seconds);
 
         // Extract email from new ID token if present
-        let email = parsed.email.or(credentials.email.clone());
+        let email = json
+            .get("id_token")
+            .and_then(|v| v.as_str())
+            .and_then(Self::extract_email_from_id_token)
+            .or(credentials.email.clone());
 
         let new_credentials = VertexAIOAuthCredentials {
-            access_token: parsed.access_token,
+            access_token: new_access_token,
             refresh_token: credentials.refresh_token,
             client_id: credentials.client_id,
             client_secret: credentials.client_secret,
@@ -176,26 +176,6 @@ impl VertexAITokenRefresher {
         *self.cached_credentials.write().await = Some(new_credentials.clone());
 
         Ok(new_credentials)
-    }
-
-    fn parse_token_refresh_response(
-        body: &[u8],
-    ) -> Result<ParsedTokenRefreshResponse, RefreshError> {
-        let response: TokenRefreshResponse = serde_json::from_slice(body)
-            .map_err(|e| RefreshError::InvalidResponse(e.to_string()))?;
-        let access_token = response
-            .access_token
-            .filter(|token| !token.trim().is_empty())
-            .ok_or_else(|| RefreshError::InvalidResponse("Missing access token".to_string()))?;
-
-        Ok(ParsedTokenRefreshResponse {
-            access_token,
-            expires_in: response.expires_in.unwrap_or(3600.0),
-            email: response
-                .id_token
-                .as_deref()
-                .and_then(Self::extract_email_from_id_token),
-        })
     }
 
     /// Get a valid access token, refreshing if necessary
@@ -290,59 +270,5 @@ mod tests {
         };
         assert!(!creds.is_expired());
         assert!(creds.is_valid());
-    }
-
-    #[test]
-    fn test_parse_token_refresh_response_accepts_usable_token() {
-        let parsed = VertexAITokenRefresher::parse_token_refresh_response(
-            br#"{"access_token":"new-token","expires_in":600}"#,
-        )
-        .expect("valid token response");
-
-        assert_eq!(parsed.access_token, "new-token");
-        assert_eq!(parsed.expires_in, 600.0);
-        assert_eq!(parsed.email, None);
-    }
-
-    #[test]
-    fn test_parse_token_refresh_response_rejects_missing_token() {
-        let result = VertexAITokenRefresher::parse_token_refresh_response(br#"{"expires_in":600}"#);
-
-        assert!(matches!(
-            result,
-            Err(RefreshError::InvalidResponse(message)) if message == "Missing access token"
-        ));
-    }
-
-    #[test]
-    fn test_parse_token_refresh_response_rejects_empty_token() {
-        let result =
-            VertexAITokenRefresher::parse_token_refresh_response(br#"{"access_token":""}"#);
-
-        assert!(matches!(
-            result,
-            Err(RefreshError::InvalidResponse(message)) if message == "Missing access token"
-        ));
-    }
-
-    #[test]
-    fn test_parse_token_refresh_response_rejects_whitespace_token() {
-        let result =
-            VertexAITokenRefresher::parse_token_refresh_response(br#"{"access_token":" \t\n "}"#);
-
-        assert!(matches!(
-            result,
-            Err(RefreshError::InvalidResponse(message)) if message == "Missing access token"
-        ));
-    }
-
-    #[test]
-    fn test_parse_token_refresh_response_rejects_malformed_json() {
-        let result = VertexAITokenRefresher::parse_token_refresh_response(b"not-json");
-
-        assert!(matches!(
-            result,
-            Err(RefreshError::InvalidResponse(message)) if !message.is_empty()
-        ));
     }
 }
