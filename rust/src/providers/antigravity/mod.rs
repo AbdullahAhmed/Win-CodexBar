@@ -28,7 +28,9 @@ use std::sync::LazyLock;
 use std::time::Duration;
 #[cfg(windows)]
 use std::time::Instant;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command as AsyncCommand;
+use uuid::Uuid;
 
 #[cfg(windows)]
 use crate::managed_process::{ManagedProcess, ManagedProcessConfig, ManagedProcessError};
@@ -53,6 +55,100 @@ const QUOTA_SUMMARY_PATH: &str =
     "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
 const AGY_REPORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 const AGY_REPORT_MAX_OUTPUT_BYTES: usize = 1_048_576;
+const AGY_WORKDIR_CREATE_ATTEMPTS: usize = 8;
+const ANTIGRAVITY_OAUTH_CREDENTIALS_ENV: &str = "ANTIGRAVITY_OAUTH_CREDENTIALS_JSON";
+
+#[derive(Debug)]
+struct PrivateAgyWorkdir {
+    path: PathBuf,
+}
+
+impl PrivateAgyWorkdir {
+    fn create() -> Result<Self, ProviderError> {
+        let temp_root = std::env::temp_dir();
+        for _ in 0..AGY_WORKDIR_CREATE_ATTEMPTS {
+            let path = temp_root.join(format!(
+                "codexbar-agy-{}-{}",
+                std::process::id(),
+                Uuid::new_v4()
+            ));
+            match std::fs::create_dir(&path) {
+                Ok(()) => {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+
+                        if std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+                            .is_err()
+                        {
+                            let _ = std::fs::remove_dir(&path);
+                            return Err(ProviderError::Other(
+                                "Failed to prepare Antigravity CLI working directory".into(),
+                            ));
+                        }
+                    }
+                    return Ok(Self { path });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(_) => break,
+            }
+        }
+
+        Err(ProviderError::Other(
+            "Failed to prepare Antigravity CLI working directory".into(),
+        ))
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for PrivateAgyWorkdir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct BoundedAgyStdout {
+    bytes: Vec<u8>,
+    exceeded_limit: bool,
+}
+
+/// Read a child stdout stream incrementally, retaining only the configured
+/// prefix while continuing to drain the pipe so the child cannot block on a
+/// full stdout buffer.
+async fn read_stdout_limited<R>(
+    mut reader: R,
+    max_bytes: usize,
+) -> std::io::Result<BoundedAgyStdout>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut bytes = Vec::with_capacity(max_bytes.min(8192));
+    let mut chunk = [0_u8; 8192];
+    let mut exceeded_limit = false;
+
+    loop {
+        let read = reader.read(&mut chunk).await?;
+        if read == 0 {
+            break;
+        }
+
+        let remaining = max_bytes.saturating_sub(bytes.len());
+        let retained = remaining.min(read);
+        bytes.extend_from_slice(&chunk[..retained]);
+        if retained < read {
+            exceeded_limit = true;
+        }
+    }
+
+    Ok(BoundedAgyStdout {
+        bytes,
+        exceeded_limit,
+    })
+}
 
 /// Serialize task-owned `agy` launches so concurrent app surfaces never start
 /// multiple interactive CLI servers at the same time.
@@ -461,7 +557,12 @@ impl AntigravityProvider {
         let version =
             Self::run_cli_command(&binary, &["--version"], std::time::Duration::from_secs(3))
                 .await?;
-        let version = String::from_utf8_lossy(&version.stdout);
+        if version.exceeded_limit {
+            return Err(ProviderError::Parse(
+                "Antigravity CLI version output is too large".into(),
+            ));
+        }
+        let version = String::from_utf8_lossy(&version.bytes);
         if !Self::is_supported_agy_version(version.trim()) {
             return Err(ProviderError::Parse(
                 "Antigravity CLI usage reports require agy 1.1.11 or later".into(),
@@ -481,12 +582,12 @@ impl AntigravityProvider {
             AGY_REPORT_TIMEOUT,
         )
         .await?;
-        if output.stdout.len() > AGY_REPORT_MAX_OUTPUT_BYTES {
+        if output.exceeded_limit {
             return Err(ProviderError::Parse(
                 "Antigravity CLI usage report is too large".into(),
             ));
         }
-        let usage = quota_summary::parse_cli_usage_report(&output.stdout)?;
+        let usage = quota_summary::parse_cli_usage_report(&output.bytes)?;
         Ok(Self::fetch_result(usage, "cli"))
     }
 
@@ -501,34 +602,59 @@ impl AntigravityProvider {
         }
     }
 
-    async fn run_cli_command(
+    fn prepare_agy_command(
         binary: &std::path::Path,
         args: &[&str],
-        timeout: std::time::Duration,
-    ) -> Result<std::process::Output, ProviderError> {
+        working_dir: &std::path::Path,
+    ) -> AsyncCommand {
         let mut command = AsyncCommand::new(binary);
         command
             .args(args)
+            .current_dir(working_dir)
+            .env_remove(ANTIGRAVITY_OAUTH_CREDENTIALS_ENV)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
         #[cfg(windows)]
         command.as_std_mut().creation_flags(0x0800_0000);
+        command
+    }
 
-        let child = command
+    async fn run_cli_command(
+        binary: &std::path::Path,
+        args: &[&str],
+        timeout: std::time::Duration,
+    ) -> Result<BoundedAgyStdout, ProviderError> {
+        let working_dir = PrivateAgyWorkdir::create()?;
+        let mut command = Self::prepare_agy_command(binary, args, working_dir.path());
+
+        let mut child = command
             .spawn()
             .map_err(|_| ProviderError::Other("Failed to start Antigravity CLI".into()))?;
-        let output = tokio::time::timeout(timeout, child.wait_with_output())
-            .await
-            .map_err(|_| ProviderError::Timeout)?
-            .map_err(|_| ProviderError::Other("Antigravity CLI usage report failed".into()))?;
-        if !output.status.success() {
-            return Err(ProviderError::Other(
-                "Antigravity CLI usage report failed".into(),
-            ));
-        }
-        Ok(output)
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| ProviderError::Other("Antigravity CLI usage report failed".into()))?;
+
+        tokio::time::timeout(timeout, async {
+            let (stdout_result, status_result) = tokio::join!(
+                read_stdout_limited(stdout, AGY_REPORT_MAX_OUTPUT_BYTES),
+                child.wait()
+            );
+            let stdout = stdout_result
+                .map_err(|_| ProviderError::Other("Antigravity CLI usage report failed".into()))?;
+            let status = status_result
+                .map_err(|_| ProviderError::Other("Antigravity CLI usage report failed".into()))?;
+            if !status.success() {
+                return Err(ProviderError::Other(
+                    "Antigravity CLI usage report failed".into(),
+                ));
+            }
+            Ok(stdout)
+        })
+        .await
+        .map_err(|_| ProviderError::Timeout)?
     }
 
     fn is_supported_agy_version(version: &str) -> bool {
