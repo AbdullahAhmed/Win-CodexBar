@@ -54,8 +54,8 @@ impl PerplexityProvider {
             metadata: ProviderMetadata {
                 id: ProviderId::Perplexity,
                 display_name: "Perplexity",
-                session_label: "Recurring",
-                weekly_label: "Bonus",
+                session_label: "Credits",
+                weekly_label: "Bonus credits",
                 supports_opus: false,
                 supports_credits: true,
                 default_enabled: false,
@@ -138,11 +138,12 @@ impl PerplexityProvider {
         if bonus_total > 0.0 {
             let mut secondary = RateWindow::new(pct(bonus_used, bonus_total));
             secondary.resets_at = bonus_expiry;
-            secondary.reset_description = Some(format!(
-                "${:.2}/${:.2}",
-                bonus_used / 100.0,
-                bonus_total / 100.0
-            ));
+            let mut bonus_description =
+                format!("${:.2}/${:.2}", bonus_used / 100.0, bonus_total / 100.0);
+            if let Some(expiry) = bonus_expiry {
+                bonus_description.push_str(&format!(" · exp. {}", expiry.format("%Y-%m-%d")));
+            }
+            secondary.reset_description = Some(bonus_description);
             snapshot = snapshot.with_secondary(secondary);
         }
 
@@ -291,6 +292,12 @@ mod tests {
         assert!((snap.primary.used_percent - 30.0).abs() < 0.001);
         let bonus = snap.secondary.expect("bonus window");
         assert!((bonus.used_percent - 0.0).abs() < 0.001);
+        assert!(
+            bonus
+                .reset_description
+                .as_deref()
+                .is_some_and(|description| description.contains("exp. 2025-06-15"))
+        );
         assert_eq!(snap.login_method.as_deref(), Some("Pro"));
     }
 
