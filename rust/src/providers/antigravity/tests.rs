@@ -473,6 +473,20 @@ fn is_agy_cli_command_rejects_unrelated_names() {
     assert!(!is_agy_cli_command(""));
 }
 
+#[test]
+fn structured_cli_report_requires_a_supported_semver_version() {
+    assert!(AntigravityProvider::is_supported_agy_version("1.1.11"));
+    assert!(AntigravityProvider::is_supported_agy_version("1.2.2"));
+    assert!(AntigravityProvider::is_supported_agy_version("2.0.0"));
+    assert!(!AntigravityProvider::is_supported_agy_version("1.1.10"));
+    assert!(!AntigravityProvider::is_supported_agy_version(
+        "1.2.2-preview"
+    ));
+    assert!(!AntigravityProvider::is_supported_agy_version("+1.2.2"));
+    assert!(!AntigravityProvider::is_supported_agy_version("1.2.2.3"));
+    assert!(!AntigravityProvider::is_supported_agy_version(""));
+}
+
 // ── Upstream 0.50.1 #2963: preserve unselected quota configs ────────────────
 
 #[test]

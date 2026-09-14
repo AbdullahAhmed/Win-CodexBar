@@ -22,11 +22,13 @@ use std::ffi::OsString;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::Stdio;
 use std::sync::LazyLock;
 #[cfg(windows)]
 use std::time::Duration;
 #[cfg(windows)]
 use std::time::Instant;
+use tokio::process::Command as AsyncCommand;
 
 #[cfg(windows)]
 use crate::managed_process::{ManagedProcess, ManagedProcessConfig, ManagedProcessError};
@@ -49,6 +51,8 @@ const AGY_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const GET_USER_STATUS_PATH: &str = "/exa.language_server_pb.LanguageServerService/GetUserStatus";
 const QUOTA_SUMMARY_PATH: &str =
     "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
+const AGY_REPORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+const AGY_REPORT_MAX_OUTPUT_BYTES: usize = 1_048_576;
 
 /// Serialize task-owned `agy` launches so concurrent app surfaces never start
 /// multiple interactive CLI servers at the same time.
@@ -450,6 +454,104 @@ impl AntigravityProvider {
         ProviderFetchResult::new(Self::with_cadence_labels(usage), source_label)
     }
 
+    async fn fetch_print_usage(
+        &self,
+        binary: PathBuf,
+    ) -> Result<ProviderFetchResult, ProviderError> {
+        let version =
+            Self::run_cli_command(&binary, &["--version"], std::time::Duration::from_secs(3))
+                .await?;
+        let version = String::from_utf8_lossy(&version.stdout);
+        if !Self::is_supported_agy_version(version.trim()) {
+            return Err(ProviderError::Parse(
+                "Antigravity CLI usage reports require agy 1.1.11 or later".into(),
+            ));
+        }
+
+        let output = Self::run_cli_command(
+            &binary,
+            &[
+                "-p",
+                "/usage",
+                "--output-format",
+                "json",
+                "--print-timeout",
+                "90s",
+            ],
+            AGY_REPORT_TIMEOUT,
+        )
+        .await?;
+        if output.stdout.len() > AGY_REPORT_MAX_OUTPUT_BYTES {
+            return Err(ProviderError::Parse(
+                "Antigravity CLI usage report is too large".into(),
+            ));
+        }
+        let usage = quota_summary::parse_cli_usage_report(&output.stdout)?;
+        Ok(Self::fetch_result(usage, "cli"))
+    }
+
+    async fn try_print_usage_fallback(&self) -> Option<ProviderFetchResult> {
+        let binary = Self::locate_agy_binary()?;
+        match self.fetch_print_usage(binary).await {
+            Ok(result) => Some(result),
+            Err(error) => {
+                tracing::debug!(%error, "Antigravity structured CLI usage report unavailable");
+                None
+            }
+        }
+    }
+
+    async fn run_cli_command(
+        binary: &std::path::Path,
+        args: &[&str],
+        timeout: std::time::Duration,
+    ) -> Result<std::process::Output, ProviderError> {
+        let mut command = AsyncCommand::new(binary);
+        command
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        #[cfg(windows)]
+        command.as_std_mut().creation_flags(0x0800_0000);
+
+        let child = command
+            .spawn()
+            .map_err(|_| ProviderError::Other("Failed to start Antigravity CLI".into()))?;
+        let output = tokio::time::timeout(timeout, child.wait_with_output())
+            .await
+            .map_err(|_| ProviderError::Timeout)?
+            .map_err(|_| ProviderError::Other("Antigravity CLI usage report failed".into()))?;
+        if !output.status.success() {
+            return Err(ProviderError::Other(
+                "Antigravity CLI usage report failed".into(),
+            ));
+        }
+        Ok(output)
+    }
+
+    fn is_supported_agy_version(version: &str) -> bool {
+        let parts: Vec<_> = version.split('.').collect();
+        if parts.len() != 3
+            || parts
+                .iter()
+                .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
+        {
+            return false;
+        }
+        let Some(major) = parts[0].parse::<u64>().ok() else {
+            return false;
+        };
+        let Some(minor) = parts[1].parse::<u64>().ok() else {
+            return false;
+        };
+        let Some(patch) = parts[2].parse::<u64>().ok() else {
+            return false;
+        };
+        (major, minor, patch) >= (1, 1, 11)
+    }
+
     /// Start a short-lived, headless `agy` session when neither the Antigravity
     /// desktop app nor a user-owned CLI session is running. The deadline includes
     /// launch serialization, the after-lock recheck, startup, probing and cleanup.
@@ -808,13 +910,31 @@ impl Provider for AntigravityProvider {
             Ok(None) => {
                 #[cfg(windows)]
                 {
-                    if let Some(result) =
-                        Self::resolve_managed_outcome(self.fetch_with_managed_agy().await)?
-                    {
-                        return Ok(result);
+                    match self.fetch_with_managed_agy().await {
+                        Ok(ManagedAgyOutcome::Reused(result)) => return Ok(result),
+                        Ok(ManagedAgyOutcome::Fetched(mut result)) => {
+                            result.source_label = "cli".to_string();
+                            return Ok(result);
+                        }
+                        Ok(ManagedAgyOutcome::Missing) => {}
+                        Err(error) => {
+                            if matches!(error, ProviderError::AuthRequired) {
+                                return Err(error);
+                            }
+                            if let Some(result) = self.try_print_usage_fallback().await {
+                                return Ok(result);
+                            }
+                            return Self::resolve_probe_failure(
+                                error,
+                                Self::offline_usage_result(),
+                            );
+                        }
                     }
                 }
 
+                if let Some(result) = self.try_print_usage_fallback().await {
+                    return Ok(result);
+                }
                 Self::offline_or_unavailable()
             }
             Err(error) => {
@@ -822,6 +942,11 @@ impl Provider for AntigravityProvider {
                 // preserve offline history before surfacing the probe error.
                 if !matches!(error, ProviderError::AuthRequired) {
                     tracing::debug!(%error, "Antigravity local probe failed");
+                }
+                if !matches!(error, ProviderError::AuthRequired)
+                    && let Some(result) = self.try_print_usage_fallback().await
+                {
+                    return Ok(result);
                 }
                 Self::resolve_probe_failure(error, Self::offline_usage_result())
             }
