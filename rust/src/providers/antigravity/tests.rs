@@ -1,3 +1,4 @@
+use super::legacy_status::{ModelFamily, canonical_model_id, classify_model};
 use super::*;
 
 #[test]
@@ -7,6 +8,17 @@ fn cadence_labels_are_owned_by_antigravity_snapshot() {
     let usage = UsageSnapshot::new(RateWindow::new(10.0)).with_secondary(secondary);
     let usage = AntigravityProvider::with_cadence_labels(usage);
     assert_eq!(usage.secondary_label.as_deref(), Some("Weekly"));
+}
+
+#[test]
+fn explicit_quota_summary_cadence_label_survives_normalization() {
+    let mut secondary = RateWindow::new(20.0);
+    secondary.window_minutes = Some(7 * 24 * 60);
+    let usage = UsageSnapshot::new(RateWindow::new(10.0))
+        .with_secondary(secondary)
+        .with_secondary_label("Gemini Weekly");
+    let usage = AntigravityProvider::with_cadence_labels(usage);
+    assert_eq!(usage.secondary_label.as_deref(), Some("Gemini Weekly"));
 }
 
 #[test]
@@ -120,11 +132,19 @@ fn antigravity_extra_windows_preserve_usage_known() {
             "cascadeModelConfigData": {
                 "clientModelConfigs": [
                     {
-                        "label": "Gemini 2.5 Pro",
+                        "label": "Claude 4 Sonnet",
                         "quotaInfo": {"remainingFraction": 0.8}
                     },
                     {
-                        "label": "Claude 4 Sonnet",
+                        "label": "Gemini 2.5 Pro",
+                        "quotaInfo": {"remainingFraction": 0.6}
+                    },
+                    {
+                        "label": "Gemini 2.5 Flash",
+                        "quotaInfo": {"remainingFraction": 0.4}
+                    },
+                    {
+                        "label": "Claude 3.5 Sonnet",
                         "quotaInfo": {"remainingFraction": null}
                     }
                 ]
@@ -133,17 +153,11 @@ fn antigravity_extra_windows_preserve_usage_known() {
     });
     let resp: UserStatusResponse = serde_json::from_value(json).unwrap();
     let snap = AntigravityProvider::new().parse_user_status(resp).unwrap();
-    let gemini = snap
-        .extra_rate_windows
-        .iter()
-        .find(|window| window.title.contains("Gemini"))
-        .unwrap();
     let claude = snap
         .extra_rate_windows
         .iter()
         .find(|window| window.title.contains("Claude"))
         .unwrap();
-    assert!(gemini.usage_known);
     assert!(!claude.usage_known);
     assert_eq!(claude.window.used_percent, 0.0);
 }
@@ -163,11 +177,35 @@ fn test_parse_user_status_standard() {
     assert!((sec.used_percent - 50.0).abs() < 0.1);
     let ter = snap.model_specific.unwrap();
     assert!((ter.used_percent - 10.0).abs() < 0.1);
+    assert!(snap.extra_rate_windows.is_empty());
+}
+
+#[test]
+fn antigravity_extra_windows_preserve_all_unselected_configs() {
+    let resp = make_response(vec![
+        ("Claude 4 Sonnet", 0.8),
+        ("GPT-4o", 0.8),
+        ("Mistral Large", 0.6),
+        ("Qwen Max", 0.6),
+    ]);
+    let provider = AntigravityProvider::new();
+    let snap = provider.parse_user_status(resp).unwrap();
+
     assert_eq!(snap.extra_rate_windows.len(), 3);
     assert!(
         snap.extra_rate_windows
             .iter()
-            .any(|window| window.title == "Gemini 2.5 Flash")
+            .any(|window| window.title == "GPT-4o")
+    );
+    assert!(
+        snap.extra_rate_windows
+            .iter()
+            .any(|window| window.title == "Mistral Large")
+    );
+    assert!(
+        snap.extra_rate_windows
+            .iter()
+            .any(|window| window.title == "Qwen Max")
     );
 }
 
@@ -266,9 +304,11 @@ fn managed_agy_candidates_prefer_override_then_path_then_known_installs() {
 #[test]
 fn reused_user_runtime_stays_local() {
     let usage = UsageSnapshot::new(RateWindow::new(10.0));
-    let result = AntigravityProvider::resolve_managed_outcome(Ok(ManagedAgyOutcome::Reused(usage)))
-        .expect("reused outcome resolves")
-        .expect("reused outcome yields usage");
+    let result = AntigravityProvider::resolve_managed_outcome(Ok(ManagedAgyOutcome::Reused(
+        ProviderFetchResult::new(usage, "local"),
+    )))
+    .expect("reused outcome resolves")
+    .expect("reused outcome yields usage");
     assert_eq!(result.source_label, "local");
 }
 
@@ -276,10 +316,11 @@ fn reused_user_runtime_stays_local() {
 #[test]
 fn owned_cli_fetch_reports_cli_source() {
     let usage = UsageSnapshot::new(RateWindow::new(10.0));
-    let result =
-        AntigravityProvider::resolve_managed_outcome(Ok(ManagedAgyOutcome::Fetched(usage)))
-            .expect("owned outcome resolves")
-            .expect("owned outcome yields usage");
+    let result = AntigravityProvider::resolve_managed_outcome(Ok(ManagedAgyOutcome::Fetched(
+        ProviderFetchResult::new(usage, "local"),
+    )))
+    .expect("owned outcome resolves")
+    .expect("owned outcome yields usage");
     assert_eq!(result.source_label, "cli");
 }
 
@@ -430,23 +471,24 @@ fn is_agy_cli_command_rejects_unrelated_names() {
     assert!(!is_agy_cli_command(""));
 }
 
-// ── Upstream 0.50.1 #2963: one lane per quota bucket ──────────────────────
+// ── Upstream 0.50.1 #2963: preserve unselected quota configs ────────────────
 
 #[test]
-fn multiple_models_in_same_quota_bucket_collapse_to_one_lane() {
-    // Two Claude variants sharing the same remaining fraction (same 5h
-    // session bucket) should produce one extra rate window, not two.
+fn multiple_unselected_models_with_same_reading_remain_visible() {
+    // Equal readings are not a pool identity. Both unselected configs remain
+    // visible even though the canonical Claude and Gemini configs are selected.
     let resp = make_response(vec![
-        ("Claude 3.5 Sonnet", 0.8),
         ("Claude 4 Sonnet", 0.8),
         ("Gemini 2.5 Pro Low", 0.5),
+        ("Mistral Large", 0.8),
+        ("Qwen Max", 0.8),
     ]);
     let provider = AntigravityProvider::new();
     let snap = provider.parse_user_status(resp).unwrap();
     assert_eq!(
         snap.extra_rate_windows.len(),
         2,
-        "models sharing a quota bucket collapse to one lane"
+        "distinct unselected configs with equal readings remain visible"
     );
 }
 
@@ -459,7 +501,7 @@ fn models_in_distinct_quota_buckets_keep_separate_lanes() {
     ]);
     let provider = AntigravityProvider::new();
     let snap = provider.parse_user_status(resp).unwrap();
-    assert_eq!(snap.extra_rate_windows.len(), 3);
+    assert_eq!(snap.extra_rate_windows.len(), 1);
 }
 
 #[test]
@@ -522,4 +564,94 @@ fn non_auth_failure_without_history_surfaces_error() {
         None,
     );
     assert!(matches!(resolved, Err(ProviderError::Other(_))));
+}
+
+#[test]
+fn user_tier_resolves_google_ai_ultra_plan_name() {
+    let json = serde_json::json!({
+        "userStatus": {
+            "email": "user@example.com",
+            "planStatus": {
+                "planInfo": {
+                    "planName": "Pro"
+                }
+            },
+            "userTier": {
+                "id": "g1-ultra-tier",
+                "name": "Google AI Ultra",
+                "description": "Google AI Ultra"
+            },
+            "cascadeModelConfigData": {
+                "clientModelConfigs": [
+                    {
+                        "label": "Gemini 2.5 Pro",
+                        "quotaInfo": {"remainingFraction": 0.8}
+                    }
+                ]
+            }
+        }
+    });
+    let resp: UserStatusResponse = serde_json::from_value(json).unwrap();
+    let snap = AntigravityProvider::new().parse_user_status(resp).unwrap();
+    assert_eq!(snap.login_method.as_deref(), Some("Google AI Ultra"));
+    assert_eq!(snap.account_email.as_deref(), Some("user@example.com"));
+}
+
+#[test]
+fn user_status_falls_back_to_plan_status_when_user_tier_is_absent() {
+    let json = serde_json::json!({
+        "userStatus": {
+            "email": "user@example.com",
+            "planStatus": {
+                "planInfo": {
+                    "planName": "Pro"
+                }
+            },
+            "cascadeModelConfigData": {
+                "clientModelConfigs": [
+                    {
+                        "label": "Gemini 2.5 Pro",
+                        "quotaInfo": {"remainingFraction": 0.8}
+                    }
+                ]
+            }
+        }
+    });
+    let resp: UserStatusResponse = serde_json::from_value(json).unwrap();
+    let snap = AntigravityProvider::new().parse_user_status(resp).unwrap();
+    assert_eq!(snap.login_method.as_deref(), Some("Pro"));
+}
+
+#[test]
+fn plan_name_fallback_skips_blank_user_tier_name() {
+    let status: UserStatus = serde_json::from_value(serde_json::json!({
+        "userTier": {
+            "name": "   ",
+            "description": " Google AI Ultra "
+        }
+    }))
+    .unwrap();
+
+    assert_eq!(
+        AntigravityProvider::resolve_plan_name(&status).as_deref(),
+        Some("Google AI Ultra")
+    );
+}
+
+#[test]
+fn plan_name_fallback_skips_blank_display_name() {
+    let status: UserStatus = serde_json::from_value(serde_json::json!({
+        "planStatus": {
+            "planInfo": {
+                "planDisplayName": " ",
+                "planName": " Pro "
+            }
+        }
+    }))
+    .unwrap();
+
+    assert_eq!(
+        AntigravityProvider::resolve_plan_name(&status).as_deref(),
+        Some("Pro")
+    );
 }

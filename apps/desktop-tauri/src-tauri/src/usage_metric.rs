@@ -107,29 +107,60 @@ fn automatic_window(
         }
     }
 
-    let windows = std::iter::once(&snapshot.primary)
-        .chain(snapshot.secondary.iter())
-        .chain(snapshot.model_specific.iter())
-        .chain(snapshot.tertiary.iter())
-        .chain(
+    let policy = automatic_metric_policy(provider);
+    let mut windows = Vec::with_capacity(4 + snapshot.extra_rate_windows.len());
+    windows.push(&snapshot.primary);
+    windows.extend(snapshot.secondary.iter());
+    windows.extend(snapshot.model_specific.iter());
+    windows.extend(snapshot.tertiary.iter());
+    if policy.uses_extra_windows {
+        windows.extend(
             snapshot
                 .extra_rate_windows
                 .iter()
                 .map(|extra| &extra.window),
-        )
+        );
+    }
+    let windows = windows
+        .into_iter()
         .filter(|window| !window.is_informational);
-    let prioritize_exhausted = provider
-        .map(|id| {
-            codexbar::core::instantiate_provider(id).automatic_metric_prioritizes_exhausted_window()
-        })
-        .unwrap_or(true);
-    let selected = if prioritize_exhausted {
+    let selected = if policy.prefers_available_window {
+        highest_available_window(windows)
+    } else if policy.prioritizes_exhausted_window {
         highest_automatic_window(windows)
     } else {
         highest_window(windows)
     };
 
     selected.cloned()
+}
+
+#[derive(Clone, Copy)]
+struct AutomaticMetricPolicy {
+    prefers_available_window: bool,
+    prioritizes_exhausted_window: bool,
+    uses_extra_windows: bool,
+}
+
+fn automatic_metric_policy(provider: Option<ProviderId>) -> AutomaticMetricPolicy {
+    match provider {
+        Some(ProviderId::Antigravity) => AutomaticMetricPolicy {
+            prefers_available_window: true,
+            prioritizes_exhausted_window: false,
+            uses_extra_windows: false,
+        },
+        Some(id) => AutomaticMetricPolicy {
+            prefers_available_window: false,
+            prioritizes_exhausted_window: codexbar::core::instantiate_provider(id)
+                .automatic_metric_prioritizes_exhausted_window(),
+            uses_extra_windows: true,
+        },
+        None => AutomaticMetricPolicy {
+            prefers_available_window: false,
+            prioritizes_exhausted_window: true,
+            uses_extra_windows: true,
+        },
+    }
 }
 
 fn average_window(snapshot: &ProviderUsageSnapshot) -> Option<RateWindowSnapshot> {
@@ -194,6 +225,19 @@ fn highest_window<'a>(
             .partial_cmp(&b.used_percent)
             .unwrap_or(Ordering::Equal)
     })
+}
+
+fn highest_available_window<'a>(
+    windows: impl Iterator<Item = &'a RateWindowSnapshot>,
+) -> Option<&'a RateWindowSnapshot> {
+    let windows = windows.collect::<Vec<_>>();
+    highest_window(
+        windows
+            .iter()
+            .copied()
+            .filter(|window| !automatic_window_is_exhausted(window)),
+    )
+    .or_else(|| highest_window(windows.into_iter()))
 }
 
 fn highest_automatic_window<'a>(
@@ -339,6 +383,45 @@ mod tests {
         let selected = highest_window([&healthy, &exhausted].into_iter()).expect("window");
 
         assert_eq!(selected.used_percent, 80.0);
+    }
+
+    #[test]
+    fn antigravity_automatic_prefers_active_core_quota_over_exhausted_extra_window() {
+        let mut snapshot = snapshot();
+        snapshot.provider_id = "antigravity".to_string();
+        snapshot.primary = window(100.0);
+        snapshot.primary.is_exhausted = true;
+        snapshot.primary_label = Some("Gemini 5h".to_string());
+        snapshot.secondary = Some(window(88.0));
+        snapshot.secondary_label = Some("Gemini Weekly".to_string());
+        snapshot.extra_rate_windows = vec![crate::commands::NamedRateWindowSnapshot {
+            id: "antigravity-quota-summary-3p-weekly".to_string(),
+            title: "Claude/GPT weekly".to_string(),
+            window: window(100.0),
+        }];
+
+        let selected = selected_usage_window(&snapshot, &Settings::default());
+
+        assert_eq!(selected.used_percent, 88.0);
+        assert!(!selected.is_exhausted);
+    }
+
+    #[test]
+    fn antigravity_automatic_uses_core_slots_only() {
+        let mut snapshot = snapshot();
+        snapshot.provider_id = "antigravity".to_string();
+        snapshot.primary = window(80.0);
+        snapshot.secondary = Some(window(20.0));
+        snapshot.model_specific = Some(window(90.0));
+        snapshot.extra_rate_windows = vec![crate::commands::NamedRateWindowSnapshot {
+            id: "legacy-other".to_string(),
+            title: "Other".to_string(),
+            window: window(100.0),
+        }];
+
+        let selected = selected_usage_window(&snapshot, &Settings::default());
+
+        assert_eq!(selected.used_percent, 90.0);
     }
 
     #[test]
