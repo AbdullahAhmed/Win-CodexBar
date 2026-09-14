@@ -341,11 +341,18 @@ impl WarpProvider {
 
             if remaining > 0
                 && let Some(expiration) = Self::parse_timestamp(grant.expiration.as_deref())
-                && next_expiration
-                    .as_ref()
-                    .is_none_or(|(current, _)| expiration < *current)
             {
-                next_expiration = Some((expiration, remaining));
+                match next_expiration.as_mut() {
+                    Some((current, current_remaining)) if expiration < *current => {
+                        *current = expiration;
+                        *current_remaining = remaining;
+                    }
+                    Some((current, current_remaining)) if expiration == *current => {
+                        *current_remaining = current_remaining.saturating_add(remaining);
+                    }
+                    None => next_expiration = Some((expiration, remaining)),
+                    _ => {}
+                }
             }
         }
 
@@ -503,12 +510,18 @@ mod tests {
             request_credits_remaining: Some(10),
             expiration: Some("2026-09-22T00:00:00Z".to_string()),
         };
+        let same_earlier = BonusGrant {
+            request_credits_granted: Some(50),
+            request_credits_remaining: Some(10),
+            expiration: Some("2026-09-22T00:00:00Z".to_string()),
+        };
 
-        let window = WarpProvider::bonus_window(vec![&later, &earlier]).expect("bonus window");
-        assert_eq!(window.used_percent, 40.0);
+        let window = WarpProvider::bonus_window(vec![&later, &earlier, &same_earlier])
+            .expect("bonus window");
+        assert_eq!(window.used_percent, 50.0);
         assert_eq!(
             window.reset_description.as_deref(),
-            Some("10 credits expire on 2026-09-22 00:00 UTC")
+            Some("20 credits expire on 2026-09-22 00:00 UTC")
         );
     }
 }
