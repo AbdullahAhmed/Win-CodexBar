@@ -66,7 +66,11 @@ describe("CodexAccountsSection", () => {
 
   it("renders nothing before the store loads, then lists accounts", async () => {
     tauriMocks.getCodexAccountsState.mockResolvedValue(
-      { accounts: [account("1"), account("2", { source: "ambient" })], snapshots: {} } as CodexAccountsStateBridge,
+      {
+        accounts: [account("1"), account("2", { source: "ambient" })],
+        accountOrdinals: { "1": 1, "2": 2 },
+        snapshots: {},
+      } as CodexAccountsStateBridge,
     );
     const { container } = render(<CodexAccountsSection t={t} />);
     expect(container.querySelector(".codex-accounts")).toBeNull();
@@ -84,6 +88,7 @@ describe("CodexAccountsSection", () => {
     tauriMocks.getCodexAccountsState.mockResolvedValue(
       {
         accounts: [account("1")],
+        accountOrdinals: { "1": 1 },
         snapshots: {
           "1": snapshot(38),
         },
@@ -98,8 +103,8 @@ describe("CodexAccountsSection", () => {
   it("offers ambient reauthentication and reloads the account state", async () => {
     const ambient = account("ambient", { source: "ambient" });
     tauriMocks.getCodexAccountsState
-      .mockResolvedValueOnce({ accounts: [ambient], snapshots: {} } as CodexAccountsStateBridge)
-      .mockResolvedValueOnce({ accounts: [ambient], snapshots: { ambient: snapshot(12) } } as CodexAccountsStateBridge);
+      .mockResolvedValueOnce({ accounts: [ambient], accountOrdinals: { ambient: 1 }, snapshots: {} } as CodexAccountsStateBridge)
+      .mockResolvedValueOnce({ accounts: [ambient], accountOrdinals: { ambient: 1 }, snapshots: { ambient: snapshot(12) } } as CodexAccountsStateBridge);
     tauriMocks.codexAccountReauthenticate.mockResolvedValue(ambient);
 
     render(<CodexAccountsSection t={t} />);
@@ -116,7 +121,11 @@ describe("CodexAccountsSection", () => {
   });
 
   it("does not offer a desktop session restart for a no-op switch", async () => {
-    tauriMocks.getCodexAccountsState.mockResolvedValue({ accounts: [account("1")], snapshots: {} });
+    tauriMocks.getCodexAccountsState.mockResolvedValue({
+      accounts: [account("1")],
+      accountOrdinals: { "1": 1 },
+      snapshots: {},
+    });
     tauriMocks.codexAccountSwitch.mockResolvedValue({ switchId: "noop", desktopSessionRestorePath: null } as CodexSwitchResult);
     render(<CodexAccountsSection t={t} />);
     await screen.findByText("CodexAccountsSwitchButton");
@@ -128,10 +137,10 @@ describe("CodexAccountsSection", () => {
 
   it("adds an account and reloads", async () => {
     tauriMocks.getCodexAccountsState.mockResolvedValueOnce(
-      { accounts: [], snapshots: {} } as CodexAccountsStateBridge,
+      { accounts: [], accountOrdinals: {}, snapshots: {} } as CodexAccountsStateBridge,
     );
     tauriMocks.getCodexAccountsState.mockResolvedValueOnce(
-      { accounts: [account("1")], snapshots: {} } as CodexAccountsStateBridge,
+      { accounts: [account("1")], accountOrdinals: { "1": 1 }, snapshots: {} } as CodexAccountsStateBridge,
     );
     render(<CodexAccountsSection t={t} />);
     await waitFor(() => {
@@ -150,7 +159,7 @@ describe("CodexAccountsSection", () => {
 
   it.each([true, false])("offers a desktop restart even for a first switch (saved session: %s)", async (restoreExists) => {
     tauriMocks.getCodexAccountsState.mockResolvedValue(
-      { accounts: [account("1")], snapshots: {} } as CodexAccountsStateBridge,
+      { accounts: [account("1")], accountOrdinals: { "1": 1 }, snapshots: {} } as CodexAccountsStateBridge,
     );
     tauriMocks.codexAccountSwitch.mockResolvedValue(
       { switchId: "latest-switch", desktopSessionRestoreExists: restoreExists, desktopSessionRestorePath: "C:/s", desktopSessionBackupPath: null } as CodexSwitchResult,

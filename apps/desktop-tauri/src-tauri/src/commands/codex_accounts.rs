@@ -6,7 +6,7 @@ use uuid::Uuid;
 use codexbar::codex_accounts::{
     AccountStore, CodexAccount, CodexAccountApi, CodexAccountManager, CodexAccountManagerError,
     CodexAccountRuntime, CodexApiError, CodexSwitchResult, SnapshotStore, display_names_by_id,
-    restart_codex_desktop,
+    ordinals_by_id, restart_codex_desktop,
 };
 
 use crate::state::AppState;
@@ -574,6 +574,7 @@ fn snapshots_for_accounts(
 pub struct CodexAccountsStateBridge {
     pub accounts: Vec<CodexAccount>,
     pub display_names: HashMap<Uuid, String>,
+    pub account_ordinals: HashMap<Uuid, usize>,
     pub snapshots: HashMap<Uuid, codexbar::codex_accounts::AccountUsageSnapshot>,
 }
 
@@ -584,10 +585,12 @@ pub fn get_codex_accounts_state(
     let _guard = state.lock().map_err(|e| e.to_string())?;
     let accounts = load_codex_accounts()?;
     let display_names = display_names_by_id(&accounts);
+    let account_ordinals = ordinals_by_id(&accounts);
     let snapshots = snapshots_for_accounts(&accounts, codex_account_snapshots()?);
     Ok(CodexAccountsStateBridge {
         accounts,
         display_names,
+        account_ordinals,
         snapshots,
     })
 }

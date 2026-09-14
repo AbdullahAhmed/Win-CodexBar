@@ -982,6 +982,8 @@ export interface CodexAccountsStateBridge {
   accounts: CodexAccount[];
   /** Canonical privacy-safe account labels, keyed by stable account id. */
   displayNames?: Record<string, string>;
+  /** Canonical opaque account ordinals, keyed by stable account id. */
+  accountOrdinals: Record<string, number>;
   snapshots: Record<string, CodexAccountUsageSnapshot>;
 }
 export interface ClaudeAccount {
