@@ -81,7 +81,7 @@ impl PrivateAgyWorkdir {
                         if std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
                             .is_err()
                         {
-                            let _ = std::fs::remove_dir(&path);
+                            drop(std::fs::remove_dir(&path));
                             return Err(ProviderError::Other(
                                 "Failed to prepare Antigravity CLI working directory".into(),
                             ));
@@ -106,7 +106,7 @@ impl PrivateAgyWorkdir {
 
 impl Drop for PrivateAgyWorkdir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+        drop(std::fs::remove_dir_all(&self.path));
     }
 }
 
