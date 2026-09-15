@@ -129,6 +129,34 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Verify GitHub access required by SignPath
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ steps.upload-unsigned.outputs.artifact-id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $jobsEndpoint = "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/jobs"
+          gh api $jobsEndpoint --silent
+          if ($LASTEXITCODE -ne 0) { throw "GITHUB_TOKEN cannot read workflow jobs." }
+
+          $artifactEndpoint = "repos/$env:GITHUB_REPOSITORY/actions/artifacts/$env:ARTIFACT_ID"
+          gh api $artifactEndpoint --silent
+          if ($LASTEXITCODE -ne 0) { throw "GITHUB_TOKEN cannot read artifact metadata." }
+
+          $headers = Join-Path $env:RUNNER_TEMP 'signpath-artifact-download-headers.txt'
+          curl.exe -sS --max-redirs 0 -D $headers -o NUL `
+            -H "Authorization: Bearer $env:GH_TOKEN" `
+            -H 'Accept: application/vnd.github+json' `
+            "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/artifacts/$env:ARTIFACT_ID/zip"
+          if ($LASTEXITCODE -ne 0) { throw "GITHUB_TOKEN artifact download probe failed." }
+
+          $status = Get-Content -LiteralPath $headers -First 1
+          if ($status -notmatch '\s302\s') {
+            throw "GITHUB_TOKEN cannot obtain artifact download redirect: $status"
+          }
+          Write-Host '[ok] GITHUB_TOKEN can read workflow jobs, artifact metadata, and artifact download'
+
       - name: Submit test signing request
         uses: signpath/github-action-submit-signing-request@v3
         with:
@@ -138,7 +166,6 @@ jobs:
           signing-policy-slug: test-signing
           artifact-configuration-slug: codexbar-installer
           github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           wait-for-completion: true
           wait-for-completion-timeout-in-seconds: 3600
           output-artifact-directory: release-test-signed
