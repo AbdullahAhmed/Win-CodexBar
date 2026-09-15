@@ -2,19 +2,24 @@
 
 ## [Windows] 0.60.3 - 2026-09-15
 
-Windows port of upstream CodexBar **0.60.1 → 0.60.3**.
+Windows port of upstream CodexBar **0.56.8 → 0.60.3**.
 
 ### Added
-- Providers: preserve Abacus monthly credits, Warp add-on credits, Perplexity credit percentages, LiteLLM budgets, LongCat token details, and Devin organization diagnostics ([#503](https://github.com/nesszer/Win-CodexBar/pull/503)).
-- Providers: restore Cursor paid and active-trial Grok Bot usage, preserve Claude weekly fallback behavior, and expose Antigravity source guidance ([#505](https://github.com/nesszer/Win-CodexBar/pull/505)).
+- Providers: port whitespace-aware Codex rescans, OpenCodex numeric and cache parsing, reserve pricing aliases, Usage & Spend ledger details, and optional tray pace colors ([#488](https://github.com/nesszer/Win-CodexBar/pull/488), [#489](https://github.com/nesszer/Win-CodexBar/pull/489), [#490](https://github.com/nesszer/Win-CodexBar/pull/490), [#492](https://github.com/nesszer/Win-CodexBar/pull/492), [#493](https://github.com/nesszer/Win-CodexBar/pull/493)).
+- Providers: add Vertex OAuth validation and preserve Antigravity structured reports, discrete model pools, Warp add-on pools, Perplexity credit percentages, Abacus details, LiteLLM budgets, LongCat token and expiry data, and Devin organization context ([#494](https://github.com/nesszer/Win-CodexBar/pull/494), [#498](https://github.com/nesszer/Win-CodexBar/pull/498), [#503](https://github.com/nesszer/Win-CodexBar/pull/503)).
+- Accounts: add the Claude-swap multi-account adapter and its historical usage, spend, repair, and account-action behavior ([#482](https://github.com/nesszer/Win-CodexBar/pull/482), [#503](https://github.com/nesszer/Win-CodexBar/pull/503)).
+- Providers: restore Cursor monthly Auto pacing, paid and active-trial Grok Bot allowances, and Antigravity account-source guidance ([#505](https://github.com/nesszer/Win-CodexBar/pull/505)).
 
 ### Fixed
-- Providers: use checked arithmetic for Mistral billing and preserve reserved Alibaba/Qwen request characters ([#503](https://github.com/nesszer/Win-CodexBar/pull/503)).
-- Claude: disable Remote Control registration during usage probes while keeping account and session data isolated ([#505](https://github.com/nesszer/Win-CodexBar/pull/505)).
+- Providers: harden managed Antigravity CLI fallback, use checked Mistral billing arithmetic, preserve reserved Alibaba/Qwen request characters, and retain partial usage and cost data ([#483](https://github.com/nesszer/Win-CodexBar/pull/483), [#501](https://github.com/nesszer/Win-CodexBar/pull/501), [#503](https://github.com/nesszer/Win-CodexBar/pull/503)).
+- Privacy: keep Codex account labels private and redact login diagnostics ([#491](https://github.com/nesszer/Win-CodexBar/pull/491), [#502](https://github.com/nesszer/Win-CodexBar/pull/502)).
+- Runtime: resume sessions safely after quota reset and keep localized reset countdowns compact ([#499](https://github.com/nesszer/Win-CodexBar/pull/499), [#500](https://github.com/nesszer/Win-CodexBar/pull/500)).
 
 ### Changed
-- Notifications: keep informational Claude session lanes out of warning history, hooks, and predictive pace consumers ([#505](https://github.com/nesszer/Win-CodexBar/pull/505)).
-- Settings: explain Antigravity automatic account selection and the Local API / agy CLI choices ([#505](https://github.com/nesszer/Win-CodexBar/pull/505)).
+- Claude: disable Remote Control registration during usage probes and keep weekly fallback data out of session warnings while preserving account separation ([#503](https://github.com/nesszer/Win-CodexBar/pull/503), [#505](https://github.com/nesszer/Win-CodexBar/pull/505)).
+- Settings: explain Antigravity automatic account selection and the Windows Local API / agy CLI sources ([#505](https://github.com/nesszer/Win-CodexBar/pull/505)).
+- Reliability: improve Claude Add-account WSL diagnostics, Codex token saturation, dark-theme select popups, ambient account selection, and endpoint/model validation ([#471](https://github.com/nesszer/Win-CodexBar/pull/471), [#472](https://github.com/nesszer/Win-CodexBar/pull/472), [#480](https://github.com/nesszer/Win-CodexBar/pull/480), [#484](https://github.com/nesszer/Win-CodexBar/pull/484), [#485](https://github.com/nesszer/Win-CodexBar/pull/485)).
+- CI: add the curated TypeScript anti-slop gate to hosted validation ([#487](https://github.com/nesszer/Win-CodexBar/pull/487)).
 
 > Release artifacts are unsigned (SignPath onboarding pending); verify them against the attached `.sha256` sidecar files.
 
