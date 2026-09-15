@@ -321,6 +321,40 @@ fn claude_swap_windows(account: &ClaudeSwapAccount) -> Vec<String> {
     windows
 }
 
+fn claude_swap_spend_line(
+    spend: Option<&crate::providers::claude::claude_swap::ClaudeSwapSpendWindowDto>,
+) -> Option<String> {
+    spend.map(|spend| {
+        format!(
+            "Spend {:.2}/{:.2} {} ({})",
+            spend.used,
+            spend.limit,
+            spend.currency_code,
+            format_percent(spend.used_percent)
+        )
+    })
+}
+
+fn claude_swap_historical_windows(
+    historical: &crate::providers::claude::claude_swap::ClaudeSwapHistoricalUsageDto,
+) -> Vec<String> {
+    let mut windows = Vec::new();
+    if let Some(window) = &historical.five_hour {
+        windows.push(format!("Session {}", format_percent(window.used_percent)));
+    }
+    if let Some(window) = &historical.seven_day {
+        windows.push(format!("Weekly {}", format_percent(window.used_percent)));
+    }
+    for window in &historical.scoped {
+        windows.push(format!(
+            "{} {}",
+            window.name,
+            format_percent(window.used_percent)
+        ));
+    }
+    windows
+}
+
 fn render_claude_swap_text(
     account: &ClaudeSwapAccount,
     status: Option<&StatusInfo>,
@@ -340,6 +374,27 @@ fn render_claude_swap_text(
     let windows = claude_swap_windows(account);
     if !windows.is_empty() {
         lines.push(format!("  {}", windows.join(" | ")));
+    }
+    if let Some(spend) = claude_swap_spend_line(account.spend.as_ref()) {
+        lines.push(format!("  {spend}"));
+    }
+    if let Some(historical) = &account.historical_usage {
+        let windows = claude_swap_historical_windows(historical);
+        let spend = claude_swap_spend_line(historical.spend.as_ref());
+        let details = [(!windows.is_empty()).then(|| windows.join(" | ")), spend]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        if !details.is_empty() {
+            lines.push(format!(
+                "  Last known usage (captured {}): {}",
+                historical.fetched_at.to_rfc3339(),
+                details.join(" | ")
+            ));
+        }
+    }
+    if account.is_disabled {
+        lines.push("  Disabled by claude-swap.".to_string());
     }
     if let Some(error) = &account.error {
         lines.push(format!("  {error}"));
@@ -1006,6 +1061,10 @@ mod tests {
                 used_percent: 4.0,
                 resets_at: None,
             }],
+            action: Some(crate::providers::claude::claude_swap::ClaudeSwapAccountAction::Switch),
+            is_disabled: false,
+            spend: None,
+            historical_usage: None,
         }
     }
 
@@ -1061,6 +1120,40 @@ mod tests {
         assert!(text.contains("Session 81%"));
         assert!(text.contains("Weekly 18%"));
         assert!(text.contains("Fable only 4%"));
+    }
+
+    #[test]
+    fn claude_swap_detailed_text_shows_history_but_brief_does_not() {
+        use crate::providers::claude::claude_swap::{
+            ClaudeSwapHistoricalUsageDto, ClaudeSwapSpendWindowDto, ClaudeSwapUsageWindowDto,
+        };
+        let mut account = sample_swap_account();
+        account.spend = Some(ClaudeSwapSpendWindowDto {
+            used: 2.0,
+            limit: 20.0,
+            used_percent: 10.0,
+            currency_code: "USD".to_string(),
+            resets_at: None,
+        });
+        account.historical_usage = Some(ClaudeSwapHistoricalUsageDto {
+            five_hour: Some(ClaudeSwapUsageWindowDto {
+                used_percent: 44.0,
+                resets_at: None,
+            }),
+            seven_day: None,
+            scoped: vec![],
+            spend: None,
+            fetched_at: "2026-09-12T00:45:00Z".parse().unwrap(),
+            provenance: "source_reported_last_good",
+        });
+        let detailed = render_claude_swap_text(&account, None, false);
+        assert!(detailed.contains("Spend 2.00/20.00 USD (10%)"));
+        assert!(detailed.contains("Last known usage (captured 2026-09-12T00:45:00+00:00)"));
+        assert!(detailed.contains("Session 44%"));
+
+        let brief = render_claude_swap_brief(&[account], None, false);
+        assert!(!brief.contains("Last known usage"));
+        assert!(!brief.contains("44%"));
     }
 
     #[test]

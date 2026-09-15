@@ -26,7 +26,9 @@ use serde::Serialize;
 
 pub use parser::{parse_account_list, parse_switch_result, validate_switch_target};
 pub use projection::{
-    ClaudeSwapAccount, ClaudeSwapScopedWindowDto, ClaudeSwapUsageWindowDto, project_accounts,
+    ClaudeSwapAccount, ClaudeSwapAccountAction, ClaudeSwapHistoricalUsageDto,
+    ClaudeSwapScopedWindowDto, ClaudeSwapSpendWindowDto, ClaudeSwapUsageWindowDto,
+    HISTORICAL_USAGE_PROVENANCE, project_accounts,
 };
 pub use runner::{
     DEFAULT_TIMEOUT, MAX_OUTPUT_BYTES, SWITCH_TIMEOUT, list_arguments, read_account_list,
@@ -71,6 +73,7 @@ pub enum ClaudeSwapUsageStatus {
     ApiKey,
     KeychainUnavailable,
     NoCredentials,
+    ForeignCredential,
     Unavailable,
     /// A status CodexBar does not recognize. The raw value is deliberately not
     /// retained: unknown external strings are never echoed to UI or logs.
@@ -86,6 +89,7 @@ impl ClaudeSwapUsageStatus {
             "api_key" => Self::ApiKey,
             "keychain_unavailable" => Self::KeychainUnavailable,
             "no_credentials" => Self::NoCredentials,
+            "foreign_credential" => Self::ForeignCredential,
             "unavailable" => Self::Unavailable,
             _ => Self::Unknown,
         }
@@ -99,14 +103,18 @@ impl ClaudeSwapUsageStatus {
             Self::ApiKey => "api_key",
             Self::KeychainUnavailable => "keychain_unavailable",
             Self::NoCredentials => "no_credentials",
+            Self::ForeignCredential => "foreign_credential",
             Self::Unavailable => "unavailable",
             Self::Unknown => "unknown",
         }
     }
 
-    /// Upstream keeps expired / missing / inaccessible slots non-actionable.
+    /// Return whether an inactive account can be selected through cswap.
     pub fn can_activate(&self) -> bool {
-        matches!(self, Self::Ok | Self::ApiKey | Self::Unavailable)
+        matches!(
+            self,
+            Self::Ok | Self::ApiKey | Self::ForeignCredential | Self::Unavailable
+        )
     }
 }
 
@@ -124,6 +132,38 @@ pub struct ClaudeSwapScopedWindow {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ClaudeSwapSpendWindow {
+    pub used: f64,
+    pub limit: f64,
+    pub used_percent: f64,
+    pub currency_code: String,
+    pub resets_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClaudeSwapUsageMeasurement {
+    pub five_hour: Option<ClaudeSwapUsageWindow>,
+    pub seven_day: Option<ClaudeSwapUsageWindow>,
+    pub scoped: Vec<ClaudeSwapScopedWindow>,
+    pub spend: Option<ClaudeSwapSpendWindow>,
+}
+
+impl ClaudeSwapUsageMeasurement {
+    pub fn is_empty(&self) -> bool {
+        self.five_hour.is_none()
+            && self.seven_day.is_none()
+            && self.scoped.is_empty()
+            && self.spend.is_none()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClaudeSwapHistoricalUsage {
+    pub measurement: ClaudeSwapUsageMeasurement,
+    pub fetched_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ClaudeSwapAccountRow {
     pub number: u32,
     pub email: String,
@@ -135,6 +175,9 @@ pub struct ClaudeSwapAccountRow {
     pub seven_day: Option<ClaudeSwapUsageWindow>,
     pub scoped: Vec<ClaudeSwapScopedWindow>,
     pub usage_fetched_at: Option<DateTime<Utc>>,
+    pub spend: Option<ClaudeSwapSpendWindow>,
+    pub is_disabled: bool,
+    pub historical_usage: Option<ClaudeSwapHistoricalUsage>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
