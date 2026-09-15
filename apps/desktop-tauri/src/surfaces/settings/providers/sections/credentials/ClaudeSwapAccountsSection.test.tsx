@@ -5,6 +5,7 @@ import type { ClaudeSwapAccount, ClaudeSwapAccountsState } from "../../../../../
 const mocks = vi.hoisted(() => ({
   claudeSwapAccountsList: vi.fn(),
   claudeSwapAccountSwitch: vi.fn(),
+  claudeSwapAccountReauthenticate: vi.fn(),
   getSettingsSnapshot: vi.fn(),
   updateSettings: vi.fn(),
 }));
@@ -25,12 +26,15 @@ const active: ClaudeSwapAccount = {
   organization: null,
   alias: null,
   isActive: true,
-  canActivate: false,
+  action: null,
+  isDisabled: false,
   status: "ok",
   error: null,
   fiveHour: { usedPercent: 12, resetsAt: null },
   sevenDay: null,
   scoped: [],
+  spend: null,
+  historicalUsage: null,
 };
 
 const switchable: ClaudeSwapAccount = {
@@ -40,7 +44,7 @@ const switchable: ClaudeSwapAccount = {
   label: "personal@example.com",
   email: "personal@example.com",
   isActive: false,
-  canActivate: true,
+  action: "switch",
 };
 
 const blocked: ClaudeSwapAccount = {
@@ -48,7 +52,7 @@ const blocked: ClaudeSwapAccount = {
   id: "claude-swap:3",
   slot: 3,
   label: "Backup",
-  canActivate: false,
+  action: null,
   status: "token_expired",
   error: "Token expired. Switch to this account in claude-swap to refresh it.",
 };
@@ -161,5 +165,60 @@ describe("ClaudeSwapAccountsSection", () => {
     );
     expect(screen.getByRole("alert").textContent).toContain("cswap failed.");
     expect(screen.queryByText("ClaudeSwapSwitched")).toBeNull();
+  });
+
+  it("re-authenticates an active foreign credential and reports the distinct result", async () => {
+    const foreign: ClaudeSwapAccount = {
+      ...active,
+      status: "foreign_credential",
+      action: "reauthenticate",
+      error: "claude-swap reports the live credential belongs to a different account.",
+    };
+    mocks.getSettingsSnapshot.mockResolvedValue({
+      claudeSwapEnabled: true,
+      claudeSwapExecutablePath: "~/bin/cswap",
+    });
+    mocks.claudeSwapAccountsList.mockResolvedValue(enabledState([foreign]));
+    mocks.claudeSwapAccountReauthenticate.mockResolvedValue(undefined);
+    render(<ClaudeSwapAccountsSection t={t} />);
+    await screen.findByText("work@example.com");
+    await act(async () =>
+      fireEvent.click(screen.getByText("ClaudeSwapReauthenticateButton")),
+    );
+    expect(mocks.claudeSwapAccountReauthenticate).toHaveBeenCalledWith(1);
+    expect(screen.getByRole("status").textContent).toBe("ClaudeSwapReauthenticated");
+    expect(mocks.claudeSwapAccountSwitch).not.toHaveBeenCalled();
+  });
+
+  it("renders disabled, spend, and display-only historical usage details", async () => {
+    const account: ClaudeSwapAccount = {
+      ...switchable,
+      isDisabled: true,
+      spend: {
+        used: 2,
+        limit: 20,
+        usedPercent: 10,
+        currencyCode: "USD",
+        resetsAt: null,
+      },
+      historicalUsage: {
+        fiveHour: { usedPercent: 44, resetsAt: null },
+        sevenDay: null,
+        scoped: [],
+        spend: null,
+        fetchedAt: "2026-09-12T00:45:00Z",
+        provenance: "source_reported_last_good",
+      },
+    };
+    mocks.getSettingsSnapshot.mockResolvedValue({
+      claudeSwapEnabled: true,
+      claudeSwapExecutablePath: "~/bin/cswap",
+    });
+    mocks.claudeSwapAccountsList.mockResolvedValue(enabledState([account]));
+    render(<ClaudeSwapAccountsSection t={t} />);
+    await screen.findByText("personal@example.com");
+    expect(screen.getByText(/ClaudeSwapSpend 2\.00 \/ 20\.00 USD/)).toBeTruthy();
+    expect(screen.getByText(/ClaudeSwapHistoricalUsage/)).toBeTruthy();
+    expect(screen.getByText("ClaudeSwapDisabled")).toBeTruthy();
   });
 });

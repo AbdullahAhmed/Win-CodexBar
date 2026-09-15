@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { ClaudeAccount } from "../../../../../types/bridge";
+import type { Language } from "../../../../../types/bridge";
 import type { LocaleKey } from "../../../../../i18n/keys";
 import {
   claudeAccountsList,
@@ -12,7 +13,13 @@ import {
 } from "../../../../../lib/tauri";
 import { ClaudeSwapAccountsSection } from "./ClaudeSwapAccountsSection";
 
-export function ClaudeAccountsSection({ t }: { t: (key: LocaleKey) => string }) {
+export function ClaudeAccountsSection({
+  t,
+  language = "english",
+}: {
+  t: (key: LocaleKey) => string;
+  language?: Language;
+}) {
   const [accounts, setAccounts] = useState<ClaudeAccount[]>([]);
   const [busy, setBusy] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
@@ -133,7 +140,7 @@ export function ClaudeAccountsSection({ t }: { t: (key: LocaleKey) => string }) 
           </button>
         )}
       </section>
-      <ClaudeSwapAccountsSection t={t} />
+      <ClaudeSwapAccountsSection t={t} language={language} />
     </>
   );
 }

@@ -18,6 +18,18 @@ struct QuotaSummaryEnvelope {
 }
 
 #[derive(Debug, Deserialize)]
+struct QuotaSummaryCliReport {
+    status: String,
+    command: QuotaSummaryCliCommand,
+}
+
+#[derive(Debug, Deserialize)]
+struct QuotaSummaryCliCommand {
+    name: String,
+    data: QuotaSummaryPayload,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct QuotaSummaryPayload {
     #[allow(dead_code, reason = "mirrors the local quota-summary response")]
@@ -30,6 +42,7 @@ struct QuotaSummaryPayload {
 #[serde(rename_all = "camelCase")]
 struct QuotaSummaryGroup {
     display_name: Option<String>,
+    name: Option<String>,
     #[allow(dead_code, reason = "mirrors the local quota-summary response")]
     description: Option<String>,
     #[serde(default)]
@@ -40,17 +53,22 @@ struct QuotaSummaryGroup {
 #[serde(rename_all = "camelCase")]
 struct QuotaSummaryBucket {
     bucket_id: Option<String>,
+    id: Option<String>,
     display_name: Option<String>,
+    name: Option<String>,
     description: Option<String>,
     disabled: Option<bool>,
+    #[serde(alias = "remaining_fraction")]
     remaining_fraction: Option<f64>,
     remaining: Option<QuotaSummaryRemaining>,
+    #[serde(alias = "reset_time")]
     reset_time: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct QuotaSummaryRemaining {
+    #[serde(alias = "remaining_fraction")]
     remaining_fraction: Option<f64>,
     #[serde(rename = "case")]
     oneof_case: Option<String>,
@@ -91,7 +109,22 @@ pub(super) fn parse_usage_snapshot(data: &[u8]) -> Result<UsageSnapshot, Provide
         })
         .ok_or_else(|| ProviderError::Parse("Antigravity quota summary missing payload".into()))?;
 
-    let (primary_windows, extra_windows, has_gemini_group) = split_quota_windows(payload.groups);
+    build_usage_snapshot(payload.groups)
+}
+
+pub(super) fn parse_cli_usage_report(data: &[u8]) -> Result<UsageSnapshot, ProviderError> {
+    let report: QuotaSummaryCliReport = serde_json::from_slice(data)
+        .map_err(|error| ProviderError::Parse(format!("Antigravity CLI usage report: {error}")))?;
+    if report.status != "SUCCESS" || report.command.name != "usage" {
+        return Err(ProviderError::Parse(
+            "Antigravity CLI usage report was not successful".into(),
+        ));
+    }
+    build_usage_snapshot(report.command.data.groups)
+}
+
+fn build_usage_snapshot(groups: Vec<QuotaSummaryGroup>) -> Result<UsageSnapshot, ProviderError> {
+    let (primary_windows, extra_windows, has_gemini_group) = split_quota_windows(groups);
     let all_windows: Vec<NamedRateWindow> = primary_windows
         .iter()
         .chain(extra_windows.iter())
@@ -190,7 +223,8 @@ fn group_quota_windows(
 
     let mut windows = Vec::new();
     for (_, bucket) in buckets {
-        let Some(bucket_id) = non_empty(bucket.bucket_id.as_deref()) else {
+        let Some(bucket_id) = non_empty(bucket.bucket_id.as_deref().or(bucket.id.as_deref()))
+        else {
             continue;
         };
         let kind = bucket_kind(bucket);
@@ -255,6 +289,7 @@ fn group_rank(group: &QuotaSummaryGroup) -> u8 {
     let title = group
         .display_name
         .as_deref()
+        .or(group.name.as_deref())
         .unwrap_or_default()
         .trim()
         .to_ascii_lowercase();
@@ -268,7 +303,8 @@ fn group_rank(group: &QuotaSummaryGroup) -> u8 {
 }
 
 fn group_title(group: &QuotaSummaryGroup) -> String {
-    let title = non_empty(group.display_name.as_deref()).unwrap_or("Quota");
+    let title =
+        non_empty(group.display_name.as_deref().or(group.name.as_deref())).unwrap_or("Quota");
     let lower = title.to_ascii_lowercase();
     if lower.contains("gemini") {
         "Gemini".into()
@@ -296,9 +332,12 @@ fn group_scope(group: &QuotaSummaryGroup) -> String {
 
 fn bucket_kind(bucket: &QuotaSummaryBucket) -> BucketKind {
     let mut candidates = Vec::new();
-    for raw in [bucket.bucket_id.as_deref(), bucket.display_name.as_deref()]
-        .into_iter()
-        .flatten()
+    for raw in [
+        bucket.bucket_id.as_deref().or(bucket.id.as_deref()),
+        bucket.display_name.as_deref().or(bucket.name.as_deref()),
+    ]
+    .into_iter()
+    .flatten()
     {
         let normalized = raw.trim().to_ascii_lowercase().replace('_', "-");
         if normalized.is_empty() {
@@ -330,8 +369,8 @@ fn bucket_title(bucket: &QuotaSummaryBucket, kind: BucketKind) -> String {
     match kind {
         BucketKind::Session => "5-hour".into(),
         BucketKind::Weekly => "weekly".into(),
-        BucketKind::Other => non_empty(bucket.display_name.as_deref())
-            .or_else(|| non_empty(bucket.bucket_id.as_deref()))
+        BucketKind::Other => non_empty(bucket.display_name.as_deref().or(bucket.name.as_deref()))
+            .or_else(|| non_empty(bucket.bucket_id.as_deref().or(bucket.id.as_deref())))
             .unwrap_or("quota")
             .to_string(),
     }
@@ -513,5 +552,50 @@ mod tests {
             br#"{"groups":[{"displayName":"Gemini","buckets":[{"bucketId":"weekly","displayName":"Weekly"}]}]}"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn parses_structured_cli_usage_report_with_snake_case_fields() {
+        let data = br#"{
+          "status": "SUCCESS",
+          "command": {
+            "name": "usage",
+            "data": {
+              "groups": [{
+                "name": "Gemini Models",
+                "buckets": [
+                  {"id":"gemini-5h","name":"Five Hour Limit Remaining","remaining_fraction":0.6,"reset_time":"2026-09-20T12:34:56Z"},
+                  {"id":"gemini-weekly","name":"Weekly Limit Remaining","remaining_fraction":0.8}
+                ]
+              }]
+            }
+          }
+        }"#;
+
+        let snapshot = parse_cli_usage_report(data).expect("CLI report");
+        assert_eq!(snapshot.primary_label.as_deref(), Some("Gemini 5h"));
+        assert!((snapshot.primary.used_percent - 40.0).abs() < 0.001);
+        assert_eq!(
+            snapshot.primary.resets_at.map(|value| value.to_rfc3339()),
+            Some("2026-09-20T12:34:56+00:00".to_string())
+        );
+        assert_eq!(snapshot.secondary_label.as_deref(), Some("Gemini Weekly"));
+        assert!((snapshot.secondary.expect("weekly").used_percent - 20.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn rejects_unsuccessful_or_unrelated_cli_reports() {
+        assert!(
+            parse_cli_usage_report(
+                br#"{"status":"ERROR","command":{"name":"usage","data":{"groups":[]}}}"#
+            )
+            .is_err()
+        );
+        assert!(
+            parse_cli_usage_report(
+                br#"{"status":"SUCCESS","command":{"name":"models","data":{"groups":[]}}}"#
+            )
+            .is_err()
+        );
     }
 }

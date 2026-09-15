@@ -9,8 +9,9 @@ use serde_json::Value;
 
 use super::sanitize::{MAX_DIAGNOSTIC_CHARS, MAX_LABEL_CHARS, sanitize_display};
 use super::{
-    ClaudeSwapAccountList, ClaudeSwapAccountRow, ClaudeSwapError, ClaudeSwapScopedWindow,
-    ClaudeSwapSwitchResult, ClaudeSwapUsageStatus, ClaudeSwapUsageWindow,
+    ClaudeSwapAccountList, ClaudeSwapAccountRow, ClaudeSwapError, ClaudeSwapHistoricalUsage,
+    ClaudeSwapScopedWindow, ClaudeSwapSpendWindow, ClaudeSwapSwitchResult,
+    ClaudeSwapUsageMeasurement, ClaudeSwapUsageStatus, ClaudeSwapUsageWindow,
 };
 
 fn as_object(value: &Value) -> Option<&serde_json::Map<String, Value>> {
@@ -114,6 +115,54 @@ fn parse_scoped(raw: Option<&Value>) -> Vec<ClaudeSwapScopedWindow> {
         .collect()
 }
 
+fn parse_spend(raw: Option<&Value>) -> Option<ClaudeSwapSpendWindow> {
+    let object = raw?.as_object()?;
+    let used = object.get("used").and_then(finite_number)?;
+    let limit = object.get("limit").and_then(finite_number)?;
+    let used_percent = object.get("pct").and_then(finite_number)?;
+    if used < 0.0 || limit <= 0.0 {
+        return None;
+    }
+    Some(ClaudeSwapSpendWindow {
+        used,
+        limit,
+        used_percent: used_percent.clamp(0.0, 100.0),
+        currency_code: non_empty_display_string(object.get("currency")),
+        resets_at: match object.get("resetsAt") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(text)) => parse_timestamp(text),
+            Some(_) => None,
+        },
+    })
+}
+
+/// History is additive evidence. A malformed historical window or spend value
+/// is dropped without invalidating the row's valid live usage.
+fn parse_last_good_usage(
+    object: &serde_json::Map<String, Value>,
+    slot: u32,
+) -> Option<ClaudeSwapHistoricalUsage> {
+    let raw = object.get("lastGoodUsage")?.as_object()?;
+    let fetched_at = object
+        .get("lastGoodFetchedAt")
+        .and_then(Value::as_str)
+        .and_then(parse_timestamp)?;
+    let measurement = ClaudeSwapUsageMeasurement {
+        five_hour: parse_window(raw.get("fiveHour"), slot, "lastGoodUsage.fiveHour")
+            .ok()
+            .flatten(),
+        seven_day: parse_window(raw.get("sevenDay"), slot, "lastGoodUsage.sevenDay")
+            .ok()
+            .flatten(),
+        scoped: parse_scoped(raw.get("scoped")),
+        spend: parse_spend(raw.get("spend")),
+    };
+    (!measurement.is_empty()).then_some(ClaudeSwapHistoricalUsage {
+        measurement,
+        fetched_at,
+    })
+}
+
 fn parse_row(
     object: &serde_json::Map<String, Value>,
 ) -> Result<ClaudeSwapAccountRow, ClaudeSwapError> {
@@ -136,6 +185,12 @@ fn parse_row(
             ClaudeSwapError::MalformedShape(format!("slot {number} has no usageStatus"))
         })?;
     let usage = object.get("usage").and_then(Value::as_object);
+    let usage_measurement = ClaudeSwapUsageMeasurement {
+        five_hour: parse_window(usage.and_then(|u| u.get("fiveHour")), number, "fiveHour")?,
+        seven_day: parse_window(usage.and_then(|u| u.get("sevenDay")), number, "sevenDay")?,
+        scoped: parse_scoped(usage.and_then(|u| u.get("scoped"))),
+        spend: parse_spend(usage.and_then(|u| u.get("spend"))),
+    };
     Ok(ClaudeSwapAccountRow {
         number,
         email: trimmed_non_empty(object.get("email")),
@@ -143,13 +198,16 @@ fn parse_row(
         alias: non_empty_display_string(object.get("alias")),
         is_active,
         usage_status: ClaudeSwapUsageStatus::from_raw(raw_status),
-        five_hour: parse_window(usage.and_then(|u| u.get("fiveHour")), number, "fiveHour")?,
-        seven_day: parse_window(usage.and_then(|u| u.get("sevenDay")), number, "sevenDay")?,
-        scoped: parse_scoped(usage.and_then(|u| u.get("scoped"))),
+        usage: usage_measurement,
         usage_fetched_at: object
             .get("usageFetchedAt")
             .and_then(Value::as_str)
             .and_then(parse_timestamp),
+        is_disabled: object
+            .get("disabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        historical_usage: parse_last_good_usage(object, number),
     })
 }
 
@@ -411,9 +469,9 @@ mod tests {
         assert_eq!(first.number, 1);
         assert_eq!(first.organization_name, "Work");
         // Out-of-range percentages are clamped like upstream.
-        assert_eq!(first.five_hour.as_ref().unwrap().used_percent, 100.0);
-        assert!(first.five_hour.as_ref().unwrap().resets_at.is_some());
-        assert_eq!(first.scoped[0].name, "Fable only");
+        assert_eq!(first.usage.five_hour.as_ref().unwrap().used_percent, 100.0);
+        assert!(first.usage.five_hour.as_ref().unwrap().resets_at.is_some());
+        assert_eq!(first.usage.scoped[0].name, "Fable only");
         assert_eq!(first.usage_status, ClaudeSwapUsageStatus::Ok);
     }
 
@@ -539,10 +597,105 @@ mod tests {
             { "name": "Broken reset", "pct": 2.0, "resetsAt": "not-a-date" }
         ]);
         let parsed = parse_account_list(&fixture.to_string()).unwrap();
-        let scoped = &parsed.accounts[0].scoped;
+        let scoped = &parsed.accounts[0].usage.scoped;
         assert_eq!(scoped.len(), 1);
         assert_eq!(scoped[0].name, "Fable only");
-        assert!(parsed.accounts[0].five_hour.is_some());
+        assert!(parsed.accounts[0].usage.five_hour.is_some());
+    }
+
+    #[test]
+    fn parses_spend_disabled_and_last_good_usage_as_additive_data() {
+        let mut fixture = list_fixture();
+        fixture["accounts"][0]["disabled"] = json!(true);
+        fixture["accounts"][0]["usage"]["spend"] = json!({
+            "used": 12.5,
+            "limit": 50.0,
+            "pct": 25.0,
+            "currency": " USD ",
+            "resetsAt": "2026-09-13T00:00:00Z"
+        });
+        fixture["accounts"][0]["lastGoodUsage"] = json!({
+            "fiveHour": { "pct": 44.0 },
+            "sevenDay": { "pct": 19.0 },
+            "spend": { "used": 8.0, "limit": 40.0, "pct": 20.0, "currency": "EUR" }
+        });
+        fixture["accounts"][0]["lastGoodFetchedAt"] = json!("2026-09-12T00:45:00Z");
+        fixture["accounts"][2]["usageStatus"] = json!("foreign_credential");
+
+        let parsed = parse_account_list(&fixture.to_string()).unwrap();
+        let first = &parsed.accounts[0];
+        assert!(first.is_disabled);
+        assert_eq!(
+            first.usage.spend.as_ref().unwrap().currency_code.as_deref(),
+            Some("USD")
+        );
+        assert_eq!(first.usage.spend.as_ref().unwrap().used, 12.5);
+        let history = first.historical_usage.as_ref().unwrap();
+        assert_eq!(
+            history.measurement.five_hour.as_ref().unwrap().used_percent,
+            44.0
+        );
+        assert_eq!(
+            history
+                .measurement
+                .spend
+                .as_ref()
+                .unwrap()
+                .currency_code
+                .as_deref(),
+            Some("EUR")
+        );
+        assert_eq!(history.fetched_at.to_rfc3339(), "2026-09-12T00:45:00+00:00");
+        assert_eq!(
+            parsed.accounts[2].usage_status,
+            ClaudeSwapUsageStatus::ForeignCredential
+        );
+    }
+
+    #[test]
+    fn drops_invalid_additive_history_and_spend_without_dropping_live_usage() {
+        let mut fixture = list_fixture();
+        fixture["accounts"][0]["usage"]["spend"] = json!({
+            "used": -1.0,
+            "limit": 50.0,
+            "pct": 25.0
+        });
+        fixture["accounts"][0]["lastGoodUsage"] = json!({
+            "fiveHour": { "pct": "not-a-number" },
+            "scoped": [{ "name": "valid scope", "pct": 3.0 }]
+        });
+        fixture["accounts"][0]["lastGoodFetchedAt"] = json!("not-a-date");
+        let parsed = parse_account_list(&fixture.to_string()).unwrap();
+        let first = &parsed.accounts[0];
+        assert!(first.usage.five_hour.is_some());
+        assert!(first.usage.spend.is_none());
+        assert!(first.historical_usage.is_none());
+
+        fixture["accounts"][0]["lastGoodFetchedAt"] = json!("2026-09-12T00:45:00Z");
+        let parsed = parse_account_list(&fixture.to_string()).unwrap();
+        let history = parsed.accounts[0].historical_usage.as_ref().unwrap();
+        assert!(history.measurement.five_hour.is_none());
+        assert_eq!(history.measurement.scoped.len(), 1);
+    }
+
+    #[test]
+    fn missing_spend_currency_remains_unknown() {
+        let mut fixture = list_fixture();
+        fixture["accounts"][0]["usage"]["spend"] = json!({
+            "used": 2.0,
+            "limit": 20.0,
+            "pct": 10.0
+        });
+        let parsed = parse_account_list(&fixture.to_string()).unwrap();
+        assert_eq!(
+            parsed.accounts[0]
+                .usage
+                .spend
+                .as_ref()
+                .unwrap()
+                .currency_code,
+            None
+        );
     }
 
     #[test]

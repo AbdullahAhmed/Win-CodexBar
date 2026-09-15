@@ -54,6 +54,8 @@ export const claudeSwapAccountsList = () =>
   invoke<ClaudeSwapAccountsState>("claude_swap_accounts_list");
 export const claudeSwapAccountSwitch = (slot: number) =>
   invoke<void>("claude_swap_account_switch", { slot });
+export const claudeSwapAccountReauthenticate = (slot: number) =>
+  invoke<void>("claude_swap_account_reauthenticate", { slot });
 
 export function getBootstrapState(): Promise<BootstrapState> {
   return invoke<BootstrapState>("get_bootstrap_state");

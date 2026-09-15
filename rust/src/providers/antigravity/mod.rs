@@ -3,6 +3,7 @@
 //! Fetches usage data from Antigravity's local language server probe
 //! Uses Windows process detection to find CSRF token
 
+mod cli_fallback;
 mod legacy_status;
 mod local_proto;
 pub mod local_sessions;
@@ -12,6 +13,8 @@ mod quota_summary;
 
 use legacy_status::{UserStatus, UserStatusResponse};
 
+#[cfg(windows)]
+use crate::managed_process::{ManagedProcess, ManagedProcessConfig, ManagedProcessError};
 use async_trait::async_trait;
 #[cfg(windows)]
 use futures::{StreamExt, stream};
@@ -27,9 +30,6 @@ use std::sync::LazyLock;
 use std::time::Duration;
 #[cfg(windows)]
 use std::time::Instant;
-
-#[cfg(windows)]
-use crate::managed_process::{ManagedProcess, ManagedProcessConfig, ManagedProcessError};
 
 use crate::core::{
     FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
@@ -49,7 +49,6 @@ const AGY_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const GET_USER_STATUS_PATH: &str = "/exa.language_server_pb.LanguageServerService/GetUserStatus";
 const QUOTA_SUMMARY_PATH: &str =
     "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
-
 /// Serialize task-owned `agy` launches so concurrent app surfaces never start
 /// multiple interactive CLI servers at the same time.
 #[cfg(windows)]
@@ -446,8 +445,12 @@ impl AntigravityProvider {
             .map(|usage| Self::fetch_result(usage, "local"))
     }
 
-    fn fetch_result(usage: UsageSnapshot, source_label: &str) -> ProviderFetchResult {
+    pub(super) fn fetch_result(usage: UsageSnapshot, source_label: &str) -> ProviderFetchResult {
         ProviderFetchResult::new(Self::with_cadence_labels(usage), source_label)
+    }
+
+    async fn try_print_usage_fallback(&self) -> Option<ProviderFetchResult> {
+        cli_fallback::try_fetch(Self::locate_agy_binary()).await
     }
 
     /// Start a short-lived, headless `agy` session when neither the Antigravity
@@ -654,6 +657,47 @@ impl AntigravityProvider {
             .ok_or_else(|| ProviderError::NotInstalled(AGY_NOT_FOUND_MESSAGE.to_string()))
     }
 
+    /// Resolve the ordered fallback chain once per fetch. The local probe may
+    /// be followed by the managed runtime and CLI paths, but each path owns a
+    /// single outcome and the CLI fallback is never repeated by an error arm.
+    async fn resolve_runtime_fallback(
+        &self,
+        initial_error: Option<ProviderError>,
+        allow_managed_runtime: bool,
+    ) -> Result<ProviderFetchResult, ProviderError> {
+        let mut failure = initial_error;
+
+        #[cfg(windows)]
+        if allow_managed_runtime {
+            match self.fetch_with_managed_agy().await {
+                Ok(ManagedAgyOutcome::Reused(result)) => return Ok(result),
+                Ok(ManagedAgyOutcome::Fetched(mut result)) => {
+                    result.source_label = "cli".to_string();
+                    return Ok(result);
+                }
+                Ok(ManagedAgyOutcome::Missing) => {}
+                Err(error) => {
+                    if matches!(error, ProviderError::AuthRequired) {
+                        return Err(error);
+                    }
+                    tracing::debug!(%error, "managed Antigravity CLI probe failed");
+                    failure = Some(error);
+                }
+            }
+        }
+
+        if !matches!(failure.as_ref(), Some(ProviderError::AuthRequired))
+            && let Some(result) = self.try_print_usage_fallback().await
+        {
+            return Ok(result);
+        }
+
+        match failure {
+            Some(error) => Self::resolve_probe_failure(error, Self::offline_usage_result()),
+            None => Self::offline_or_unavailable(),
+        }
+    }
+
     fn locate_agy_binary() -> Option<PathBuf> {
         let candidates = Self::agy_binary_candidates(
             std::env::var_os("ANTIGRAVITY_CLI_PATH").map(PathBuf::from),
@@ -805,25 +849,14 @@ impl Provider for AntigravityProvider {
 
         match self.fetch_user_status().await {
             Ok(Some(result)) => Ok(result),
-            Ok(None) => {
-                #[cfg(windows)]
-                {
-                    if let Some(result) =
-                        Self::resolve_managed_outcome(self.fetch_with_managed_agy().await)?
-                    {
-                        return Ok(result);
-                    }
-                }
-
-                Self::offline_or_unavailable()
-            }
+            Ok(None) => self.resolve_runtime_fallback(None, true).await,
             Err(error) => {
                 // The local probe is inconclusive (e.g. PowerShell unavailable);
                 // preserve offline history before surfacing the probe error.
                 if !matches!(error, ProviderError::AuthRequired) {
                     tracing::debug!(%error, "Antigravity local probe failed");
                 }
-                Self::resolve_probe_failure(error, Self::offline_usage_result())
+                self.resolve_runtime_fallback(Some(error), false).await
             }
         }
     }

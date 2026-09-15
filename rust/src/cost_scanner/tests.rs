@@ -1644,6 +1644,115 @@ fn cost_scan_resumes_appended_bytes() {
 }
 
 #[test]
+fn codex_partial_rescan_replaces_changed_session_after_cache_reopen() {
+    // Windows parity for upstream 0.60.2 cost persistence: a rewritten
+    // session must replace the cached file aggregate even when the first
+    // refresh only consumes a bounded prefix and the next refresh reloads the
+    // cache from disk.
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let path = write_codex_session_fixture_with_inputs(&sessions, "changed.jsonl", &[100, 200]);
+    let old_metadata = std::fs::metadata(&path).unwrap();
+    let old_size = old_metadata.len();
+    let old_mtime = old_metadata.modified().unwrap();
+
+    let initial_scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+    let (initial, initial_stats) = initial_scanner.scan_codex_detailed(None);
+    assert_eq!(initial_stats.files_parsed, 1);
+    assert_eq!(initial.input_tokens, 200);
+    assert!(initial.history_coverage_established);
+
+    // Keep the path, identity, and byte length stable while changing both
+    // token snapshots. The mtime change proves that the cached aggregate is
+    // invalidated before the bounded rescan begins.
+    write_codex_session_fixture_with_inputs(&sessions, "changed.jsonl", &[300, 400]);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(old_mtime + std::time::Duration::from_secs(2))
+        .unwrap();
+    let rewritten_metadata = std::fs::metadata(&path).unwrap();
+    assert_eq!(rewritten_metadata.len(), old_size);
+    assert_ne!(rewritten_metadata.modified().unwrap(), old_mtime);
+
+    let first_line_bytes = i64::try_from(
+        std::fs::read(&path)
+            .unwrap()
+            .split(|byte| *byte == b'\n')
+            .next()
+            .unwrap()
+            .len(),
+    )
+    .expect("fixture line length fits i64")
+        + 1;
+    let mut bounded_options = CostScanOptions::app_driven();
+    bounded_options.codex_max_session_file_bytes = first_line_bytes;
+    bounded_options.codex_max_scan_bytes_per_refresh = first_line_bytes;
+
+    let bounded_scanner = CostScanner::new(7)
+        .with_options(bounded_options)
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+    let (partial, partial_stats, partial_cache) =
+        bounded_scanner.scan_codex_detailed_with_cache(None);
+    assert!(partial_stats.files_parsed >= 1);
+    assert!(partial_cache.codex_scan_incomplete);
+    assert!(!partial.history_coverage_established);
+    assert_eq!(
+        partial_cache
+            .previous_report
+            .as_ref()
+            .map(|report| report.input_tokens),
+        Some(200),
+        "the last validated report remains visible during catch-up"
+    );
+    let partial_file = partial_cache
+        .files
+        .get(&path.to_string_lossy().to_string())
+        .expect("partially rescanned file cache entry");
+    assert_eq!(partial_file.parsed_bytes, Some(first_line_bytes));
+
+    // A new scanner instance models a process/cache reopen. The persisted
+    // cursor must resume the rewritten file and finish at the new total.
+    let reopened_scanner = CostScanner::new(7)
+        .with_options(bounded_options)
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+    let (resumed, resumed_stats, resumed_cache) =
+        reopened_scanner.scan_codex_detailed_with_cache(None);
+    assert_eq!(resumed_stats.files_resumed, 1);
+    assert_eq!(resumed_stats.files_parsed, 0);
+    assert!(!resumed_cache.codex_scan_incomplete);
+    assert!(resumed.history_coverage_established);
+    assert_eq!(resumed.input_tokens, 400);
+
+    // Resumption may change the amount of work, but it must publish the same
+    // cost aggregate as a clean full parse of the rewritten session.
+    let fresh_scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(root.path().join("fresh-cache"))
+        .with_sessions_dirs(vec![sessions]);
+    let (fresh, fresh_stats) = fresh_scanner.scan_codex_detailed(None);
+    assert_eq!(fresh_stats.files_parsed, 1);
+    assert_eq!(resumed.input_tokens, fresh.input_tokens);
+    assert_eq!(resumed.cached_tokens, fresh.cached_tokens);
+    assert_eq!(resumed.output_tokens, fresh.output_tokens);
+    assert_eq!(resumed.sessions_count, fresh.sessions_count);
+    assert_eq!(resumed.by_model_tokens, fresh.by_model_tokens);
+    assert_eq!(resumed.by_model.len(), fresh.by_model.len());
+    for (model, resumed_cost) in &resumed.by_model {
+        let fresh_cost = fresh.by_model.get(model).copied().expect("fresh model row");
+        assert!((resumed_cost - fresh_cost).abs() < 1e-12);
+    }
+    assert!((resumed.total_cost_usd - fresh.total_cost_usd).abs() < 1e-12);
+}
+
+#[test]
 fn bounded_growing_rollout_freezes_target_and_resumes_a_retained_tail() {
     let root = tempfile::tempdir().unwrap();
     let sessions = root.path().join("sessions");

@@ -8,8 +8,19 @@
 use serde::Serialize;
 
 use super::{
-    ClaudeSwapAccountList, ClaudeSwapAccountRow, ClaudeSwapUsageStatus, ClaudeSwapUsageWindow,
+    ClaudeSwapAccountList, ClaudeSwapAccountRow, ClaudeSwapHistoricalUsage, ClaudeSwapScopedWindow,
+    ClaudeSwapSpendWindow, ClaudeSwapUsageMeasurement, ClaudeSwapUsageStatus,
+    ClaudeSwapUsageWindow,
 };
+
+pub const HISTORICAL_USAGE_PROVENANCE: &str = "source_reported_last_good";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ClaudeSwapAccountAction {
+    Switch,
+    Reauthenticate,
+}
 
 /// Bridge-facing external account row. Identity is the source-issued numeric
 /// slot (`claude-swap:<slot>`), never email or credential-derived values.
@@ -23,12 +34,15 @@ pub struct ClaudeSwapAccount {
     pub organization: Option<String>,
     pub alias: Option<String>,
     pub is_active: bool,
-    pub can_activate: bool,
+    pub action: Option<ClaudeSwapAccountAction>,
+    pub is_disabled: bool,
     pub status: String,
     pub error: Option<String>,
     pub five_hour: Option<ClaudeSwapUsageWindowDto>,
     pub seven_day: Option<ClaudeSwapUsageWindowDto>,
     pub scoped: Vec<ClaudeSwapScopedWindowDto>,
+    pub spend: Option<ClaudeSwapSpendWindowDto>,
+    pub historical_usage: Option<ClaudeSwapHistoricalUsageDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -44,6 +58,27 @@ pub struct ClaudeSwapScopedWindowDto {
     pub name: String,
     pub used_percent: f64,
     pub resets_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeSwapSpendWindowDto {
+    pub used: f64,
+    pub limit: f64,
+    pub used_percent: f64,
+    pub currency_code: Option<String>,
+    pub resets_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeSwapHistoricalUsageDto {
+    pub five_hour: Option<ClaudeSwapUsageWindowDto>,
+    pub seven_day: Option<ClaudeSwapUsageWindowDto>,
+    pub scoped: Vec<ClaudeSwapScopedWindowDto>,
+    pub spend: Option<ClaudeSwapSpendWindowDto>,
+    pub fetched_at: chrono::DateTime<chrono::Utc>,
+    pub provenance: &'static str,
 }
 
 fn normalized_email(email: &str) -> String {
@@ -111,10 +146,9 @@ fn candidate_label(
 }
 
 fn error_text_for(row: &ClaudeSwapAccountRow) -> Option<String> {
-    let has_windows = row.five_hour.is_some() || row.seven_day.is_some() || !row.scoped.is_empty();
     match row.usage_status {
         ClaudeSwapUsageStatus::Ok => {
-            if has_windows {
+            if !row.usage.is_empty() {
                 None
             } else {
                 Some("No usage windows reported.".to_string())
@@ -135,10 +169,72 @@ fn error_text_for(row: &ClaudeSwapAccountRow) -> Option<String> {
         ClaudeSwapUsageStatus::NoCredentials => {
             Some("No stored credentials for this account slot.".to_string())
         }
+        ClaudeSwapUsageStatus::ForeignCredential => Some(
+            "claude-swap reports the live credential belongs to a different account. Re-authenticate this account in claude-swap to restore its saved login."
+                .to_string(),
+        ),
         ClaudeSwapUsageStatus::Unavailable => {
-            Some("Polling deferred until a limit resets.".to_string())
+            Some("Usage unavailable.".to_string())
         }
         ClaudeSwapUsageStatus::Unknown => Some("Unrecognized claude-swap status.".to_string()),
+    }
+}
+
+fn to_window(window: &Option<ClaudeSwapUsageWindow>) -> Option<ClaudeSwapUsageWindowDto> {
+    window.as_ref().map(|window| ClaudeSwapUsageWindowDto {
+        used_percent: window.used_percent,
+        resets_at: window.resets_at,
+    })
+}
+
+fn to_scoped_window(window: &ClaudeSwapScopedWindow) -> ClaudeSwapScopedWindowDto {
+    ClaudeSwapScopedWindowDto {
+        name: window.name.clone(),
+        used_percent: window.used_percent,
+        resets_at: window.resets_at,
+    }
+}
+
+fn to_spend(spend: &Option<ClaudeSwapSpendWindow>) -> Option<ClaudeSwapSpendWindowDto> {
+    spend.as_ref().map(|spend| ClaudeSwapSpendWindowDto {
+        used: spend.used,
+        limit: spend.limit,
+        used_percent: spend.used_percent,
+        currency_code: spend.currency_code.clone(),
+        resets_at: spend.resets_at,
+    })
+}
+
+fn to_measurement(
+    measurement: &ClaudeSwapUsageMeasurement,
+    fetched_at: chrono::DateTime<chrono::Utc>,
+) -> ClaudeSwapHistoricalUsageDto {
+    ClaudeSwapHistoricalUsageDto {
+        five_hour: to_window(&measurement.five_hour),
+        seven_day: to_window(&measurement.seven_day),
+        scoped: measurement.scoped.iter().map(to_scoped_window).collect(),
+        spend: to_spend(&measurement.spend),
+        fetched_at,
+        provenance: HISTORICAL_USAGE_PROVENANCE,
+    }
+}
+
+fn to_historical_usage(
+    historical: &Option<ClaudeSwapHistoricalUsage>,
+) -> Option<ClaudeSwapHistoricalUsageDto> {
+    historical
+        .as_ref()
+        .map(|historical| to_measurement(&historical.measurement, historical.fetched_at))
+}
+
+pub fn action_for_account(row: &ClaudeSwapAccountRow) -> Option<ClaudeSwapAccountAction> {
+    if row.is_active {
+        (row.usage_status == ClaudeSwapUsageStatus::ForeignCredential)
+            .then_some(ClaudeSwapAccountAction::Reauthenticate)
+    } else if row.usage_status.can_switch_to() {
+        Some(ClaudeSwapAccountAction::Switch)
+    } else {
+        None
     }
 }
 
@@ -167,12 +263,7 @@ pub fn project_accounts(
             } else {
                 label
             };
-            let to_window = |window: &Option<ClaudeSwapUsageWindow>| {
-                window.as_ref().map(|window| ClaudeSwapUsageWindowDto {
-                    used_percent: window.used_percent,
-                    resets_at: window.resets_at,
-                })
-            };
+            let action = action_for_account(row);
             ClaudeSwapAccount {
                 id: format!("claude-swap:{}", row.number),
                 slot: row.number,
@@ -193,20 +284,15 @@ pub fn project_accounts(
                     row.alias.clone()
                 },
                 is_active: row.is_active,
-                can_activate: !row.is_active && row.usage_status.can_activate(),
+                action,
+                is_disabled: row.is_disabled,
                 status: row.usage_status.as_label().to_string(),
                 error: error_text_for(row),
-                five_hour: to_window(&row.five_hour),
-                seven_day: to_window(&row.seven_day),
-                scoped: row
-                    .scoped
-                    .iter()
-                    .map(|window| ClaudeSwapScopedWindowDto {
-                        name: window.name.clone(),
-                        used_percent: window.used_percent,
-                        resets_at: window.resets_at,
-                    })
-                    .collect(),
+                five_hour: to_window(&row.usage.five_hour),
+                seven_day: to_window(&row.usage.seven_day),
+                scoped: row.usage.scoped.iter().map(to_scoped_window).collect(),
+                spend: to_spend(&row.usage.spend),
+                historical_usage: to_historical_usage(&row.historical_usage),
             }
         })
         .collect()
@@ -265,9 +351,16 @@ mod tests {
         // Alias wins over email and expired slots are not actionable.
         let backup = projected.iter().find(|a| a.slot == 3).unwrap();
         assert_eq!(backup.label, "Backup");
-        assert!(!backup.can_activate);
+        assert!(backup.action.is_none());
         assert_eq!(personal.status, "ok");
-        assert!(projected.iter().find(|a| a.slot == 1).unwrap().can_activate);
+        assert!(
+            projected
+                .iter()
+                .find(|a| a.slot == 1)
+                .unwrap()
+                .action
+                .is_some()
+        );
     }
 
     #[test]
@@ -298,9 +391,95 @@ mod tests {
         let projected = project_accounts(&parsed, false);
         let account = &projected[0];
         assert_eq!(account.status, "unknown");
-        assert!(!account.can_activate);
+        assert!(account.action.is_none());
         let error = account.error.as_deref().unwrap();
         assert!(!error.contains("super_secret_token"));
         assert!(!error.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn foreign_credentials_expose_explicit_reauthentication_action() {
+        let raw = json!({
+            "schemaVersion": 1,
+            "activeAccountNumber": 1,
+            "accounts": [{
+                "number": 1,
+                "email": "x@example.com",
+                "active": true,
+                "usageStatus": "foreign_credential"
+            }]
+        });
+        let parsed = parse_account_list(&raw.to_string()).unwrap();
+        let account = &project_accounts(&parsed, false)[0];
+        assert_eq!(
+            account.action,
+            Some(ClaudeSwapAccountAction::Reauthenticate)
+        );
+        assert!(
+            account
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("different account")
+        );
+    }
+
+    #[test]
+    fn historical_usage_is_typed_and_marked_as_source_reported() {
+        let raw = json!({
+            "schemaVersion": 1,
+            "activeAccountNumber": null,
+            "accounts": [{
+                "number": 1,
+                "email": "x@example.com",
+                "active": false,
+                "usageStatus": "token_expired",
+                "disabled": true,
+                "lastGoodUsage": {
+                    "fiveHour": { "pct": 42.0 },
+                    "spend": { "used": 2.0, "limit": 20.0, "pct": 10.0, "currency": "USD" }
+                },
+                "lastGoodFetchedAt": "2026-09-12T00:45:00Z"
+            }]
+        });
+        let parsed = parse_account_list(&raw.to_string()).unwrap();
+        let account = &project_accounts(&parsed, false)[0];
+        assert!(account.is_disabled);
+        assert_eq!(
+            account.historical_usage.as_ref().unwrap().provenance,
+            HISTORICAL_USAGE_PROVENANCE
+        );
+        assert_eq!(
+            account
+                .historical_usage
+                .as_ref()
+                .unwrap()
+                .five_hour
+                .as_ref()
+                .unwrap()
+                .used_percent,
+            42.0
+        );
+    }
+
+    #[test]
+    fn spend_only_ok_usage_is_not_reported_as_empty() {
+        let raw = json!({
+            "schemaVersion": 1,
+            "activeAccountNumber": null,
+            "accounts": [{
+                "number": 1,
+                "email": "spend@example.com",
+                "active": false,
+                "usageStatus": "ok",
+                "usage": {
+                    "spend": { "used": 2.0, "limit": 20.0, "pct": 10.0 }
+                }
+            }]
+        });
+        let parsed = parse_account_list(&raw.to_string()).unwrap();
+        let account = &project_accounts(&parsed, false)[0];
+        assert!(account.spend.is_some());
+        assert!(account.error.is_none());
     }
 }

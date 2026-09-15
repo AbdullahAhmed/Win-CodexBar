@@ -240,6 +240,22 @@ fn prepaid_remaining(bal: &Balance) -> Option<f64> {
     Some((total - used).max(0.0))
 }
 
+fn prepaid_cost(bal: &Balance) -> Option<CostSnapshot> {
+    let remaining = prepaid_remaining(bal)?;
+    let used = valid_nn(bal.credits_used_usd)
+        .or_else(|| {
+            let total = valid_pos(bal.total_credits_usd)?;
+            Some((total - remaining).max(0.0))
+        })
+        .unwrap_or(0.0);
+    let mut cost =
+        CostSnapshot::new(used, "USD", "Neuralwatt prepaid balance").with_balance(remaining);
+    if let Some(total) = valid_pos(bal.total_credits_usd) {
+        cost = cost.with_limit(total);
+    }
+    Some(cost)
+}
+
 fn snapshot_from_quota(
     body: &QuotaResponse,
 ) -> Result<(UsageSnapshot, Option<CostSnapshot>), ProviderError> {
@@ -312,11 +328,7 @@ fn snapshot_from_quota(
         }
     }
 
-    let cost = body
-        .balance
-        .as_ref()
-        .and_then(prepaid_remaining)
-        .map(|remaining| CostSnapshot::new(remaining, "USD", "Neuralwatt prepaid balance"));
+    let cost = body.balance.as_ref().and_then(prepaid_cost);
 
     let _month = body.usage.as_ref().and_then(|u| u.current_month.as_ref());
     Ok((snap, cost))
@@ -358,6 +370,9 @@ mod tests {
         assert!(snap.login_method.as_deref().unwrap().contains("Starter"));
         assert_eq!(snap.extra_rate_windows.len(), 1);
         assert!((snap.extra_rate_windows[0].window.used_percent - 20.0).abs() < 0.01);
-        assert!((cost.unwrap().used - 8.5).abs() < 0.001);
+        let cost = cost.unwrap();
+        assert!((cost.used - 11.5).abs() < 0.001);
+        assert_eq!(cost.limit, Some(20.0));
+        assert_eq!(cost.balance, Some(8.5));
     }
 }
