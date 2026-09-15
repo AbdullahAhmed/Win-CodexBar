@@ -171,7 +171,7 @@ fn codex_accounts_menu(
             let is_active = active.is_some_and(|current| current.matches(account));
             let mut entry = TrayMenuEntry::check_item(
                 format!("switch_codex_account:{}", account.id),
-                codex_account_menu_label(account, hide_personal_info, ordinals[&account.id]),
+                codex_account_menu_label(account, lang, hide_personal_info, ordinals[&account.id]),
                 is_active,
             );
             entry.disabled = is_active;
@@ -198,11 +198,12 @@ fn codex_accounts_menu(
 
 fn codex_account_menu_label(
     account: &CodexAccount,
+    lang: Language,
     hide_personal_info: bool,
     ordinal: usize,
 ) -> String {
     if hide_personal_info {
-        return format!("Account {ordinal}");
+        return format!("{} {ordinal}", locale::get_text(lang, LocaleKey::Account));
     }
     account.display_name()
 }
@@ -374,11 +375,21 @@ mod tests {
         assert_eq!(ordinals[&without_nickname.id], 1);
         assert_eq!(ordinals[&with_nickname.id], 2);
         assert_eq!(
-            codex_account_menu_label(&with_nickname, true, ordinals[&with_nickname.id],),
+            codex_account_menu_label(
+                &with_nickname,
+                Language::English,
+                true,
+                ordinals[&with_nickname.id],
+            ),
             "Account 2"
         );
         assert_eq!(
-            codex_account_menu_label(&without_nickname, true, ordinals[&without_nickname.id],),
+            codex_account_menu_label(
+                &without_nickname,
+                Language::English,
+                true,
+                ordinals[&without_nickname.id],
+            ),
             "Account 1"
         );
 

@@ -28,7 +28,7 @@ pub use parser::{parse_account_list, parse_switch_result, validate_switch_target
 pub use projection::{
     ClaudeSwapAccount, ClaudeSwapAccountAction, ClaudeSwapHistoricalUsageDto,
     ClaudeSwapScopedWindowDto, ClaudeSwapSpendWindowDto, ClaudeSwapUsageWindowDto,
-    HISTORICAL_USAGE_PROVENANCE, project_accounts,
+    HISTORICAL_USAGE_PROVENANCE, action_for_account, project_accounts,
 };
 pub use runner::{
     DEFAULT_TIMEOUT, MAX_OUTPUT_BYTES, SWITCH_TIMEOUT, list_arguments, read_account_list,
@@ -110,7 +110,7 @@ impl ClaudeSwapUsageStatus {
     }
 
     /// Return whether an inactive account can be selected through cswap.
-    pub fn can_activate(&self) -> bool {
+    fn can_switch_to(&self) -> bool {
         matches!(
             self,
             Self::Ok | Self::ApiKey | Self::ForeignCredential | Self::Unavailable
@@ -136,7 +136,7 @@ pub struct ClaudeSwapSpendWindow {
     pub used: f64,
     pub limit: f64,
     pub used_percent: f64,
-    pub currency_code: String,
+    pub currency_code: Option<String>,
     pub resets_at: Option<DateTime<Utc>>,
 }
 
@@ -171,11 +171,8 @@ pub struct ClaudeSwapAccountRow {
     pub alias: Option<String>,
     pub is_active: bool,
     pub usage_status: ClaudeSwapUsageStatus,
-    pub five_hour: Option<ClaudeSwapUsageWindow>,
-    pub seven_day: Option<ClaudeSwapUsageWindow>,
-    pub scoped: Vec<ClaudeSwapScopedWindow>,
+    pub usage: ClaudeSwapUsageMeasurement,
     pub usage_fetched_at: Option<DateTime<Utc>>,
-    pub spend: Option<ClaudeSwapSpendWindow>,
     pub is_disabled: bool,
     pub historical_usage: Option<ClaudeSwapHistoricalUsage>,
 }

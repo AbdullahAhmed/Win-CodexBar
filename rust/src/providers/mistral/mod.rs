@@ -115,6 +115,17 @@ enum TokenKind {
     Cached,
 }
 
+#[derive(Clone, Copy)]
+enum AggregationMode {
+    CostOnly,
+    CostAndTokens,
+}
+
+enum ModelAggregation {
+    Cost(f64),
+    CostAndTokens { tokens: TokenCounts, cost: f64 },
+}
+
 impl TokenCounts {
     fn add_lane(&mut self, units: i64, kind: TokenKind) -> Result<(), ProviderError> {
         let lane = match kind {
@@ -225,9 +236,15 @@ impl MistralProvider {
         if let Some(models) = billing.completion.and_then(|c| c.models) {
             model_count += models.len();
             for data in models.values() {
-                let (tokens, cost) = Self::aggregate_model(data, &prices, true)?;
-                total_tokens.add(&tokens)?;
-                Self::accumulate_finite_cost(cost, &mut total_cost);
+                match Self::aggregate_model(data, &prices, AggregationMode::CostAndTokens)? {
+                    ModelAggregation::CostAndTokens { tokens, cost } => {
+                        total_tokens.add(&tokens)?;
+                        Self::accumulate_finite_cost(cost, &mut total_cost);
+                    }
+                    ModelAggregation::Cost(_) => {
+                        unreachable!("token mode returned cost-only result")
+                    }
+                }
             }
         }
 
@@ -237,8 +254,10 @@ impl MistralProvider {
         {
             if let Some(models) = category.models {
                 for data in models.values() {
-                    let (_, cost) = Self::aggregate_model(data, &prices, false)?;
-                    Self::accumulate_finite_cost(cost, &mut total_cost);
+                    Self::accumulate_finite_cost(
+                        Self::aggregate_cost(data, &prices)?,
+                        &mut total_cost,
+                    );
                 }
             }
         }
@@ -247,8 +266,10 @@ impl MistralProvider {
             for category in [libraries.pages, libraries.tokens].into_iter().flatten() {
                 if let Some(models) = category.models {
                     for data in models.values() {
-                        let (_, cost) = Self::aggregate_model(data, &prices, false)?;
-                        Self::accumulate_finite_cost(cost, &mut total_cost);
+                        Self::accumulate_finite_cost(
+                            Self::aggregate_cost(data, &prices)?,
+                            &mut total_cost,
+                        );
                     }
                 }
             }
@@ -260,8 +281,10 @@ impl MistralProvider {
                 .flatten()
             {
                 for data in models.values() {
-                    let (_, cost) = Self::aggregate_model(data, &prices, false)?;
-                    Self::accumulate_finite_cost(cost, &mut total_cost);
+                    Self::accumulate_finite_cost(
+                        Self::aggregate_cost(data, &prices)?,
+                        &mut total_cost,
+                    );
                 }
             }
         }
@@ -336,8 +359,8 @@ impl MistralProvider {
     fn aggregate_model(
         data: &ModelUsageData,
         prices: &HashMap<String, f64>,
-        counts_tokens: bool,
-    ) -> Result<(TokenCounts, f64), ProviderError> {
+        mode: AggregationMode,
+    ) -> Result<ModelAggregation, ProviderError> {
         let mut tokens = TokenCounts::default();
         let mut cost = 0.0;
         for (kind, entries) in [
@@ -347,7 +370,7 @@ impl MistralProvider {
         ] {
             for entry in entries.unwrap_or_default() {
                 let units = entry.value_paid.or(entry.value).unwrap_or(0);
-                if counts_tokens {
+                if matches!(mode, AggregationMode::CostAndTokens) {
                     tokens.add_lane(units, kind)?;
                 }
                 if let (Some(metric), Some(group)) = (&entry.billing_metric, &entry.billing_group) {
@@ -357,7 +380,22 @@ impl MistralProvider {
                 }
             }
         }
-        Ok((tokens, cost))
+        Ok(match mode {
+            AggregationMode::CostOnly => ModelAggregation::Cost(cost),
+            AggregationMode::CostAndTokens => ModelAggregation::CostAndTokens { tokens, cost },
+        })
+    }
+
+    fn aggregate_cost(
+        data: &ModelUsageData,
+        prices: &HashMap<String, f64>,
+    ) -> Result<f64, ProviderError> {
+        match Self::aggregate_model(data, prices, AggregationMode::CostOnly)? {
+            ModelAggregation::Cost(cost) => Ok(cost),
+            ModelAggregation::CostAndTokens { .. } => {
+                unreachable!("cost mode returned token-bearing result")
+            }
+        }
     }
 
     fn accumulate_finite_cost(cost: f64, total: &mut f64) {

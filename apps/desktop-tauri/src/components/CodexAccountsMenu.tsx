@@ -29,9 +29,10 @@ function buildPrivateCodexAccountLabel(
   displayName: string,
   ordinal: number,
   hidePersonalInfo: boolean,
+  accountWord: string,
 ): PrivateCodexAccountLabel {
   if (hidePersonalInfo) {
-    const label = `Account ${ordinal}`;
+    const label = `${accountWord} ${ordinal}`;
     return { label, tooltip: label };
   }
 
@@ -144,6 +145,7 @@ export default function CodexAccountsMenu({
             accountDisplayNames[account.id] ?? "",
             accountOrdinals[account.id],
             hideEmail,
+            t("Account"),
           );
           return (
             <CodexAccountRow

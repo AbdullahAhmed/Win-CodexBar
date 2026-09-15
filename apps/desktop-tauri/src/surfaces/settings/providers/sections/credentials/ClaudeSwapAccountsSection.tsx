@@ -5,6 +5,7 @@ import type {
   ClaudeSwapAccountsState,
   ClaudeSwapHistoricalUsage,
   ClaudeSwapSpendWindow,
+  Language,
 } from "../../../../../types/bridge";
 import type { LocaleKey } from "../../../../../i18n/keys";
 import {
@@ -17,6 +18,7 @@ import {
 
 interface Props {
   t: (key: LocaleKey) => string;
+  language?: Language;
 }
 
 const EMPTY_STATE: ClaudeSwapAccountsState = {
@@ -38,24 +40,47 @@ function usageLabel(
 function spendLabel(
   t: (key: LocaleKey) => string,
   spend: ClaudeSwapSpendWindow | null,
+  locale: string,
 ): string | null {
   if (!spend) return null;
-  return `${t("ClaudeSwapSpend")} ${spend.used.toFixed(2)} / ${spend.limit.toFixed(2)} ${spend.currencyCode} (${Math.round(spend.usedPercent)}%)`;
+  const formatter = new Intl.NumberFormat(locale, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  const currency = spend.currencyCode ? ` ${spend.currencyCode}` : "";
+  return `${t("ClaudeSwapSpend")} ${formatter.format(spend.used)} / ${formatter.format(spend.limit)}${currency} (${Math.round(spend.usedPercent)}%)`;
 }
 
 function historicalLabel(
   t: (key: LocaleKey) => string,
   history: ClaudeSwapHistoricalUsage | null,
+  locale: string,
 ): string | null {
   if (!history) return null;
   const windows = [
     usageLabel(t, "ProviderSession", history.fiveHour),
     usageLabel(t, "ProviderWeekly", history.sevenDay),
     ...history.scoped.map((window) => `${window.name} ${Math.round(window.usedPercent)}%`),
-    spendLabel(t, history.spend),
+    spendLabel(t, history.spend, locale),
   ].filter(Boolean);
-  const captured = new Date(history.fetchedAt).toLocaleString();
+  const captured = new Intl.DateTimeFormat(locale, {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(new Date(history.fetchedAt));
   return `${t("ClaudeSwapHistoricalUsage")}: ${windows.join(" · ")} (${t("ClaudeSwapHistoricalCapturedAt")} ${captured})`;
+}
+
+function languageLocale(language: Language): string {
+  return {
+    english: "en-US",
+    chinese: "zh-CN",
+    chinesetraditional: "zh-TW",
+    japanese: "ja-JP",
+    korean: "ko-KR",
+    spanish: "es-MX",
+    russian: "ru-RU",
+    turkish: "tr-TR",
+  }[language];
 }
 
 /**
@@ -67,11 +92,12 @@ function historicalLabel(
  * integration is disabled or unconfigured, and CodexBar never reads or stores
  * cswap credentials.
  */
-export function ClaudeSwapAccountsSection({ t }: Props) {
+export function ClaudeSwapAccountsSection({ t, language = "english" }: Props) {
   const [enabled, setEnabled] = useState(false);
   const [executablePath, setExecutablePath] = useState("");
   const [pathDraft, setPathDraft] = useState("");
   const [state, setState] = useState<ClaudeSwapAccountsState>(EMPTY_STATE);
+  const locale = languageLocale(language);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -232,8 +258,8 @@ export function ClaudeSwapAccountsSection({ t }: Props) {
           const scoped = account.scoped
             .map((window) => `${window.name} ${Math.round(window.usedPercent)}%`)
             .join(" \u00b7 ");
-          const spend = spendLabel(t, account.spend);
-          const historical = historicalLabel(t, account.historicalUsage);
+          const spend = spendLabel(t, account.spend, locale);
+          const historical = historicalLabel(t, account.historicalUsage, locale);
           return (
             <li className="credential-card" key={account.id}>
               <div className="credential-card__header">

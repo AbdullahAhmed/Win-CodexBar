@@ -473,61 +473,6 @@ fn is_agy_cli_command_rejects_unrelated_names() {
     assert!(!is_agy_cli_command(""));
 }
 
-#[test]
-fn structured_cli_report_requires_a_supported_semver_version() {
-    assert!(AntigravityProvider::is_supported_agy_version("1.1.11"));
-    assert!(AntigravityProvider::is_supported_agy_version("1.2.2"));
-    assert!(AntigravityProvider::is_supported_agy_version("2.0.0"));
-    assert!(!AntigravityProvider::is_supported_agy_version("1.1.10"));
-    assert!(!AntigravityProvider::is_supported_agy_version(
-        "1.2.2-preview"
-    ));
-    assert!(!AntigravityProvider::is_supported_agy_version("+1.2.2"));
-    assert!(!AntigravityProvider::is_supported_agy_version("1.2.2.3"));
-    assert!(!AntigravityProvider::is_supported_agy_version(""));
-}
-
-#[tokio::test]
-async fn agy_stdout_capture_retains_only_the_configured_limit() {
-    let output = read_stdout_limited(b"0123456789".as_slice(), 4)
-        .await
-        .expect("stdout reader should succeed");
-
-    assert_eq!(output.bytes, b"0123");
-    assert!(output.exceeded_limit);
-
-    let output = read_stdout_limited(b"0123".as_slice(), 4)
-        .await
-        .expect("stdout reader should succeed");
-    assert_eq!(output.bytes, b"0123");
-    assert!(!output.exceeded_limit);
-}
-
-#[test]
-fn agy_subprocess_uses_private_workdir_and_scrubs_oauth_credentials() {
-    let workdir = PrivateAgyWorkdir::create().expect("private working directory");
-    let path = workdir.path().to_path_buf();
-    assert!(path.is_dir());
-    assert_ne!(path, std::env::temp_dir());
-
-    {
-        let command = AntigravityProvider::prepare_agy_command(
-            std::path::Path::new("agy"),
-            &["--version"],
-            workdir.path(),
-        );
-        let standard_command = command.as_std();
-
-        assert_eq!(standard_command.get_current_dir(), Some(workdir.path()));
-        assert!(standard_command.get_envs().any(|(key, value)| {
-            key == std::ffi::OsStr::new(ANTIGRAVITY_OAUTH_CREDENTIALS_ENV) && value.is_none()
-        }));
-    }
-
-    drop(workdir);
-    assert!(!path.exists());
-}
-
 // ── Upstream 0.50.1 #2963: preserve unselected quota configs ────────────────
 
 #[test]

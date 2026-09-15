@@ -1011,7 +1011,7 @@ export interface ClaudeSwapSpendWindow {
   used: number;
   limit: number;
   usedPercent: number;
-  currencyCode: string;
+  currencyCode: string | null;
   resetsAt: string | null;
 }
 
@@ -1040,7 +1040,6 @@ export interface ClaudeSwapAccount {
   organization: string | null;
   alias: string | null;
   isActive: boolean;
-  canActivate: boolean;
   action: ClaudeSwapAccountAction | null;
   isDisabled: boolean;
   /** Raw cswap usageStatus label (e.g. "ok", "token_expired"). */

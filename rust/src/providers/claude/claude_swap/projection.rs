@@ -34,7 +34,6 @@ pub struct ClaudeSwapAccount {
     pub organization: Option<String>,
     pub alias: Option<String>,
     pub is_active: bool,
-    pub can_activate: bool,
     pub action: Option<ClaudeSwapAccountAction>,
     pub is_disabled: bool,
     pub status: String,
@@ -67,7 +66,7 @@ pub struct ClaudeSwapSpendWindowDto {
     pub used: f64,
     pub limit: f64,
     pub used_percent: f64,
-    pub currency_code: String,
+    pub currency_code: Option<String>,
     pub resets_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -147,10 +146,9 @@ fn candidate_label(
 }
 
 fn error_text_for(row: &ClaudeSwapAccountRow) -> Option<String> {
-    let has_windows = row.five_hour.is_some() || row.seven_day.is_some() || !row.scoped.is_empty();
     match row.usage_status {
         ClaudeSwapUsageStatus::Ok => {
-            if has_windows {
+            if !row.usage.is_empty() {
                 None
             } else {
                 Some("No usage windows reported.".to_string())
@@ -229,11 +227,11 @@ fn to_historical_usage(
         .map(|historical| to_measurement(&historical.measurement, historical.fetched_at))
 }
 
-fn action_for(row: &ClaudeSwapAccountRow) -> Option<ClaudeSwapAccountAction> {
+pub fn action_for_account(row: &ClaudeSwapAccountRow) -> Option<ClaudeSwapAccountAction> {
     if row.is_active {
         (row.usage_status == ClaudeSwapUsageStatus::ForeignCredential)
             .then_some(ClaudeSwapAccountAction::Reauthenticate)
-    } else if row.usage_status.can_activate() {
+    } else if row.usage_status.can_switch_to() {
         Some(ClaudeSwapAccountAction::Switch)
     } else {
         None
@@ -265,7 +263,7 @@ pub fn project_accounts(
             } else {
                 label
             };
-            let action = action_for(row);
+            let action = action_for_account(row);
             ClaudeSwapAccount {
                 id: format!("claude-swap:{}", row.number),
                 slot: row.number,
@@ -286,15 +284,14 @@ pub fn project_accounts(
                     row.alias.clone()
                 },
                 is_active: row.is_active,
-                can_activate: action.is_some(),
                 action,
                 is_disabled: row.is_disabled,
                 status: row.usage_status.as_label().to_string(),
                 error: error_text_for(row),
-                five_hour: to_window(&row.five_hour),
-                seven_day: to_window(&row.seven_day),
-                scoped: row.scoped.iter().map(to_scoped_window).collect(),
-                spend: to_spend(&row.spend),
+                five_hour: to_window(&row.usage.five_hour),
+                seven_day: to_window(&row.usage.seven_day),
+                scoped: row.usage.scoped.iter().map(to_scoped_window).collect(),
+                spend: to_spend(&row.usage.spend),
                 historical_usage: to_historical_usage(&row.historical_usage),
             }
         })
@@ -354,9 +351,16 @@ mod tests {
         // Alias wins over email and expired slots are not actionable.
         let backup = projected.iter().find(|a| a.slot == 3).unwrap();
         assert_eq!(backup.label, "Backup");
-        assert!(!backup.can_activate);
+        assert!(backup.action.is_none());
         assert_eq!(personal.status, "ok");
-        assert!(projected.iter().find(|a| a.slot == 1).unwrap().can_activate);
+        assert!(
+            projected
+                .iter()
+                .find(|a| a.slot == 1)
+                .unwrap()
+                .action
+                .is_some()
+        );
     }
 
     #[test]
@@ -387,7 +391,7 @@ mod tests {
         let projected = project_accounts(&parsed, false);
         let account = &projected[0];
         assert_eq!(account.status, "unknown");
-        assert!(!account.can_activate);
+        assert!(account.action.is_none());
         let error = account.error.as_deref().unwrap();
         assert!(!error.contains("super_secret_token"));
         assert!(!error.contains('\u{1b}'));
@@ -411,7 +415,6 @@ mod tests {
             account.action,
             Some(ClaudeSwapAccountAction::Reauthenticate)
         );
-        assert!(account.can_activate);
         assert!(
             account
                 .error
@@ -457,5 +460,26 @@ mod tests {
                 .used_percent,
             42.0
         );
+    }
+
+    #[test]
+    fn spend_only_ok_usage_is_not_reported_as_empty() {
+        let raw = json!({
+            "schemaVersion": 1,
+            "activeAccountNumber": null,
+            "accounts": [{
+                "number": 1,
+                "email": "spend@example.com",
+                "active": false,
+                "usageStatus": "ok",
+                "usage": {
+                    "spend": { "used": 2.0, "limit": 20.0, "pct": 10.0 }
+                }
+            }]
+        });
+        let parsed = parse_account_list(&raw.to_string()).unwrap();
+        let account = &project_accounts(&parsed, false)[0];
+        assert!(account.spend.is_some());
+        assert!(account.error.is_none());
     }
 }

@@ -75,7 +75,7 @@ export function ProviderDetailPane({
   settingsDisabled,
   onSettingsChange,
 }: Props) {
-  const { t } = useLocale();
+  const { t, language } = useLocale();
   const [state, dispatch] = useReducer(
     providerDetailPaneReducer,
     { wayfinderGatewayUrl, providerId },
@@ -269,7 +269,7 @@ export function ProviderDetailPane({
       <IdentitySection provider={detail} subtitle={subtitle} t={t} />
 
       {detail.id === "codex" && <CodexAccountsSection t={t} />}
-      {detail.id === "claude" && <ClaudeAccountsSection t={t} />}
+      {detail.id === "claude" && <ClaudeAccountsSection t={t} language={language} />}
 
       {detail.lastError && (
         <ProviderIssueNotice detail={detail} t={t} />

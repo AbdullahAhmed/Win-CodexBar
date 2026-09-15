@@ -3,6 +3,7 @@
 //! Fetches usage data from Antigravity's local language server probe
 //! Uses Windows process detection to find CSRF token
 
+mod cli_fallback;
 mod legacy_status;
 mod local_proto;
 pub mod local_sessions;
@@ -12,6 +13,8 @@ mod quota_summary;
 
 use legacy_status::{UserStatus, UserStatusResponse};
 
+#[cfg(windows)]
+use crate::managed_process::{ManagedProcess, ManagedProcessConfig, ManagedProcessError};
 use async_trait::async_trait;
 #[cfg(windows)]
 use futures::{StreamExt, stream};
@@ -22,18 +25,11 @@ use std::ffi::OsString;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
-use std::process::Stdio;
 use std::sync::LazyLock;
 #[cfg(windows)]
 use std::time::Duration;
 #[cfg(windows)]
 use std::time::Instant;
-use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::process::Command as AsyncCommand;
-use uuid::Uuid;
-
-#[cfg(windows)]
-use crate::managed_process::{ManagedProcess, ManagedProcessConfig, ManagedProcessError};
 
 use crate::core::{
     FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
@@ -53,103 +49,6 @@ const AGY_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const GET_USER_STATUS_PATH: &str = "/exa.language_server_pb.LanguageServerService/GetUserStatus";
 const QUOTA_SUMMARY_PATH: &str =
     "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
-const AGY_REPORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
-const AGY_REPORT_MAX_OUTPUT_BYTES: usize = 1_048_576;
-const AGY_WORKDIR_CREATE_ATTEMPTS: usize = 8;
-const ANTIGRAVITY_OAUTH_CREDENTIALS_ENV: &str = "ANTIGRAVITY_OAUTH_CREDENTIALS_JSON";
-
-#[derive(Debug)]
-struct PrivateAgyWorkdir {
-    path: PathBuf,
-}
-
-impl PrivateAgyWorkdir {
-    fn create() -> Result<Self, ProviderError> {
-        let temp_root = std::env::temp_dir();
-        for _ in 0..AGY_WORKDIR_CREATE_ATTEMPTS {
-            let path = temp_root.join(format!(
-                "codexbar-agy-{}-{}",
-                std::process::id(),
-                Uuid::new_v4()
-            ));
-            match std::fs::create_dir(&path) {
-                Ok(()) => {
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-
-                        if std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
-                            .is_err()
-                        {
-                            drop(std::fs::remove_dir(&path));
-                            return Err(ProviderError::Other(
-                                "Failed to prepare Antigravity CLI working directory".into(),
-                            ));
-                        }
-                    }
-                    return Ok(Self { path });
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(_) => break,
-            }
-        }
-
-        Err(ProviderError::Other(
-            "Failed to prepare Antigravity CLI working directory".into(),
-        ))
-    }
-
-    fn path(&self) -> &std::path::Path {
-        &self.path
-    }
-}
-
-impl Drop for PrivateAgyWorkdir {
-    fn drop(&mut self) {
-        drop(std::fs::remove_dir_all(&self.path));
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct BoundedAgyStdout {
-    bytes: Vec<u8>,
-    exceeded_limit: bool,
-}
-
-/// Read a child stdout stream incrementally, retaining only the configured
-/// prefix while continuing to drain the pipe so the child cannot block on a
-/// full stdout buffer.
-async fn read_stdout_limited<R>(
-    mut reader: R,
-    max_bytes: usize,
-) -> std::io::Result<BoundedAgyStdout>
-where
-    R: AsyncRead + Unpin,
-{
-    let mut bytes = Vec::with_capacity(max_bytes.min(8192));
-    let mut chunk = [0_u8; 8192];
-    let mut exceeded_limit = false;
-
-    loop {
-        let read = reader.read(&mut chunk).await?;
-        if read == 0 {
-            break;
-        }
-
-        let remaining = max_bytes.saturating_sub(bytes.len());
-        let retained = remaining.min(read);
-        bytes.extend_from_slice(&chunk[..retained]);
-        if retained < read {
-            exceeded_limit = true;
-        }
-    }
-
-    Ok(BoundedAgyStdout {
-        bytes,
-        exceeded_limit,
-    })
-}
-
 /// Serialize task-owned `agy` launches so concurrent app surfaces never start
 /// multiple interactive CLI servers at the same time.
 #[cfg(windows)]
@@ -546,136 +445,12 @@ impl AntigravityProvider {
             .map(|usage| Self::fetch_result(usage, "local"))
     }
 
-    fn fetch_result(usage: UsageSnapshot, source_label: &str) -> ProviderFetchResult {
+    pub(super) fn fetch_result(usage: UsageSnapshot, source_label: &str) -> ProviderFetchResult {
         ProviderFetchResult::new(Self::with_cadence_labels(usage), source_label)
     }
 
-    async fn fetch_print_usage(
-        &self,
-        binary: PathBuf,
-    ) -> Result<ProviderFetchResult, ProviderError> {
-        let version =
-            Self::run_cli_command(&binary, &["--version"], std::time::Duration::from_secs(3))
-                .await?;
-        if version.exceeded_limit {
-            return Err(ProviderError::Parse(
-                "Antigravity CLI version output is too large".into(),
-            ));
-        }
-        let version = String::from_utf8_lossy(&version.bytes);
-        if !Self::is_supported_agy_version(version.trim()) {
-            return Err(ProviderError::Parse(
-                "Antigravity CLI usage reports require agy 1.1.11 or later".into(),
-            ));
-        }
-
-        let output = Self::run_cli_command(
-            &binary,
-            &[
-                "-p",
-                "/usage",
-                "--output-format",
-                "json",
-                "--print-timeout",
-                "90s",
-            ],
-            AGY_REPORT_TIMEOUT,
-        )
-        .await?;
-        if output.exceeded_limit {
-            return Err(ProviderError::Parse(
-                "Antigravity CLI usage report is too large".into(),
-            ));
-        }
-        let usage = quota_summary::parse_cli_usage_report(&output.bytes)?;
-        Ok(Self::fetch_result(usage, "cli"))
-    }
-
     async fn try_print_usage_fallback(&self) -> Option<ProviderFetchResult> {
-        let binary = Self::locate_agy_binary()?;
-        match self.fetch_print_usage(binary).await {
-            Ok(result) => Some(result),
-            Err(error) => {
-                tracing::debug!(%error, "Antigravity structured CLI usage report unavailable");
-                None
-            }
-        }
-    }
-
-    fn prepare_agy_command(
-        binary: &std::path::Path,
-        args: &[&str],
-        working_dir: &std::path::Path,
-    ) -> AsyncCommand {
-        let mut command = AsyncCommand::new(binary);
-        command
-            .args(args)
-            .current_dir(working_dir)
-            .env_remove(ANTIGRAVITY_OAUTH_CREDENTIALS_ENV)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        #[cfg(windows)]
-        command.as_std_mut().creation_flags(0x0800_0000);
-        command
-    }
-
-    async fn run_cli_command(
-        binary: &std::path::Path,
-        args: &[&str],
-        timeout: std::time::Duration,
-    ) -> Result<BoundedAgyStdout, ProviderError> {
-        let working_dir = PrivateAgyWorkdir::create()?;
-        let mut command = Self::prepare_agy_command(binary, args, working_dir.path());
-
-        let mut child = command
-            .spawn()
-            .map_err(|_| ProviderError::Other("Failed to start Antigravity CLI".into()))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| ProviderError::Other("Antigravity CLI usage report failed".into()))?;
-
-        tokio::time::timeout(timeout, async {
-            let (stdout_result, status_result) = tokio::join!(
-                read_stdout_limited(stdout, AGY_REPORT_MAX_OUTPUT_BYTES),
-                child.wait()
-            );
-            let stdout = stdout_result
-                .map_err(|_| ProviderError::Other("Antigravity CLI usage report failed".into()))?;
-            let status = status_result
-                .map_err(|_| ProviderError::Other("Antigravity CLI usage report failed".into()))?;
-            if !status.success() {
-                return Err(ProviderError::Other(
-                    "Antigravity CLI usage report failed".into(),
-                ));
-            }
-            Ok(stdout)
-        })
-        .await
-        .map_err(|_| ProviderError::Timeout)?
-    }
-
-    fn is_supported_agy_version(version: &str) -> bool {
-        let parts: Vec<_> = version.split('.').collect();
-        if parts.len() != 3
-            || parts
-                .iter()
-                .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
-        {
-            return false;
-        }
-        let Some(major) = parts[0].parse::<u64>().ok() else {
-            return false;
-        };
-        let Some(minor) = parts[1].parse::<u64>().ok() else {
-            return false;
-        };
-        let Some(patch) = parts[2].parse::<u64>().ok() else {
-            return false;
-        };
-        (major, minor, patch) >= (1, 1, 11)
+        cli_fallback::try_fetch(Self::locate_agy_binary()).await
     }
 
     /// Start a short-lived, headless `agy` session when neither the Antigravity
@@ -882,6 +657,47 @@ impl AntigravityProvider {
             .ok_or_else(|| ProviderError::NotInstalled(AGY_NOT_FOUND_MESSAGE.to_string()))
     }
 
+    /// Resolve the ordered fallback chain once per fetch. The local probe may
+    /// be followed by the managed runtime and CLI paths, but each path owns a
+    /// single outcome and the CLI fallback is never repeated by an error arm.
+    async fn resolve_runtime_fallback(
+        &self,
+        initial_error: Option<ProviderError>,
+        allow_managed_runtime: bool,
+    ) -> Result<ProviderFetchResult, ProviderError> {
+        let mut failure = initial_error;
+
+        #[cfg(windows)]
+        if allow_managed_runtime {
+            match self.fetch_with_managed_agy().await {
+                Ok(ManagedAgyOutcome::Reused(result)) => return Ok(result),
+                Ok(ManagedAgyOutcome::Fetched(mut result)) => {
+                    result.source_label = "cli".to_string();
+                    return Ok(result);
+                }
+                Ok(ManagedAgyOutcome::Missing) => {}
+                Err(error) => {
+                    if matches!(error, ProviderError::AuthRequired) {
+                        return Err(error);
+                    }
+                    tracing::debug!(%error, "managed Antigravity CLI probe failed");
+                    failure = Some(error);
+                }
+            }
+        }
+
+        if !matches!(failure.as_ref(), Some(ProviderError::AuthRequired))
+            && let Some(result) = self.try_print_usage_fallback().await
+        {
+            return Ok(result);
+        }
+
+        match failure {
+            Some(error) => Self::resolve_probe_failure(error, Self::offline_usage_result()),
+            None => Self::offline_or_unavailable(),
+        }
+    }
+
     fn locate_agy_binary() -> Option<PathBuf> {
         let candidates = Self::agy_binary_candidates(
             std::env::var_os("ANTIGRAVITY_CLI_PATH").map(PathBuf::from),
@@ -1033,48 +849,14 @@ impl Provider for AntigravityProvider {
 
         match self.fetch_user_status().await {
             Ok(Some(result)) => Ok(result),
-            Ok(None) => {
-                #[cfg(windows)]
-                {
-                    match self.fetch_with_managed_agy().await {
-                        Ok(ManagedAgyOutcome::Reused(result)) => return Ok(result),
-                        Ok(ManagedAgyOutcome::Fetched(mut result)) => {
-                            result.source_label = "cli".to_string();
-                            return Ok(result);
-                        }
-                        Ok(ManagedAgyOutcome::Missing) => {}
-                        Err(error) => {
-                            if matches!(error, ProviderError::AuthRequired) {
-                                return Err(error);
-                            }
-                            if let Some(result) = self.try_print_usage_fallback().await {
-                                return Ok(result);
-                            }
-                            return Self::resolve_probe_failure(
-                                error,
-                                Self::offline_usage_result(),
-                            );
-                        }
-                    }
-                }
-
-                if let Some(result) = self.try_print_usage_fallback().await {
-                    return Ok(result);
-                }
-                Self::offline_or_unavailable()
-            }
+            Ok(None) => self.resolve_runtime_fallback(None, true).await,
             Err(error) => {
                 // The local probe is inconclusive (e.g. PowerShell unavailable);
                 // preserve offline history before surfacing the probe error.
                 if !matches!(error, ProviderError::AuthRequired) {
                     tracing::debug!(%error, "Antigravity local probe failed");
                 }
-                if !matches!(error, ProviderError::AuthRequired)
-                    && let Some(result) = self.try_print_usage_fallback().await
-                {
-                    return Ok(result);
-                }
-                Self::resolve_probe_failure(error, Self::offline_usage_result())
+                self.resolve_runtime_fallback(Some(error), false).await
             }
         }
     }

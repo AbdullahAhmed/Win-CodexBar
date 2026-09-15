@@ -26,7 +26,6 @@ const active: ClaudeSwapAccount = {
   organization: null,
   alias: null,
   isActive: true,
-  canActivate: false,
   action: null,
   isDisabled: false,
   status: "ok",
@@ -45,7 +44,6 @@ const switchable: ClaudeSwapAccount = {
   label: "personal@example.com",
   email: "personal@example.com",
   isActive: false,
-  canActivate: true,
   action: "switch",
 };
 
@@ -54,7 +52,6 @@ const blocked: ClaudeSwapAccount = {
   id: "claude-swap:3",
   slot: 3,
   label: "Backup",
-  canActivate: false,
   action: null,
   status: "token_expired",
   error: "Token expired. Switch to this account in claude-swap to refresh it.",

@@ -127,8 +127,7 @@ fn parse_spend(raw: Option<&Value>) -> Option<ClaudeSwapSpendWindow> {
         used,
         limit,
         used_percent: used_percent.clamp(0.0, 100.0),
-        currency_code: non_empty_display_string(object.get("currency"))
-            .unwrap_or_else(|| "USD".to_string()),
+        currency_code: non_empty_display_string(object.get("currency")),
         resets_at: match object.get("resetsAt") {
             None | Some(Value::Null) => None,
             Some(Value::String(text)) => parse_timestamp(text),
@@ -186,6 +185,12 @@ fn parse_row(
             ClaudeSwapError::MalformedShape(format!("slot {number} has no usageStatus"))
         })?;
     let usage = object.get("usage").and_then(Value::as_object);
+    let usage_measurement = ClaudeSwapUsageMeasurement {
+        five_hour: parse_window(usage.and_then(|u| u.get("fiveHour")), number, "fiveHour")?,
+        seven_day: parse_window(usage.and_then(|u| u.get("sevenDay")), number, "sevenDay")?,
+        scoped: parse_scoped(usage.and_then(|u| u.get("scoped"))),
+        spend: parse_spend(usage.and_then(|u| u.get("spend"))),
+    };
     Ok(ClaudeSwapAccountRow {
         number,
         email: trimmed_non_empty(object.get("email")),
@@ -193,14 +198,11 @@ fn parse_row(
         alias: non_empty_display_string(object.get("alias")),
         is_active,
         usage_status: ClaudeSwapUsageStatus::from_raw(raw_status),
-        five_hour: parse_window(usage.and_then(|u| u.get("fiveHour")), number, "fiveHour")?,
-        seven_day: parse_window(usage.and_then(|u| u.get("sevenDay")), number, "sevenDay")?,
-        scoped: parse_scoped(usage.and_then(|u| u.get("scoped"))),
+        usage: usage_measurement,
         usage_fetched_at: object
             .get("usageFetchedAt")
             .and_then(Value::as_str)
             .and_then(parse_timestamp),
-        spend: parse_spend(usage.and_then(|u| u.get("spend"))),
         is_disabled: object
             .get("disabled")
             .and_then(Value::as_bool)
@@ -467,9 +469,9 @@ mod tests {
         assert_eq!(first.number, 1);
         assert_eq!(first.organization_name, "Work");
         // Out-of-range percentages are clamped like upstream.
-        assert_eq!(first.five_hour.as_ref().unwrap().used_percent, 100.0);
-        assert!(first.five_hour.as_ref().unwrap().resets_at.is_some());
-        assert_eq!(first.scoped[0].name, "Fable only");
+        assert_eq!(first.usage.five_hour.as_ref().unwrap().used_percent, 100.0);
+        assert!(first.usage.five_hour.as_ref().unwrap().resets_at.is_some());
+        assert_eq!(first.usage.scoped[0].name, "Fable only");
         assert_eq!(first.usage_status, ClaudeSwapUsageStatus::Ok);
     }
 
@@ -595,10 +597,10 @@ mod tests {
             { "name": "Broken reset", "pct": 2.0, "resetsAt": "not-a-date" }
         ]);
         let parsed = parse_account_list(&fixture.to_string()).unwrap();
-        let scoped = &parsed.accounts[0].scoped;
+        let scoped = &parsed.accounts[0].usage.scoped;
         assert_eq!(scoped.len(), 1);
         assert_eq!(scoped[0].name, "Fable only");
-        assert!(parsed.accounts[0].five_hour.is_some());
+        assert!(parsed.accounts[0].usage.five_hour.is_some());
     }
 
     #[test]
@@ -623,16 +625,25 @@ mod tests {
         let parsed = parse_account_list(&fixture.to_string()).unwrap();
         let first = &parsed.accounts[0];
         assert!(first.is_disabled);
-        assert_eq!(first.spend.as_ref().unwrap().currency_code, "USD");
-        assert_eq!(first.spend.as_ref().unwrap().used, 12.5);
+        assert_eq!(
+            first.usage.spend.as_ref().unwrap().currency_code.as_deref(),
+            Some("USD")
+        );
+        assert_eq!(first.usage.spend.as_ref().unwrap().used, 12.5);
         let history = first.historical_usage.as_ref().unwrap();
         assert_eq!(
             history.measurement.five_hour.as_ref().unwrap().used_percent,
             44.0
         );
         assert_eq!(
-            history.measurement.spend.as_ref().unwrap().currency_code,
-            "EUR"
+            history
+                .measurement
+                .spend
+                .as_ref()
+                .unwrap()
+                .currency_code
+                .as_deref(),
+            Some("EUR")
         );
         assert_eq!(history.fetched_at.to_rfc3339(), "2026-09-12T00:45:00+00:00");
         assert_eq!(
@@ -656,8 +667,8 @@ mod tests {
         fixture["accounts"][0]["lastGoodFetchedAt"] = json!("not-a-date");
         let parsed = parse_account_list(&fixture.to_string()).unwrap();
         let first = &parsed.accounts[0];
-        assert!(first.five_hour.is_some());
-        assert!(first.spend.is_none());
+        assert!(first.usage.five_hour.is_some());
+        assert!(first.usage.spend.is_none());
         assert!(first.historical_usage.is_none());
 
         fixture["accounts"][0]["lastGoodFetchedAt"] = json!("2026-09-12T00:45:00Z");
@@ -665,6 +676,26 @@ mod tests {
         let history = parsed.accounts[0].historical_usage.as_ref().unwrap();
         assert!(history.measurement.five_hour.is_none());
         assert_eq!(history.measurement.scoped.len(), 1);
+    }
+
+    #[test]
+    fn missing_spend_currency_remains_unknown() {
+        let mut fixture = list_fixture();
+        fixture["accounts"][0]["usage"]["spend"] = json!({
+            "used": 2.0,
+            "limit": 20.0,
+            "pct": 10.0
+        });
+        let parsed = parse_account_list(&fixture.to_string()).unwrap();
+        assert_eq!(
+            parsed.accounts[0]
+                .usage
+                .spend
+                .as_ref()
+                .unwrap()
+                .currency_code,
+            None
+        );
     }
 
     #[test]
