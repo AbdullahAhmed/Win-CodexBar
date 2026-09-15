@@ -207,13 +207,16 @@ fn to_spend(spend: &Option<ClaudeSwapSpendWindow>) -> Option<ClaudeSwapSpendWind
     })
 }
 
-fn to_measurement(measurement: &ClaudeSwapUsageMeasurement) -> ClaudeSwapHistoricalUsageDto {
+fn to_measurement(
+    measurement: &ClaudeSwapUsageMeasurement,
+    fetched_at: chrono::DateTime<chrono::Utc>,
+) -> ClaudeSwapHistoricalUsageDto {
     ClaudeSwapHistoricalUsageDto {
         five_hour: to_window(&measurement.five_hour),
         seven_day: to_window(&measurement.seven_day),
         scoped: measurement.scoped.iter().map(to_scoped_window).collect(),
         spend: to_spend(&measurement.spend),
-        fetched_at: chrono::Utc::now(),
+        fetched_at,
         provenance: HISTORICAL_USAGE_PROVENANCE,
     }
 }
@@ -221,11 +224,9 @@ fn to_measurement(measurement: &ClaudeSwapUsageMeasurement) -> ClaudeSwapHistori
 fn to_historical_usage(
     historical: &Option<ClaudeSwapHistoricalUsage>,
 ) -> Option<ClaudeSwapHistoricalUsageDto> {
-    historical.as_ref().map(|historical| {
-        let mut dto = to_measurement(&historical.measurement);
-        dto.fetched_at = historical.fetched_at;
-        dto
-    })
+    historical
+        .as_ref()
+        .map(|historical| to_measurement(&historical.measurement, historical.fetched_at))
 }
 
 fn action_for(row: &ClaudeSwapAccountRow) -> Option<ClaudeSwapAccountAction> {

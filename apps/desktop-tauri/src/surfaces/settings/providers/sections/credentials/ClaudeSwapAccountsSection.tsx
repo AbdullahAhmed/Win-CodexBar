@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import type { ClaudeSwapAccountsState } from "../../../../../types/bridge";
+import type {
+  ClaudeSwapAccount,
+  ClaudeSwapAccountsState,
+  ClaudeSwapHistoricalUsage,
+  ClaudeSwapSpendWindow,
+} from "../../../../../types/bridge";
 import type { LocaleKey } from "../../../../../i18n/keys";
 import {
   claudeSwapAccountsList,
+  claudeSwapAccountReauthenticate,
   claudeSwapAccountSwitch,
   getSettingsSnapshot,
   updateSettings,
@@ -27,6 +33,29 @@ function usageLabel(
 ): string | null {
   if (!window) return null;
   return `${t(key)} ${Math.round(window.usedPercent)}%`;
+}
+
+function spendLabel(
+  t: (key: LocaleKey) => string,
+  spend: ClaudeSwapSpendWindow | null,
+): string | null {
+  if (!spend) return null;
+  return `${t("ClaudeSwapSpend")} ${spend.used.toFixed(2)} / ${spend.limit.toFixed(2)} ${spend.currencyCode} (${Math.round(spend.usedPercent)}%)`;
+}
+
+function historicalLabel(
+  t: (key: LocaleKey) => string,
+  history: ClaudeSwapHistoricalUsage | null,
+): string | null {
+  if (!history) return null;
+  const windows = [
+    usageLabel(t, "ProviderSession", history.fiveHour),
+    usageLabel(t, "ProviderWeekly", history.sevenDay),
+    ...history.scoped.map((window) => `${window.name} ${Math.round(window.usedPercent)}%`),
+    spendLabel(t, history.spend),
+  ].filter(Boolean);
+  const captured = new Date(history.fetchedAt).toLocaleString();
+  return `${t("ClaudeSwapHistoricalUsage")}: ${windows.join(" · ")} (${t("ClaudeSwapHistoricalCapturedAt")} ${captured})`;
 }
 
 /**
@@ -110,15 +139,29 @@ export function ClaudeSwapAccountsSection({ t }: Props) {
     await runSettings({ claudeSwapExecutablePath: next });
   };
 
-  const switchAccount = async (slot: number) => {
+  const runAccountAction = async (account: ClaudeSwapAccount) => {
     setBusy(true);
     setError(null);
     setMessage(null);
     try {
-      await claudeSwapAccountSwitch(slot);
+      if (account.action === "reauthenticate") {
+        await claudeSwapAccountReauthenticate(account.slot);
+      } else if (account.action === "switch") {
+        await claudeSwapAccountSwitch(account.slot);
+      } else {
+        throw new Error("This claude-swap account is not actionable.");
+      }
       // The backend emits `claude-accounts-updated` after invalidating usage;
       // the listener above performs the single reload.
-      if (mounted.current) setMessage(t("ClaudeSwapSwitched"));
+      if (mounted.current) {
+        setMessage(
+          t(
+            account.action === "reauthenticate"
+              ? "ClaudeSwapReauthenticated"
+              : "ClaudeSwapSwitched",
+          ),
+        );
+      }
     } catch (e) {
       if (mounted.current) setError(String(e));
     } finally {
@@ -189,33 +232,43 @@ export function ClaudeSwapAccountsSection({ t }: Props) {
           const scoped = account.scoped
             .map((window) => `${window.name} ${Math.round(window.usedPercent)}%`)
             .join(" \u00b7 ");
+          const spend = spendLabel(t, account.spend);
+          const historical = historicalLabel(t, account.historicalUsage);
           return (
             <li className="credential-card" key={account.id}>
               <div className="credential-card__header">
                 <div className="credential-card__info">
                   <strong>{account.label}</strong>
                   <span className="credential-card__meta">
-                    {[session, weekly, scoped || null].filter(Boolean).join(" \u00b7 ") ||
+                    {[session, weekly, scoped || null, spend].filter(Boolean).join(" \u00b7 ") ||
                       (!account.error ? t("ClaudeSwapUsageUnavailable") : "")}
                   </span>
+                  {historical && <span className="credential-card__meta">{historical}</span>}
                   {account.isActive && (
                     <span className="credential-card__badge credential-card__badge--set">
                       {t("TokenAccountActive")}
                     </span>
                   )}
-                  {!account.isActive && account.error && (
+                  {account.isDisabled && (
+                    <span className="credential-card__meta">{t("ClaudeSwapDisabled")}</span>
+                  )}
+                  {account.error && (
                     <span className="credential-card__meta">{account.error}</span>
                   )}
                 </div>
                 <div className="credential-card__actions">
-                  {!account.isActive && account.canActivate && (
+                  {account.action && (
                     <button
                       type="button"
                       className="credential-btn credential-btn--primary"
                       disabled={busy}
-                      onClick={() => void switchAccount(account.slot)}
+                      onClick={() => void runAccountAction(account)}
                     >
-                      {t("ClaudeSwapSwitchButton")}
+                      {t(
+                        account.action === "reauthenticate"
+                          ? "ClaudeSwapReauthenticateButton"
+                          : "ClaudeSwapSwitchButton",
+                      )}
                     </button>
                   )}
                 </div>

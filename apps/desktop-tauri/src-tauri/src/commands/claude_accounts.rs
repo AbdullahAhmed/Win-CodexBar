@@ -2,7 +2,7 @@ use super::invalidate_account_usage;
 use crate::state::AppState;
 use codexbar::core::ProviderId;
 use codexbar::providers::claude::accounts::{self, AccountManager, ClaudeAccount};
-use codexbar::providers::claude::claude_swap::{self, ClaudeSwapAccount};
+use codexbar::providers::claude::claude_swap::{self, ClaudeSwapAccount, ClaudeSwapUsageStatus};
 use serde::Serialize;
 use std::sync::Mutex;
 use tauri::Emitter;
@@ -58,6 +58,42 @@ fn claude_swap_accounts_state() -> ClaudeSwapAccountsState {
     }
 }
 
+fn claude_swap_executable_path() -> Result<String, String> {
+    let settings = codexbar::settings::Settings::load();
+    if !settings.claude_swap_enabled() {
+        return Err("claude-swap integration is disabled.".to_string());
+    }
+    let executable_path = settings.claude_swap_executable_path().to_string();
+    if executable_path.trim().is_empty() {
+        return Err("No claude-swap executable path is configured.".to_string());
+    }
+    Ok(executable_path)
+}
+
+fn account_row_for_slot(
+    list: &codexbar::providers::claude::claude_swap::ClaudeSwapAccountList,
+    slot: u32,
+) -> Result<&codexbar::providers::claude::claude_swap::ClaudeSwapAccountRow, String> {
+    list.accounts
+        .iter()
+        .find(|account| account.number == slot)
+        .ok_or_else(|| "claude-swap did not report that account slot.".to_string())
+}
+
+fn refresh_after_claude_swap_change(app: tauri::AppHandle) -> Result<(), String> {
+    let pending = {
+        let state = app.state::<Mutex<AppState>>();
+        let mut state = state.lock().map_err(|e| e.to_string())?;
+        invalidate_account_usage(&mut state, ProviderId::Claude)
+    };
+    crate::events::emit_provider_updated(&app, &pending);
+    changed(&app);
+    tauri::async_runtime::spawn(async move {
+        let _refresh = super::refresh_providers(app).await;
+    });
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn claude_swap_accounts_list() -> Result<ClaudeSwapAccountsState, String> {
     tauri::async_runtime::spawn_blocking(claude_swap_accounts_state)
@@ -70,34 +106,77 @@ pub async fn claude_swap_account_switch(app: tauri::AppHandle, slot: u32) -> Res
     let _mutation = MUTATION
         .try_lock()
         .map_err(|_| "A Claude account operation is already in progress.")?;
-    let settings = codexbar::settings::Settings::load();
-    if !settings.claude_swap_enabled() {
-        return Err("claude-swap integration is disabled.".to_string());
-    }
-    let executable_path = settings.claude_swap_executable_path().to_string();
-    if executable_path.trim().is_empty() {
-        return Err("No claude-swap executable path is configured.".to_string());
-    }
+    let executable_path = claude_swap_executable_path()?;
     // Own the credential lock inside the blocking task so a cancelled invoke
     // cannot release serialization while cswap is still mutating credentials.
     tauri::async_runtime::spawn_blocking(move || {
         let _credentials = accounts::CREDENTIAL_OPERATION.blocking_lock();
-        claude_swap::switch_account(&executable_path, slot)
+        let list = claude_swap::read_account_list(&executable_path).map_err(|e| e.to_string())?;
+        let account = account_row_for_slot(&list, slot)?;
+        if account.is_active {
+            return Err("That claude-swap account is already active.".to_string());
+        }
+        if !account.usage_status.can_activate() {
+            return Err("That claude-swap account is not available for switching.".to_string());
+        }
+        let result =
+            claude_swap::switch_account(&executable_path, slot).map_err(|e| e.to_string())?;
+        if !result.switched {
+            return Err(result.reason);
+        }
+        Ok::<(), String>(())
     })
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())?;
-    let pending = {
-        let state = app.state::<Mutex<AppState>>();
-        let mut state = state.lock().map_err(|e| e.to_string())?;
-        invalidate_account_usage(&mut state, ProviderId::Claude)
-    };
-    crate::events::emit_provider_updated(&app, &pending);
-    changed(&app);
-    tauri::async_runtime::spawn(async move {
-        let _refresh = super::refresh_providers(app).await;
-    });
-    Ok(())
+    refresh_after_claude_swap_change(app)
+}
+
+/// Re-authenticate an active slot whose current Claude credential belongs to a
+/// different account. The source-owned fixed-slot operation is reused without
+/// a force flag, and success is reported only after a fresh list confirms the
+/// foreign-credential marker is gone.
+#[tauri::command]
+pub async fn claude_swap_account_reauthenticate(
+    app: tauri::AppHandle,
+    slot: u32,
+) -> Result<(), String> {
+    let _mutation = MUTATION
+        .try_lock()
+        .map_err(|_| "A Claude account operation is already in progress.")?;
+    let executable_path = claude_swap_executable_path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _credentials = accounts::CREDENTIAL_OPERATION.blocking_lock();
+        let before = claude_swap::read_account_list(&executable_path).map_err(|e| e.to_string())?;
+        let account = account_row_for_slot(&before, slot)?;
+        if !account.is_active {
+            return Err("Only the active claude-swap account can be re-authenticated.".to_string());
+        }
+        if account.usage_status != ClaudeSwapUsageStatus::ForeignCredential {
+            return Err(
+                "That claude-swap account does not currently require re-authentication."
+                    .to_string(),
+            );
+        }
+        let result =
+            claude_swap::switch_account(&executable_path, slot).map_err(|e| e.to_string())?;
+        if !result.switched {
+            return Err(result.reason);
+        }
+        let after = claude_swap::read_account_list(&executable_path).map_err(|e| e.to_string())?;
+        let account = account_row_for_slot(&after, slot)?;
+        if !account.is_active || account.usage_status == ClaudeSwapUsageStatus::ForeignCredential {
+            return Err(
+                "claude-swap re-authentication completed without a confirmed account repair."
+                    .to_string(),
+            );
+        }
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    refresh_after_claude_swap_change(app)
 }
 
 fn changed(app: &tauri::AppHandle) {

@@ -1007,6 +1007,26 @@ export interface ClaudeSwapScopedWindow extends ClaudeSwapUsageWindow {
   name: string;
 }
 
+export interface ClaudeSwapSpendWindow {
+  used: number;
+  limit: number;
+  usedPercent: number;
+  currencyCode: string;
+  resetsAt: string | null;
+}
+
+/** Source-reported historical usage. It never drives current provider state. */
+export interface ClaudeSwapHistoricalUsage {
+  fiveHour: ClaudeSwapUsageWindow | null;
+  sevenDay: ClaudeSwapUsageWindow | null;
+  scoped: ClaudeSwapScopedWindow[];
+  spend: ClaudeSwapSpendWindow | null;
+  fetchedAt: string;
+  provenance: "source_reported_last_good";
+}
+
+export type ClaudeSwapAccountAction = "switch" | "reauthenticate";
+
 /**
  * One external claude-swap account. Identity is the source-issued numeric slot
  * (`claude-swap:<slot>`); CodexBar never reads or stores its credentials.
@@ -1021,12 +1041,16 @@ export interface ClaudeSwapAccount {
   alias: string | null;
   isActive: boolean;
   canActivate: boolean;
+  action: ClaudeSwapAccountAction | null;
+  isDisabled: boolean;
   /** Raw cswap usageStatus label (e.g. "ok", "token_expired"). */
   status: string;
   error: string | null;
   fiveHour: ClaudeSwapUsageWindow | null;
   sevenDay: ClaudeSwapUsageWindow | null;
   scoped: ClaudeSwapScopedWindow[];
+  spend: ClaudeSwapSpendWindow | null;
+  historicalUsage: ClaudeSwapHistoricalUsage | null;
 }
 
 /** External claude-swap adapter state for the Claude accounts settings section. */
