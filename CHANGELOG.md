@@ -1,5 +1,25 @@
 # Changelog
 
+## [Windows] 0.60.3 - 2026-09-15
+
+Windows port of upstream CodexBar **0.60.1 → 0.60.3**.
+
+### Added
+- Providers: preserve Abacus monthly credits, Warp add-on credits, Perplexity credit percentages, LiteLLM budgets, LongCat token details, and Devin organization diagnostics ([#503](https://github.com/nesszer/Win-CodexBar/pull/503)).
+- Providers: restore Cursor paid and active-trial Grok Bot usage, preserve Claude weekly fallback behavior, and expose Antigravity source guidance ([#505](https://github.com/nesszer/Win-CodexBar/pull/505)).
+
+### Fixed
+- Providers: use checked arithmetic for Mistral billing and preserve reserved Alibaba/Qwen request characters ([#503](https://github.com/nesszer/Win-CodexBar/pull/503)).
+- Claude: disable Remote Control registration during usage probes while keeping account and session data isolated ([#505](https://github.com/nesszer/Win-CodexBar/pull/505)).
+
+### Changed
+- Notifications: keep informational Claude session lanes out of warning history, hooks, and predictive pace consumers ([#505](https://github.com/nesszer/Win-CodexBar/pull/505)).
+- Settings: explain Antigravity automatic account selection and the Local API / agy CLI choices ([#505](https://github.com/nesszer/Win-CodexBar/pull/505)).
+
+> Release artifacts are unsigned (SignPath onboarding pending); verify them against the attached `.sha256` sidecar files.
+
+---
+
 ## [Windows] 0.56.8 - 2026-09-08
 
 Windows release aligned to the reviewed upstream CodexBar **0.56.8** behavior baseline, plus Windows-specific reliability, account-switching, UI, browser-import, and release-pipeline improvements landed since 0.55.0.
