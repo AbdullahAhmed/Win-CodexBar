@@ -8,7 +8,7 @@ use crate::core::{
 };
 
 const CREDENTIAL_TARGET: &str = "codexbar-devin";
-const BASE_URL: &str = "https://api.devin.ai";
+const BASE_URLS: [&str; 2] = ["https://api.devin.ai", "https://app.devin.ai/api"];
 const MISSING_ORGANIZATION_DETAIL: &str = "No organizations found for auth1 user";
 const MISSING_ORGANIZATION_MESSAGE: &str = "Devin organization context is missing. Set the organization in provider extras or DEVIN_ORG, then refresh.";
 
@@ -65,7 +65,7 @@ impl Provider for DevinProvider {
                     &["DEVIN_BEARER_TOKEN", "DEVIN_API_KEY"],
                 )?;
                 let env_org = std::env::var("DEVIN_ORG").ok();
-                let org = ctx
+                let raw_org = ctx
                     .workspace_id
                     .as_deref()
                     .or(env_org.as_deref())
@@ -74,30 +74,9 @@ impl Provider for DevinProvider {
                             "Devin organization not found. Set it in provider extras or DEVIN_ORG."
                                 .into(),
                         )
-                    })?
-                    .to_string();
-                let response = self
-                    .client
-                    .get(devin_url(&org)?)
-                    .bearer_auth(token)
-                    .header("Accept", "application/json")
-                    .send()
-                    .await?;
-                let status = response.status();
-                if !status.is_success() {
-                    let body = response.bytes().await.unwrap_or_default();
-                    if let Some(error) = auth_response_error(status, &body) {
-                        return Err(error);
-                    }
-                    return Err(ProviderError::Other(format!(
-                        "Devin quota returned status {}",
-                        status
-                    )));
-                }
-                let value: Value = response.json().await.map_err(|e| {
-                    ProviderError::Parse(format!("Failed to parse Devin quota: {e}"))
-                })?;
-                Ok(fetch_result_from_quota(&value, &org))
+                    })?;
+                let org = normalized_org(raw_org);
+                fetch_quota(&self.client, &token, &org, devin_urls(&org)?).await
             }
             SourceMode::Web | SourceMode::Cli => {
                 Err(ProviderError::UnsupportedSource(ctx.source_mode))
@@ -110,10 +89,97 @@ impl Provider for DevinProvider {
     }
 }
 
-fn devin_url(org: &str) -> Result<Url, ProviderError> {
-    let org = normalized_org(org);
-    Url::parse(BASE_URL)
-        .and_then(|u| u.join(&format!("{org}/billing/quota/usage")))
+async fn fetch_quota(
+    client: &Client,
+    token: &str,
+    org: &str,
+    urls: impl IntoIterator<Item = Url>,
+) -> Result<ProviderFetchResult, ProviderError> {
+    let mut last_non_auth_error: Option<ProviderError> = None;
+    let mut candidate_count = 0usize;
+    let mut auth_failures = 0usize;
+    for url in urls {
+        candidate_count += 1;
+        let response = match client
+            .get(url)
+            .bearer_auth(token)
+            // Auth1 sessions resolve their organization context
+            // from this header; without it the gateway answers 401
+            // "No organizations found for auth1 user" even for a
+            // valid session token.
+            .header("x-cog-org-id", org)
+            .header("Accept", "application/json")
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                last_non_auth_error = Some(ProviderError::Network(error));
+                continue;
+            }
+        };
+        let status = response.status();
+        if status.is_success() {
+            let body = match response.bytes().await {
+                Ok(body) => body,
+                Err(error) => {
+                    last_non_auth_error = Some(ProviderError::Network(error));
+                    continue;
+                }
+            };
+            let value: Value = match serde_json::from_slice(&body) {
+                Ok(value) => value,
+                Err(error) => {
+                    last_non_auth_error = Some(ProviderError::Parse(format!(
+                        "Failed to parse Devin quota: {error}"
+                    )));
+                    continue;
+                }
+            };
+            match fetch_result_from_quota(&value, org) {
+                Ok(result) => return Ok(result),
+                Err(error) => {
+                    last_non_auth_error = Some(error);
+                    continue;
+                }
+            }
+        }
+        let body = match response.bytes().await {
+            Ok(body) => body,
+            Err(error) => {
+                last_non_auth_error = Some(ProviderError::Network(error));
+                continue;
+            }
+        };
+        // Web-session tokens (auth1_) are rejected on the API host
+        // but work on the web host, and vice versa for service
+        // keys, so every candidate is tried before giving up.
+        if let Some(error) = auth_response_error(status, &body) {
+            if matches!(error, ProviderError::AuthRequired) {
+                auth_failures += 1;
+            } else {
+                last_non_auth_error = Some(error);
+            }
+        } else {
+            last_non_auth_error = Some(ProviderError::Other(format!(
+                "Devin quota returned status {}",
+                status
+            )));
+        }
+    }
+    if candidate_count > 0 && auth_failures == candidate_count {
+        Err(ProviderError::AuthRequired)
+    } else {
+        Err(last_non_auth_error
+            .unwrap_or_else(|| ProviderError::Other("Devin quota request failed".into())))
+    }
+}
+
+fn devin_urls(org: &str) -> Result<Vec<Url>, ProviderError> {
+    BASE_URLS
+        .iter()
+        .map(|base| Url::parse(&format!("{base}/{org}/billing/quota/usage")))
+        .collect::<Result<Vec<_>, _>>()
         .map_err(|e| ProviderError::Other(format!("Invalid Devin quota URL: {e}")))
 }
 
@@ -137,31 +203,36 @@ fn auth_response_error(status: reqwest::StatusCode, body: &[u8]) -> Option<Provi
 }
 
 fn normalized_org(raw: &str) -> String {
+    // Both hosts serve the quota at /{org}/billing/quota/usage with the bare
+    // organization id (org_...); a prefixed path 404s server-side.
     let trimmed = raw.trim().trim_matches('/');
-    if trimmed.starts_with("org/") || trimmed.starts_with("organizations/") {
-        trimmed.to_string()
-    } else {
-        format!("org/{trimmed}")
-    }
+    trimmed
+        .strip_prefix("organizations/")
+        .or_else(|| trimmed.strip_prefix("org/"))
+        .unwrap_or(trimmed)
+        .to_string()
 }
 
-fn snapshot_from_quota(value: &Value, org: &str) -> UsageSnapshot {
+fn snapshot_from_quota(value: &Value, org: &str) -> Result<UsageSnapshot, ProviderError> {
     let daily = percent(value, &["daily_percentage", "dailyPercentage"])
-        .unwrap_or_else(|| percent(value, &["used_percent", "usedPercent"]).unwrap_or(0.0));
+        .or_else(|| percent(value, &["used_percent", "usedPercent"]))
+        .ok_or_else(|| {
+            ProviderError::Parse("Devin quota response missing daily usage".to_string())
+        })?;
     let mut snapshot =
         UsageSnapshot::new(RateWindow::new(daily)).with_organization(org.to_string());
     if let Some(weekly) = percent(value, &["weekly_percentage", "weeklyPercentage"]) {
         snapshot = snapshot.with_secondary(RateWindow::new(weekly));
     }
-    snapshot
+    Ok(snapshot)
 }
 
-fn fetch_result_from_quota(value: &Value, org: &str) -> ProviderFetchResult {
-    let mut result = ProviderFetchResult::new(snapshot_from_quota(value, org), "api");
+fn fetch_result_from_quota(value: &Value, org: &str) -> Result<ProviderFetchResult, ProviderError> {
+    let mut result = ProviderFetchResult::new(snapshot_from_quota(value, org)?, "api");
     if let Some(balance) = extra_usage_balance(value) {
         result = result.with_cost(CostSnapshot::new(balance, "USD", "Extra usage balance"));
     }
-    result
+    Ok(result)
 }
 
 fn percent(value: &Value, keys: &[&str]) -> Option<f64> {
@@ -208,14 +279,16 @@ mod tests {
     #[test]
     fn parses_fraction_percent() {
         let snapshot =
-            snapshot_from_quota(&serde_json::json!({"daily_percentage":0.25}), "org/demo");
+            snapshot_from_quota(&serde_json::json!({"daily_percentage":0.25}), "org/demo")
+                .expect("daily usage");
         assert_eq!(snapshot.primary.used_percent, 25.0);
     }
 
     #[test]
     fn parses_exact_one_as_one_percent() {
         let snapshot =
-            snapshot_from_quota(&serde_json::json!({"daily_percentage":1.0}), "org/demo");
+            snapshot_from_quota(&serde_json::json!({"daily_percentage":1.0}), "org/demo")
+                .expect("daily usage");
         assert_eq!(snapshot.primary.used_percent, 1.0);
     }
 
@@ -224,7 +297,8 @@ mod tests {
         let result = fetch_result_from_quota(
             &serde_json::json!({"daily_percentage": 0.2, "overage_balance": 12.34}),
             "org/demo",
-        );
+        )
+        .expect("daily usage");
 
         let cost = result.cost.unwrap();
         assert_eq!(cost.used, 12.34);
@@ -236,7 +310,8 @@ mod tests {
         let result = fetch_result_from_quota(
             &serde_json::json!({"daily_percentage": 0.2, "overage_balance_cents": 7087}),
             "org/demo",
-        );
+        )
+        .expect("daily usage");
 
         assert_eq!(result.cost.unwrap().used, 70.87);
     }
@@ -276,5 +351,251 @@ mod tests {
     fn ignores_organization_detail_on_non_authorization_responses() {
         let body = br#"{"detail":"No organizations found for auth1 user"}"#;
         assert!(auth_response_error(reqwest::StatusCode::NOT_FOUND, body).is_none());
+    }
+
+    #[test]
+    fn normalized_org_strips_known_prefixes() {
+        assert_eq!(normalized_org("org_TJ2demo"), "org_TJ2demo");
+        assert_eq!(normalized_org(" org_TJ2demo/ "), "org_TJ2demo");
+        assert_eq!(normalized_org("org/org_TJ2demo"), "org_TJ2demo");
+        assert_eq!(normalized_org("organizations/org_TJ2demo"), "org_TJ2demo");
+    }
+
+    #[test]
+    fn devin_urls_use_bare_org_on_both_hosts() {
+        let org = normalized_org("org/org_TJ2demo");
+        let urls = devin_urls(&org).expect("candidate urls");
+        assert_eq!(
+            urls.iter().map(|u| u.as_str()).collect::<Vec<_>>(),
+            vec![
+                "https://api.devin.ai/org_TJ2demo/billing/quota/usage",
+                "https://app.devin.ai/api/org_TJ2demo/billing/quota/usage",
+            ]
+        );
+    }
+
+    async fn quota_mock(status: usize, body: &str) -> (mockito::ServerGuard, Url) {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/org_TJ2demo/billing/quota/usage")
+            .match_header("x-cog-org-id", "org_TJ2demo")
+            .with_status(status)
+            .with_body(body)
+            .create_async()
+            .await;
+        let url = Url::parse(&format!("{}/org_TJ2demo/billing/quota/usage", server.url()))
+            .expect("the mock server URL should be valid");
+        (server, url)
+    }
+
+    fn test_client() -> Client {
+        Client::builder()
+            .no_proxy()
+            .build()
+            .expect("the test client should build")
+    }
+
+    #[tokio::test]
+    async fn retries_the_next_quota_url_after_auth_failure() {
+        let (_first_server, first_url) = quota_mock(401, r#"{"detail":"Unauthorized"}"#).await;
+        let (_second_server, second_url) = quota_mock(200, r#"{"daily_percentage":0.25}"#).await;
+
+        let result = fetch_quota(
+            &test_client(),
+            "test-token",
+            "org_TJ2demo",
+            [first_url, second_url],
+        )
+        .await
+        .expect("the second host should succeed");
+
+        assert_eq!(result.usage.primary.used_percent, 25.0);
+    }
+
+    #[tokio::test]
+    async fn normalized_organization_is_sent_in_quota_request() {
+        let (_server, url) = quota_mock(200, r#"{"daily_percentage":0.25}"#).await;
+        let org = normalized_org("organizations/org_TJ2demo");
+
+        let result = fetch_quota(&test_client(), "test-token", &org, [url])
+            .await
+            .expect("the normalized organization should authenticate");
+
+        assert_eq!(result.usage.primary.used_percent, 25.0);
+    }
+
+    #[tokio::test]
+    async fn mixed_auth_and_server_failures_do_not_become_auth_required() {
+        let (_first_server, first_url) = quota_mock(401, r#"{"detail":"Unauthorized"}"#).await;
+        let (_second_server, second_url) = quota_mock(500, "server failure").await;
+
+        let error = fetch_quota(
+            &test_client(),
+            "test-token",
+            "org_TJ2demo",
+            [first_url, second_url],
+        )
+        .await
+        .expect_err("mixed failures should return the non-auth failure");
+
+        assert!(matches!(error, ProviderError::Other(message) if message.contains("500")));
+    }
+
+    #[tokio::test]
+    async fn server_failure_followed_by_auth_failure_preserves_server_failure() {
+        let (_first_server, first_url) = quota_mock(500, "server failure").await;
+        let (_second_server, second_url) = quota_mock(401, r#"{"detail":"Unauthorized"}"#).await;
+
+        let error = fetch_quota(
+            &test_client(),
+            "test-token",
+            "org_TJ2demo",
+            [first_url, second_url],
+        )
+        .await
+        .expect_err("mixed failures should return the non-auth failure");
+
+        assert!(matches!(error, ProviderError::Other(message) if message.contains("500")));
+    }
+
+    #[tokio::test]
+    async fn transport_failure_followed_by_auth_failure_is_not_auth_required() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
+            .expect("a local ephemeral port should be available");
+        let refused_port = listener
+            .local_addr()
+            .expect("the local listener should expose its address")
+            .port();
+        drop(listener);
+        let (_second_server, second_url) = quota_mock(401, r#"{"detail":"Unauthorized"}"#).await;
+        let refused_url = Url::parse(&format!(
+            "http://127.0.0.1:{refused_port}/org_TJ2demo/billing/quota/usage"
+        ))
+        .expect("the refused URL should be valid");
+
+        let error = fetch_quota(
+            &test_client(),
+            "test-token",
+            "org_TJ2demo",
+            [refused_url, second_url],
+        )
+        .await
+        .expect_err("a transport failure must not be hidden as auth");
+
+        assert!(matches!(error, ProviderError::Network(_)));
+    }
+
+    #[tokio::test]
+    async fn invalid_json_success_followed_by_valid_json_retries() {
+        let (_first_server, first_url) = quota_mock(200, "not-json").await;
+        let (_second_server, second_url) = quota_mock(200, r#"{"daily_percentage":0.25}"#).await;
+
+        let result = fetch_quota(
+            &test_client(),
+            "test-token",
+            "org_TJ2demo",
+            [first_url, second_url],
+        )
+        .await
+        .expect("the second host should provide valid JSON");
+
+        assert_eq!(result.usage.primary.used_percent, 25.0);
+    }
+
+    #[tokio::test]
+    async fn unrecognized_success_schema_followed_by_valid_json_retries() {
+        let (_first_server, first_url) = quota_mock(200, r#"{"status":"ok"}"#).await;
+        let (_second_server, second_url) = quota_mock(200, r#"{"daily_percentage":0.25}"#).await;
+
+        let result = fetch_quota(
+            &test_client(),
+            "test-token",
+            "org_TJ2demo",
+            [first_url, second_url],
+        )
+        .await
+        .expect("the second host should provide a recognized schema");
+
+        assert_eq!(result.usage.primary.used_percent, 25.0);
+    }
+
+    #[tokio::test]
+    async fn all_unrecognized_success_schemas_return_parse_error() {
+        let (_first_server, first_url) = quota_mock(200, r#"{"status":"ok"}"#).await;
+        let (_second_server, second_url) = quota_mock(200, r#"{"status":"still-ok"}"#).await;
+
+        let error = fetch_quota(
+            &test_client(),
+            "test-token",
+            "org_TJ2demo",
+            [first_url, second_url],
+        )
+        .await
+        .expect_err("unrecognized success schemas should remain a parse error");
+
+        assert!(matches!(
+            error,
+            ProviderError::Parse(message)
+                if message == "Devin quota response missing daily usage"
+        ));
+    }
+
+    #[tokio::test]
+    async fn all_auth_failures_return_auth_required() {
+        let (_first_server, first_url) = quota_mock(401, r#"{"detail":"Unauthorized"}"#).await;
+        let (_second_server, second_url) = quota_mock(403, r#"{"detail":"Forbidden"}"#).await;
+
+        let error = fetch_quota(
+            &test_client(),
+            "test-token",
+            "org_TJ2demo",
+            [first_url, second_url],
+        )
+        .await
+        .expect_err("all credential failures should remain authentication errors");
+
+        assert!(matches!(error, ProviderError::AuthRequired));
+    }
+
+    #[tokio::test]
+    async fn retries_the_next_quota_url_after_a_transport_failure() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
+            .expect("a local ephemeral port should be available");
+        let refused_port = listener
+            .local_addr()
+            .expect("the local listener should expose its address")
+            .port();
+        drop(listener);
+
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/org_TJ2demo/billing/quota/usage")
+            .match_header("x-cog-org-id", "org_TJ2demo")
+            .with_status(200)
+            .with_body(r#"{"daily_percentage":0.25}"#)
+            .create_async()
+            .await;
+        let fallback_url = Url::parse(&format!("{}/org_TJ2demo/billing/quota/usage", server.url()))
+            .expect("the mock server URL should be valid");
+        let refused_url = Url::parse(&format!(
+            "http://127.0.0.1:{refused_port}/org_TJ2demo/billing/quota/usage"
+        ))
+        .expect("the refused URL should be valid");
+        let client = Client::builder()
+            .no_proxy()
+            .build()
+            .expect("the test client should build");
+
+        let result = fetch_quota(
+            &client,
+            "test-token",
+            "org_TJ2demo",
+            [refused_url, fallback_url],
+        )
+        .await
+        .expect("the fallback URL should succeed");
+
+        assert_eq!(result.usage.primary.used_percent, 25.0);
+        mock.assert_async().await;
     }
 }
