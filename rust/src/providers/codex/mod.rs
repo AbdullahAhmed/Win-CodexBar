@@ -110,6 +110,10 @@ impl Provider for CodexProvider {
         &self.metadata
     }
 
+    fn retains_last_good_on_transport_failure(&self) -> bool {
+        true
+    }
+
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         tracing::debug!("Fetching Codex usage");
 
@@ -183,6 +187,7 @@ fn detect_codex_version() -> Option<String> {
 #[cfg(test)]
 mod pat_strategy_tests {
     use super::*;
+    use crate::core::LastGoodFailurePolicy;
 
     #[test]
     fn pat_auto_fallback_is_narrow() {
@@ -196,5 +201,18 @@ mod pat_strategy_tests {
         assert!(!pat_allows_auto_fallback(&ProviderError::Other(
             "server".into()
         )));
+    }
+
+    #[test]
+    fn transport_failures_retain_but_authentication_failures_replace() {
+        let provider = CodexProvider::new();
+        assert_eq!(
+            provider.last_good_failure_policy_for_error(&ProviderError::Timeout),
+            LastGoodFailurePolicy::Preserve
+        );
+        assert_eq!(
+            provider.last_good_failure_policy_for_error(&ProviderError::AuthRequired),
+            LastGoodFailurePolicy::Replace
+        );
     }
 }

@@ -204,6 +204,10 @@ impl Provider for CursorProvider {
         &self.metadata
     }
 
+    fn retains_last_good_on_transport_failure(&self) -> bool {
+        true
+    }
+
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         tracing::debug!("Fetching Cursor usage via web API");
 
@@ -263,7 +267,7 @@ impl Provider for CursorProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::FetchContext;
+    use crate::core::{FetchContext, LastGoodFailurePolicy};
 
     #[tokio::test]
     async fn cli_mode_does_not_return_unsupported_source() {
@@ -312,6 +316,19 @@ mod tests {
     fn does_not_advertise_unsupported_credits() {
         let provider = CursorProvider::new();
         assert!(!provider.metadata().supports_credits);
+    }
+
+    #[test]
+    fn transport_failures_retain_but_authentication_failures_replace() {
+        let provider = CursorProvider::new();
+        assert_eq!(
+            provider.last_good_failure_policy_for_error(&ProviderError::Timeout),
+            LastGoodFailurePolicy::Preserve
+        );
+        assert_eq!(
+            provider.last_good_failure_policy_for_error(&ProviderError::AuthRequired),
+            LastGoodFailurePolicy::Replace
+        );
     }
 
     #[test]

@@ -589,6 +589,79 @@ pub enum ProviderError {
     Other(String),
 }
 
+impl ProviderError {
+    /// Return true only for transport failures safe for last-good retention.
+    pub fn is_transport_failure(&self) -> bool {
+        match self {
+            ProviderError::Network(error) => matches!(
+                classify_reqwest_error(error),
+                ReqwestFailureClass::Timeout | ReqwestFailureClass::Connect
+            ),
+            ProviderError::Timeout => true,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReqwestFailureClass {
+    Timeout,
+    Connect,
+    Terminal,
+}
+
+fn classify_reqwest_error(error: &reqwest::Error) -> ReqwestFailureClass {
+    // A response-body failure can also carry the timeout flag when the peer
+    // stalls while the body is being read. It is terminal for the snapshot,
+    // because retaining last-good data would hide a truncated response.
+    if error.is_body() || error.is_decode() {
+        return ReqwestFailureClass::Terminal;
+    }
+    if error.is_timeout() {
+        return ReqwestFailureClass::Timeout;
+    }
+    if !error.is_connect() {
+        return ReqwestFailureClass::Terminal;
+    }
+
+    // A connect classification alone is too broad: it also covers protocol
+    // and TLS-handshake failures. Retain only a typed transient socket error.
+    if has_io_error_kind(error, std::io::ErrorKind::ConnectionRefused) {
+        return ReqwestFailureClass::Connect;
+    }
+
+    ReqwestFailureClass::Terminal
+}
+
+fn has_io_error_kind(error: &reqwest::Error, kind: std::io::ErrorKind) -> bool {
+    fn contains_kind(
+        source: Option<&(dyn std::error::Error + 'static)>,
+        kind: std::io::ErrorKind,
+    ) -> bool {
+        let Some(current) = source else {
+            return false;
+        };
+        if let Some(io_error) = current.downcast_ref::<std::io::Error>() {
+            if io_error.kind() == kind {
+                return true;
+            }
+            let mut nested = io_error.get_ref();
+            while let Some(inner) = nested {
+                let Some(inner_io) = inner.downcast_ref::<std::io::Error>() else {
+                    break;
+                };
+                if inner_io.kind() == kind {
+                    return true;
+                }
+                nested = inner_io.get_ref();
+            }
+        }
+        contains_kind(std::error::Error::source(current), kind)
+    }
+
+    contains_kind(std::error::Error::source(error), kind)
+}
+
 /// Context passed to provider fetch operations
 #[derive(Debug, Clone)]
 pub struct FetchContext {
@@ -713,6 +786,24 @@ pub trait Provider: Send + Sync {
     /// How the shell should treat a failed refresh when a prior good snapshot exists.
     fn last_good_failure_policy(&self, _error: &str) -> LastGoodFailurePolicy {
         LastGoodFailurePolicy::Replace
+    }
+
+    /// Whether this provider can safely retain its last good snapshot on a
+    /// classified transport failure.
+    fn retains_last_good_on_transport_failure(&self) -> bool {
+        false
+    }
+
+    /// Typed variant used before an error is sanitized for the frontend.
+    ///
+    /// Providers that need message-based distinctions can keep overriding the
+    /// string method. Transport retention is selected by the provider
+    /// capability and the typed error classification above.
+    fn last_good_failure_policy_for_error(&self, error: &ProviderError) -> LastGoodFailurePolicy {
+        if self.retains_last_good_on_transport_failure() && error.is_transport_failure() {
+            return LastGoodFailurePolicy::Preserve;
+        }
+        self.last_good_failure_policy(&error.to_string())
     }
 
     /// Presentation-safe availability state for a refresh error. The default
@@ -881,6 +972,10 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::Meta => "#0467DF",
     }
 }
+
+#[cfg(test)]
+#[path = "provider_transport_tests.rs"]
+mod transport_tests;
 
 #[cfg(test)]
 mod tests {
