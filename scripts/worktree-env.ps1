@@ -6,6 +6,8 @@ param(
     [string]$TargetDirectory = $env:WCB_CARGO_TARGET_DIR
 )
 
+. (Join-Path $PSScriptRoot 'invoke-git-output.ps1')
+
 function Get-NormalizedPath {
     param(
         [Parameter(Mandatory = $true)]
@@ -59,10 +61,11 @@ function Get-RegisteredWorktreePaths {
         [string]$Repository
     )
 
-    $lines = @(git -C $Repository worktree list --porcelain 2>&1)
-    if ($LASTEXITCODE -ne 0) {
+    $gitResult = Invoke-WinCodexBarGit -Repository $Repository -Arguments @('worktree', 'list', '--porcelain')
+    if ($gitResult.ExitCode -ne 0) {
         throw "Unable to enumerate Git worktrees for $Repository"
     }
+    $lines = @($gitResult.Output)
 
     $paths = @()
     foreach ($line in $lines) {
@@ -86,8 +89,9 @@ function Set-WinCodexBarCargoTarget {
 
     $ErrorActionPreference = 'Stop'
     $repository = Get-NormalizedPath -Path $Root
-    $topLevel = (& git -C $repository rev-parse --show-toplevel 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($topLevel)) {
+    $gitResult = Invoke-WinCodexBarGit -Repository $repository -Arguments @('rev-parse', '--show-toplevel')
+    $topLevel = (@($gitResult.Output) -join [Environment]::NewLine).Trim()
+    if ($gitResult.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($topLevel)) {
         throw "Not a Git worktree: $repository"
     }
     $repository = Get-NormalizedPath -Path $topLevel
@@ -99,8 +103,9 @@ function Set-WinCodexBarCargoTarget {
         }
         $ExternalRoot = Get-NormalizedPath -Path $ExternalRoot
 
-        $commonDir = (& git -C $repository rev-parse --git-common-dir 2>&1 | Out-String).Trim()
-        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commonDir)) {
+        $gitResult = Invoke-WinCodexBarGit -Repository $repository -Arguments @('rev-parse', '--git-common-dir')
+        $commonDir = (@($gitResult.Output) -join [Environment]::NewLine).Trim()
+        if ($gitResult.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($commonDir)) {
             throw "Unable to determine the Git common directory for $repository"
         }
         $commonDir = Get-NormalizedPath -Path $commonDir -BasePath $repository

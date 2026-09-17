@@ -11,6 +11,8 @@ param(
     [switch]$Json
 )
 
+. (Join-Path $PSScriptRoot 'invoke-git-output.ps1')
+
 function Get-NormalizedPath {
     param(
         [Parameter(Mandatory = $true)]
@@ -56,16 +58,18 @@ function Get-DirectoryBytes {
 
 $ErrorActionPreference = 'Stop'
 $repository = Get-NormalizedPath -Path $RepoRoot
-$topLevel = (& git -C $repository rev-parse --show-toplevel 2>&1 | Out-String).Trim()
-if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($topLevel)) {
+$gitResult = Invoke-WinCodexBarGit -Repository $repository -Arguments @('rev-parse', '--show-toplevel')
+$topLevel = (@($gitResult.Output) -join [Environment]::NewLine).Trim()
+if ($gitResult.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($topLevel)) {
     throw "Not a Git worktree: $repository"
 }
 $repository = Get-NormalizedPath -Path $topLevel
 
-$lines = @(git -C $repository worktree list --porcelain 2>&1)
-if ($LASTEXITCODE -ne 0) {
+$gitResult = Invoke-WinCodexBarGit -Repository $repository -Arguments @('worktree', 'list', '--porcelain')
+if ($gitResult.ExitCode -ne 0) {
     throw "Unable to enumerate Git worktrees for $repository"
 }
+$lines = @($gitResult.Output)
 $worktreePaths = @()
 foreach ($line in $lines) {
     if ($line -like 'worktree *') {
@@ -92,7 +96,8 @@ foreach ($worktreePath in $worktreePaths) {
     }
     $dirty = $false
     if ($exists) {
-        $dirty = @((git -C $worktreePath status --porcelain 2>$null)).Count -gt 0
+        $statusResult = Invoke-WinCodexBarGit -Repository $worktreePath -Arguments @('status', '--porcelain')
+        $dirty = $statusResult.ExitCode -ne 0 -or @($statusResult.Output).Count -gt 0
     }
     $worktrees += [pscustomobject]@{
         Path = $worktreePath
