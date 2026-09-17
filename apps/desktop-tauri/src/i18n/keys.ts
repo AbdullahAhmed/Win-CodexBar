@@ -541,6 +541,8 @@ export const ALL_LOCALE_KEYS = [
   "WindowScaleLabel",
   "WindowScaleHelper",
   "WindowScaleAriaLabel",
+  "TrayPanelAlwaysOnTopLabel",
+  "TrayPanelAlwaysOnTopHelper",
   "WindowMinimize",
   "WindowMaximize",
   "WindowRestore",

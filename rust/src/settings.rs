@@ -258,6 +258,11 @@ pub struct Settings {
     #[serde(default = "default_tray_scale_percent")]
     pub tray_scale_percent: u16,
 
+    /// Keep the tray flyout above other windows after it loses focus.
+    /// Disabled by default so the flyout retains normal z-order behavior.
+    #[serde(default)]
+    pub tray_panel_always_on_top: bool,
+
     /// Enable the local PowerToys Command Palette status pipe.
     #[serde(default)]
     pub powertoys_status_pipe_enabled: bool,
@@ -539,6 +544,7 @@ impl Default for Settings {
             theme: ThemePreference::default(), // Auto (follows prefers-color-scheme)
             window_scale_percent: default_window_scale_percent(),
             tray_scale_percent: default_tray_scale_percent(),
+            tray_panel_always_on_top: false,
             powertoys_status_pipe_enabled: false,
             float_bar_enabled: false,
             float_bar_opacity: default_float_bar_opacity(),

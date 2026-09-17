@@ -106,6 +106,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     theme: "dark",
     windowScalePercent: 125,
     trayScalePercent: 100,
+    trayPanelAlwaysOnTop: false,
     powertoysStatusPipeEnabled: false,
     claudeAvoidKeychainPrompts: false,
     codexSparkUsageVisible: true,

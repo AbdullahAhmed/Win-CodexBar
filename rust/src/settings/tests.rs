@@ -20,6 +20,7 @@ fn test_settings_default() {
     assert!(!settings.show_reset_when_exhausted);
     assert!(!settings.predictive_pace_warning_enabled);
     assert!(!settings.float_bar_show_cost);
+    assert!(!settings.tray_panel_always_on_top);
     assert!(settings.promote_tray_icon);
     assert!(settings.claude_daily_routines_usage_visible);
     assert!(!settings.claude_allow_reading_claude_code_credentials);
@@ -27,6 +28,24 @@ fn test_settings_default() {
         settings.low_power_mode_preference,
         LowPowerModePreference::Off
     );
+}
+
+#[test]
+fn tray_panel_always_on_top_defaults_off_and_round_trips() {
+    let defaulted: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
+        .expect("missing tray panel topmost field defaults off");
+    assert!(!defaulted.tray_panel_always_on_top);
+
+    let enabled = Settings {
+        tray_panel_always_on_top: true,
+        ..Settings::default()
+    };
+    let json = serde_json::to_string(&enabled).expect("serialize tray panel topmost setting");
+    assert!(json.contains(r#""tray_panel_always_on_top":true"#));
+
+    let loaded: Settings =
+        serde_json::from_str(&json).expect("deserialize tray panel topmost setting");
+    assert!(loaded.tray_panel_always_on_top);
 }
 
 #[test]

@@ -62,6 +62,7 @@ const settings: SettingsSnapshot = {
   menuBarDisplayMode: "compact",
   windowScalePercent: 125,
   trayScalePercent: 100,
+  trayPanelAlwaysOnTop: false,
   powertoysStatusPipeEnabled: false,
   hidePersonalInfo: false,
   autoDownloadUpdates: false,
