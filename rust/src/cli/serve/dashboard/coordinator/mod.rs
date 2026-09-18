@@ -9,7 +9,7 @@
 //! stored error (the builder still reports it once), while only the NEXT
 //! caller retries with a fresh build.
 //!
-//! Prometheus scrapes use stale-while-refresh: they return the last successful
+//! Sidecar scrapes use stale-while-refresh: they return the last successful
 //! snapshot immediately and only trigger an expired/missing build in the
 //! background. The dashboard's [`SnapshotCoordinator::get`] contract remains
 //! wait-for-fresh, with both callers sharing the same build generation.
@@ -21,10 +21,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::futures::OwnedNotified;
 
-use crate::cli::serve::metrics::MetricsSnapshot;
-
 use super::snapshot::SnapshotPayload;
-use super::source::{BoxSnapshotArtifactsFuture, BoxSnapshotFuture, SnapshotArtifacts};
 
 mod flight;
 mod state;
@@ -32,12 +29,23 @@ mod state;
 use flight::{BuildGuard, Flight, new_flight};
 use state::{CachedSnapshot, CoordinatorState};
 
+pub(crate) type BoxSnapshotFuture =
+    Pin<Box<dyn Future<Output = Result<SnapshotPayload, String>> + Send>>;
+pub(crate) type BoxSnapshotArtifactsFuture<S> =
+    Pin<Box<dyn Future<Output = Result<SnapshotArtifacts<S>, String>> + Send>>;
+
 /// Pluggable snapshot collector (production: provider+cost scan; tests: stub).
 pub type SnapshotBuildFn = Arc<dyn Fn() -> BoxSnapshotFuture + Send + Sync>;
-pub(crate) type SnapshotArtifactsBuildFn =
-    Arc<dyn Fn() -> BoxSnapshotArtifactsFuture + Send + Sync>;
+pub(crate) type SnapshotArtifactsBuildFn<S> =
+    Arc<dyn Fn() -> BoxSnapshotArtifactsFuture<S> + Send + Sync>;
 
-impl std::fmt::Debug for SnapshotCoordinator {
+#[derive(Clone)]
+pub(crate) struct SnapshotArtifacts<S> {
+    pub(crate) dashboard: SnapshotPayload,
+    pub(crate) sidecar: Option<S>,
+}
+
+impl<S> std::fmt::Debug for SnapshotCoordinator<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SnapshotCoordinator")
             .field("ttl", &self.ttl)
@@ -47,22 +55,27 @@ impl std::fmt::Debug for SnapshotCoordinator {
 
 /// Cheaply cloneable handle (all coordination state is shared through `Arc`).
 #[derive(Clone)]
-pub struct SnapshotCoordinator {
+pub struct SnapshotCoordinator<S = ()> {
     ttl: Duration,
-    build: SnapshotArtifactsBuildFn,
-    state: Arc<StdMutex<CoordinatorState>>,
+    build: SnapshotArtifactsBuildFn<S>,
+    state: Arc<StdMutex<CoordinatorState<S>>>,
 }
 
-impl SnapshotCoordinator {
+impl<S: Send + Sync + 'static> SnapshotCoordinator<S> {
     pub fn new(ttl: Duration, build: SnapshotBuildFn) -> Self {
-        let build_artifacts: SnapshotArtifactsBuildFn = Arc::new(move || {
+        let build_artifacts: SnapshotArtifactsBuildFn<S> = Arc::new(move || {
             let future = build();
-            Box::pin(async move { future.await.map(SnapshotArtifacts::dashboard_only) })
+            Box::pin(async move {
+                future.await.map(|dashboard| SnapshotArtifacts {
+                    dashboard,
+                    sidecar: None,
+                })
+            })
         });
         Self::new_with_artifacts(ttl, build_artifacts)
     }
 
-    pub(crate) fn new_with_artifacts(ttl: Duration, build: SnapshotArtifactsBuildFn) -> Self {
+    pub(crate) fn new_with_artifacts(ttl: Duration, build: SnapshotArtifactsBuildFn<S>) -> Self {
         Self {
             ttl,
             build,
@@ -79,12 +92,12 @@ impl SnapshotCoordinator {
             .map(|cached| cached.payload)
     }
 
-    pub(super) fn latest_metrics_or_trigger_refresh(&self) -> Option<Arc<MetricsSnapshot>> {
+    pub(super) fn latest_sidecar_or_trigger_refresh(&self) -> Option<Arc<S>> {
         self.latest_cached_or_trigger_refresh()
-            .and_then(|cached| cached.metrics)
+            .and_then(|cached| cached.sidecar)
     }
 
-    fn latest_cached_or_trigger_refresh(&self) -> Option<CachedSnapshot> {
+    fn latest_cached_or_trigger_refresh(&self) -> Option<CachedSnapshot<S>> {
         let runtime = tokio::runtime::Handle::try_current().ok();
         let mut claimed = None;
         let cached = {
@@ -203,17 +216,17 @@ impl SnapshotCoordinator {
     }
 
     /// Drive a flight already installed in `state`. Foreground dashboard builds
-    /// and detached metrics refreshes finish through this exact path.
+    /// and detached sidecar refreshes finish through this exact path.
     async fn run_claimed_build(
         &self,
         flight: Arc<Flight>,
-        mut guard: BuildGuard,
+        mut guard: BuildGuard<S>,
     ) -> Result<Arc<SnapshotPayload>, String> {
         let built = (self.build)().await;
         let outcome = built.map(|artifacts| {
             (
                 Arc::new(artifacts.dashboard),
-                artifacts.metrics.map(Arc::new),
+                artifacts.sidecar.map(Arc::new),
             )
         });
         let waiter_outcome = outcome
@@ -231,10 +244,10 @@ impl SnapshotCoordinator {
             .as_ref()
             .is_some_and(|current| Arc::ptr_eq(current, &flight))
         {
-            if let Ok((payload, metrics)) = &outcome {
+            if let Ok((payload, sidecar)) = &outcome {
                 state.cached = Some(CachedSnapshot {
                     payload: payload.clone(),
-                    metrics: metrics.clone(),
+                    sidecar: sidecar.clone(),
                     built_at: Instant::now(),
                 });
             }

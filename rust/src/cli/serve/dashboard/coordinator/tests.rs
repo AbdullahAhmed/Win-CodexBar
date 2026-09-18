@@ -1,7 +1,9 @@
 use super::*;
+use crate::cli::serve::collection::SnapshotCollection;
 use crate::cli::serve::dashboard::snapshot::{
     DashboardIdentity, ProviderFetchEnvelope, SnapshotInput, build_snapshot,
 };
+use crate::cli::serve::metrics::MetricsSnapshot;
 use crate::core::{ProviderFetchResult, RateWindow, UsageSnapshot};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -9,31 +11,33 @@ use tokio::sync::Notify;
 
 fn stub_input() -> SnapshotInput {
     SnapshotInput {
-        providers: vec![ProviderFetchEnvelope {
-            id: "claude".to_string(),
-            display_name: "Claude".to_string(),
-            session_label: "Session".to_string(),
-            weekly_label: "Weekly".to_string(),
-            fetch: Ok(ProviderFetchResult::new(
-                UsageSnapshot::new(RateWindow::new(50.0)),
-                "test",
-            )),
-        }],
-        costs: HashMap::new(),
-        claude_accounts: None,
+        collection: SnapshotCollection {
+            providers: vec![ProviderFetchEnvelope {
+                id: "claude".to_string(),
+                display_name: "Claude".to_string(),
+                session_label: "Session".to_string(),
+                weekly_label: "Weekly".to_string(),
+                fetch: Ok(ProviderFetchResult::new(
+                    UsageSnapshot::new(RateWindow::new(50.0)),
+                    "test",
+                )),
+            }],
+            costs: HashMap::new(),
+            claude_accounts: None,
+            generated_at: chrono::Utc::now(),
+            refresh_seconds: 60,
+            order: vec![],
+            enabled: BTreeSet::new(),
+        },
         identity: DashboardIdentity::Redacted,
-        generated_at: chrono::Utc::now(),
-        refresh_seconds: 60,
         version: None,
-        order: vec![],
-        enabled: BTreeSet::new(),
     }
 }
 
-fn stub_artifacts() -> SnapshotArtifacts {
+fn stub_artifacts() -> SnapshotArtifacts<MetricsSnapshot> {
     let input = stub_input();
     SnapshotArtifacts {
-        metrics: Some(MetricsSnapshot::from_input(&input)),
+        sidecar: Some(MetricsSnapshot::from_collection(&input.collection)),
         dashboard: build_snapshot(&input),
     }
 }
@@ -284,7 +288,7 @@ async fn failed_background_refresh_preserves_last_successful_cache() {
     let second_started = Arc::new(Notify::new());
     let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
     let release_rx = Arc::new(StdMutex::new(Some(release_rx)));
-    let build: SnapshotArtifactsBuildFn = {
+    let build: SnapshotArtifactsBuildFn<MetricsSnapshot> = {
         let calls = calls.clone();
         let second_started = second_started.clone();
         let release_rx = release_rx.clone();
@@ -316,11 +320,11 @@ async fn failed_background_refresh_preserves_last_successful_cache() {
         .unwrap()
         .cached
         .as_ref()
-        .and_then(|cached| cached.metrics.clone())
+        .and_then(|cached| cached.sidecar.clone())
         .expect("successful collection must cache metrics");
 
     let stale_metrics = coordinator
-        .latest_metrics_or_trigger_refresh()
+        .latest_sidecar_or_trigger_refresh()
         .expect("old metrics must remain available");
     assert!(Arc::ptr_eq(&old_metrics, &stale_metrics));
     tokio::time::timeout(Duration::from_secs(5), second_started.notified())
@@ -351,7 +355,7 @@ async fn failed_background_refresh_preserves_last_successful_cache() {
         state
             .cached
             .as_ref()
-            .and_then(|cached| cached.metrics.as_ref())
+            .and_then(|cached| cached.sidecar.as_ref())
             .is_some_and(|metrics| Arc::ptr_eq(&old_metrics, metrics)),
         "failed refresh must not discard the last good metrics sidecar"
     );
@@ -371,7 +375,7 @@ fn dropping_unpolled_claimed_build_task_clears_only_its_flight() {
         let mut state = coordinator.state.lock().unwrap();
         state.cached = Some(CachedSnapshot {
             payload: old.clone(),
-            metrics: None,
+            sidecar: None,
             built_at: Instant::now(),
         });
         state.flight = Some(flight.clone());
@@ -398,26 +402,26 @@ fn dropping_unpolled_claimed_build_task_clears_only_its_flight() {
 #[tokio::test]
 async fn cancelled_background_refresh_preserves_cached_metrics() {
     let started = Arc::new(Notify::new());
-    let build: SnapshotArtifactsBuildFn = {
+    let build: SnapshotArtifactsBuildFn<MetricsSnapshot> = {
         let started = started.clone();
         Arc::new(move || {
             let started = started.clone();
             Box::pin(async move {
                 started.notify_one();
-                std::future::pending::<Result<SnapshotArtifacts, String>>().await
+                std::future::pending::<Result<SnapshotArtifacts<MetricsSnapshot>, String>>().await
             })
         })
     };
     let coordinator = SnapshotCoordinator::new_with_artifacts(Duration::ZERO, build);
     let artifacts = stub_artifacts();
     let old_payload = Arc::new(artifacts.dashboard);
-    let old_metrics = Arc::new(artifacts.metrics.expect("stub metrics"));
+    let old_metrics = Arc::new(artifacts.sidecar.expect("stub metrics"));
     let flight = new_flight();
     {
         let mut state = coordinator.state.lock().unwrap();
         state.cached = Some(CachedSnapshot {
             payload: old_payload.clone(),
-            metrics: Some(old_metrics.clone()),
+            sidecar: Some(old_metrics.clone()),
             built_at: Instant::now(),
         });
         state.flight = Some(flight.clone());
@@ -436,7 +440,7 @@ async fn cancelled_background_refresh_preserves_cached_metrics() {
     assert!(Arc::ptr_eq(&old_payload, &cached.payload));
     assert!(
         cached
-            .metrics
+            .sidecar
             .as_ref()
             .is_some_and(|metrics| Arc::ptr_eq(&old_metrics, metrics))
     );
@@ -444,7 +448,7 @@ async fn cancelled_background_refresh_preserves_cached_metrics() {
 
 #[tokio::test]
 async fn panicked_background_refresh_preserves_cached_metrics() {
-    let build: SnapshotArtifactsBuildFn = Arc::new(|| {
+    let build: SnapshotArtifactsBuildFn<MetricsSnapshot> = Arc::new(|| {
         Box::pin(async move {
             panic!("simulated detached refresh panic");
         })
@@ -452,13 +456,13 @@ async fn panicked_background_refresh_preserves_cached_metrics() {
     let coordinator = SnapshotCoordinator::new_with_artifacts(Duration::ZERO, build);
     let artifacts = stub_artifacts();
     let old_payload = Arc::new(artifacts.dashboard);
-    let old_metrics = Arc::new(artifacts.metrics.expect("stub metrics"));
+    let old_metrics = Arc::new(artifacts.sidecar.expect("stub metrics"));
     let flight = new_flight();
     {
         let mut state = coordinator.state.lock().unwrap();
         state.cached = Some(CachedSnapshot {
             payload: old_payload.clone(),
-            metrics: Some(old_metrics.clone()),
+            sidecar: Some(old_metrics.clone()),
             built_at: Instant::now(),
         });
         state.flight = Some(flight.clone());
@@ -475,7 +479,7 @@ async fn panicked_background_refresh_preserves_cached_metrics() {
     assert!(Arc::ptr_eq(&old_payload, &cached.payload));
     assert!(
         cached
-            .metrics
+            .sidecar
             .as_ref()
             .is_some_and(|metrics| Arc::ptr_eq(&old_metrics, metrics))
     );
@@ -702,7 +706,7 @@ async fn completion_in_decision_window_sets_waiter_notified() {
         let mut state = coordinator.state.lock().expect("coordinator poisoned");
         state.cached = Some(CachedSnapshot {
             payload: payload.clone(),
-            metrics: None,
+            sidecar: None,
             built_at: Instant::now(),
         });
         state.flight = None;

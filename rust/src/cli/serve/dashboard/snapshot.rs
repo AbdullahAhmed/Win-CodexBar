@@ -27,6 +27,10 @@ use super::window::make_window_with_idle;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
+use crate::cli::serve::collection::SnapshotCollection;
+pub use crate::cli::serve::collection::{
+    AccountFetchEnvelope, ClaudeAccountsInput, ProviderFetchEnvelope, RawCostPayload,
+};
 use crate::core::{ProviderFetchResult, RateWindow, UsagePace, UsageSnapshot};
 
 /// How much account identity a snapshot exposes. Upstream 0.48.0 exposes two
@@ -167,48 +171,10 @@ pub struct PacePayload {
     pub summary: String,
 }
 
-// ── Builder inputs ────────────────────────────────────────────────────────
-
-/// One collected provider row: the fetch outcome plus routing metadata.
-pub struct ProviderFetchEnvelope {
-    pub id: String,
-    pub display_name: String,
-    pub session_label: String,
-    pub weekly_label: String,
-    pub fetch: Result<ProviderFetchResult, String>,
-}
-
-/// Local cost scan data for one provider (codex / claude only upstream).
-pub struct RawCostPayload {
-    pub today_usd: Option<f64>,
-    pub last_30_days_usd: Option<f64>,
-}
-
-/// One collected account row for the Claude multi-account section.
-pub struct AccountFetchEnvelope {
-    pub id: String,
-    pub label: String,
-    pub active: bool,
-    pub fetch: Result<ProviderFetchResult, String>,
-}
-
-/// Claude multi-account ("claude-swap" upstream) section input.
-pub struct ClaudeAccountsInput {
-    pub accounts: Result<Vec<AccountFetchEnvelope>, String>,
-}
-
 pub struct SnapshotInput {
-    pub providers: Vec<ProviderFetchEnvelope>,
-    pub costs: HashMap<String, RawCostPayload>,
-    pub claude_accounts: Option<ClaudeAccountsInput>,
+    pub collection: SnapshotCollection,
     pub identity: DashboardIdentity,
-    pub generated_at: DateTime<Utc>,
-    pub refresh_seconds: u32,
     pub version: Option<String>,
-    /// Ordered provider ids from settings (`provider_order`); position * 10 is
-    /// the display sort key (upstream uses config order the same way).
-    pub order: Vec<String>,
-    pub enabled: BTreeSet<String>,
 }
 
 /// Build the stable display-oriented snapshot (pure; no I/O).
@@ -218,7 +184,7 @@ pub struct SnapshotInput {
 )]
 pub fn build_snapshot(input: &SnapshotInput) -> SnapshotPayload {
     let mut sort_keys: HashMap<&str, u32> = HashMap::new();
-    for (index, id) in input.order.iter().enumerate() {
+    for (index, id) in input.collection.order.iter().enumerate() {
         sort_keys
             .entry(id.as_str())
             .or_insert_with(|| index as u32 * 10);
@@ -227,6 +193,7 @@ pub fn build_snapshot(input: &SnapshotInput) -> SnapshotPayload {
     let known_ids: BTreeSet<&str> = crate::core::cli_name_map().keys().copied().collect();
     let mut claude_attached = false;
     let providers = input
+        .collection
         .providers
         .iter()
         .enumerate()
@@ -235,7 +202,7 @@ pub fn build_snapshot(input: &SnapshotInput) -> SnapshotPayload {
             // belongs only on the FIRST claude row.
             let claude = if !claude_attached && envelope.id == "claude" {
                 claude_attached = true;
-                input.claude_accounts.as_ref()
+                input.collection.claude_accounts.as_ref()
             } else {
                 None
             };
@@ -243,14 +210,21 @@ pub fn build_snapshot(input: &SnapshotInput) -> SnapshotPayload {
                 .get(envelope.id.as_str())
                 .copied()
                 .unwrap_or(10_000 + index as u32);
-            build_provider(envelope, &input.costs, input, &known_ids, sort_key, claude)
+            build_provider(
+                envelope,
+                &input.collection.costs,
+                input,
+                &known_ids,
+                sort_key,
+                claude,
+            )
         })
         .collect();
 
-    let refresh = input.refresh_seconds;
+    let refresh = input.collection.refresh_seconds;
     SnapshotPayload {
         schema_version: 1,
-        generated_at: input.generated_at,
+        generated_at: input.collection.generated_at,
         stale_after_seconds: (refresh.saturating_mul(3)).max(180),
         host: HostPayload {
             codex_bar_version: input.version.clone(),
@@ -297,7 +271,7 @@ fn build_provider(
             "unknown".to_string(),
             None,
             Vec::new(),
-            Some(input.generated_at),
+            Some(input.collection.generated_at),
             Some(ProviderErrorPayload {
                 code: 1,
                 message: message.clone(),
@@ -318,7 +292,7 @@ fn build_provider(
                                 input.identity,
                                 &envelope.session_label,
                                 &envelope.weekly_label,
-                                input.generated_at,
+                                input.collection.generated_at,
                             )
                         })
                         .collect(),
@@ -335,7 +309,8 @@ fn build_provider(
         name: envelope.display_name.clone(),
         // Upstream: known provider ids report config membership; unrecognized
         // payloads stay enabled.
-        enabled: !known_ids.contains(envelope.id.as_str()) || input.enabled.contains(&envelope.id),
+        enabled: !known_ids.contains(envelope.id.as_str())
+            || input.collection.enabled.contains(&envelope.id),
         source,
         status: None,
         identity,

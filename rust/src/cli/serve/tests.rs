@@ -587,12 +587,12 @@ async fn deadline_driven_release_frees_gated_slot() {
 
 // ── Upstream 0.48.0 A1–A5: dashboard routes ───────────────────────────
 
-use dashboard::coordinator::{SnapshotArtifactsBuildFn, SnapshotBuildFn};
+use crate::cli::serve::collection::SnapshotCollection;
+use dashboard::coordinator::{SnapshotArtifacts, SnapshotArtifactsBuildFn, SnapshotBuildFn};
 use dashboard::snapshot::{
     AccountFetchEnvelope, ClaudeAccountsInput, DashboardIdentity as DashboardIdMode,
     ProviderFetchEnvelope, SnapshotInput, build_snapshot,
 };
-use dashboard::source::SnapshotArtifacts;
 
 fn stub_build(identity: DashboardIdMode, with_accounts: bool, delay: Duration) -> SnapshotBuildFn {
     std::sync::Arc::new(move || {
@@ -612,28 +612,30 @@ fn stub_build(identity: DashboardIdMode, with_accounts: bool, delay: Duration) -
                 }]),
             });
             Ok(build_snapshot(&SnapshotInput {
-                providers: vec![ProviderFetchEnvelope {
-                    id: "claude".to_string(),
-                    display_name: "Claude".to_string(),
-                    session_label: "Session".to_string(),
-                    weekly_label: "Weekly".to_string(),
-                    fetch: Ok(crate::core::ProviderFetchResult::new(usage, "test")),
-                }],
-                costs: std::collections::HashMap::new(),
-                claude_accounts,
+                collection: SnapshotCollection {
+                    providers: vec![ProviderFetchEnvelope {
+                        id: "claude".to_string(),
+                        display_name: "Claude".to_string(),
+                        session_label: "Session".to_string(),
+                        weekly_label: "Weekly".to_string(),
+                        fetch: Ok(crate::core::ProviderFetchResult::new(usage, "test")),
+                    }],
+                    costs: std::collections::HashMap::new(),
+                    claude_accounts,
+                    generated_at: chrono::Utc::now(),
+                    refresh_seconds: 60,
+                    order: vec![],
+                    enabled: std::collections::BTreeSet::new(),
+                },
                 identity,
-                generated_at: chrono::Utc::now(),
-                refresh_seconds: 60,
                 version: Some("test".to_string()),
-                order: vec![],
-                enabled: std::collections::BTreeSet::new(),
             }))
         })
     })
 }
 
 fn stub_state_ok() -> dashboard::DashboardState {
-    let build: SnapshotArtifactsBuildFn =
+    let build: SnapshotArtifactsBuildFn<metrics::MetricsSnapshot> =
         std::sync::Arc::new(|| {
             Box::pin(async move {
                 let mut usage = crate::core::UsageSnapshot::new(
@@ -641,25 +643,27 @@ fn stub_state_ok() -> dashboard::DashboardState {
                 );
                 usage.updated_at = chrono::Utc::now();
                 let input = SnapshotInput {
-                    providers: vec![ProviderFetchEnvelope {
-                        id: "codex".to_string(),
-                        display_name: "Codex".to_string(),
-                        session_label: "Session".to_string(),
-                        weekly_label: "Weekly".to_string(),
-                        fetch: Ok(crate::core::ProviderFetchResult::new(usage, "test")),
-                    }],
-                    costs: std::collections::HashMap::new(),
-                    claude_accounts: None,
+                    collection: SnapshotCollection {
+                        providers: vec![ProviderFetchEnvelope {
+                            id: "codex".to_string(),
+                            display_name: "Codex".to_string(),
+                            session_label: "Session".to_string(),
+                            weekly_label: "Weekly".to_string(),
+                            fetch: Ok(crate::core::ProviderFetchResult::new(usage, "test")),
+                        }],
+                        costs: std::collections::HashMap::new(),
+                        claude_accounts: None,
+                        generated_at: chrono::Utc::now(),
+                        refresh_seconds: 60,
+                        order: vec!["codex".to_string()],
+                        enabled: ["codex".to_string()].into_iter().collect(),
+                    },
                     identity: DashboardIdMode::Redacted,
-                    generated_at: chrono::Utc::now(),
-                    refresh_seconds: 60,
                     version: Some("test".to_string()),
-                    order: vec!["codex".to_string()],
-                    enabled: ["codex".to_string()].into_iter().collect(),
                 };
                 Ok(SnapshotArtifacts {
-                    metrics: Some(metrics::MetricsSnapshot::from_input(&input)),
                     dashboard: build_snapshot(&input),
+                    sidecar: Some(metrics::MetricsSnapshot::from_collection(&input.collection)),
                 })
             })
         });

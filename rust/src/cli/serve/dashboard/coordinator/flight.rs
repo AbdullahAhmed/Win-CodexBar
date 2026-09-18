@@ -36,15 +36,15 @@ pub(in crate::cli::serve::dashboard::coordinator) fn new_flight() -> Arc<Flight>
 /// Completion guard for an in-flight build. Cancellation, panic, or dropping an
 /// unpolled detached task clears only its matching flight, preserves the last
 /// successful cache, and wakes waiters so they can retry.
-pub(in crate::cli::serve::dashboard::coordinator) struct BuildGuard {
-    state: Arc<StdMutex<CoordinatorState>>,
+pub(in crate::cli::serve::dashboard::coordinator) struct BuildGuard<S> {
+    state: Arc<StdMutex<CoordinatorState<S>>>,
     flight: Arc<Flight>,
     armed: bool,
 }
 
-impl BuildGuard {
+impl<S> BuildGuard<S> {
     pub(in crate::cli::serve::dashboard::coordinator) fn new(
-        state: Arc<StdMutex<CoordinatorState>>,
+        state: Arc<StdMutex<CoordinatorState<S>>>,
         flight: Arc<Flight>,
     ) -> Self {
         Self {
@@ -60,7 +60,7 @@ impl BuildGuard {
     }
 }
 
-impl Drop for BuildGuard {
+impl<S> Drop for BuildGuard<S> {
     fn drop(&mut self) {
         if !self.armed {
             return;

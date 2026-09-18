@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 
-use crate::cli::serve::dashboard::snapshot::SnapshotInput;
+use crate::cli::serve::collection::SnapshotCollection;
 use crate::core::{ProviderId, RateWindow, RateWindowCadence};
 
 #[derive(Debug, Clone)]
@@ -41,7 +41,7 @@ pub(in crate::cli::serve::metrics) struct QuotaMetric {
 }
 
 impl MetricsSnapshot {
-    pub(crate) fn from_input(input: &SnapshotInput) -> Self {
+    pub(crate) fn from_collection(input: &SnapshotCollection) -> Self {
         let enabled = input
             .enabled
             .iter()

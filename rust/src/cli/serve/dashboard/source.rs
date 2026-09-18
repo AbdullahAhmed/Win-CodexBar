@@ -17,34 +17,16 @@ use crate::core::{CostScanOptions, FetchContext, ProviderId, SourceMode, instant
 use crate::cost_scanner::{self, CostScanner};
 use crate::settings::Settings;
 
+use crate::cli::serve::collection::{
+    AccountFetchEnvelope, ClaudeAccountsInput, ProviderFetchEnvelope, RawCostPayload,
+    SnapshotCollection,
+};
+use crate::cli::serve::dashboard::coordinator::{BoxSnapshotArtifactsFuture, SnapshotArtifacts};
 use crate::cli::serve::metrics::MetricsSnapshot;
 
-use super::snapshot::{
-    AccountFetchEnvelope, ClaudeAccountsInput, DashboardIdentity, ProviderFetchEnvelope,
-    RawCostPayload, SnapshotInput, SnapshotPayload, build_snapshot,
-};
+use super::snapshot::{DashboardIdentity, SnapshotInput, SnapshotPayload, build_snapshot};
 
 pub type BoxSnapshotFuture = Pin<Box<dyn Future<Output = Result<SnapshotPayload, String>> + Send>>;
-pub(crate) type BoxSnapshotArtifactsFuture =
-    Pin<Box<dyn Future<Output = Result<SnapshotArtifacts, String>> + Send>>;
-
-/// One provider collection projected into independent dashboard and metrics
-/// views. The metrics sidecar stays internal so the public dashboard-v1 DTOs
-/// remain source-compatible for Rust callers.
-#[derive(Clone)]
-pub(crate) struct SnapshotArtifacts {
-    pub dashboard: SnapshotPayload,
-    pub metrics: Option<MetricsSnapshot>,
-}
-
-impl SnapshotArtifacts {
-    pub(crate) fn dashboard_only(dashboard: SnapshotPayload) -> Self {
-        Self {
-            dashboard,
-            metrics: None,
-        }
-    }
-}
 
 /// Hard bound per provider fetch inside a dashboard build. Existing serve
 /// `web_timeout` is 60 s; builds add a 75 s outer envelope (provider-internal
@@ -88,12 +70,12 @@ impl SnapshotProducer {
         Box::pin(async move { Ok(this.collect_artifacts_inner().await?.dashboard) })
     }
 
-    pub(crate) fn collect_artifacts(&self) -> BoxSnapshotArtifactsFuture {
+    pub(crate) fn collect_artifacts(&self) -> BoxSnapshotArtifactsFuture<MetricsSnapshot> {
         let this = self.clone();
         Box::pin(async move { this.collect_artifacts_inner().await })
     }
 
-    async fn collect_artifacts_inner(&self) -> Result<SnapshotArtifacts, String> {
+    async fn collect_artifacts_inner(&self) -> Result<SnapshotArtifacts<MetricsSnapshot>, String> {
         let settings = Settings::load();
         // Resolve identity: explicit --identity flag wins; otherwise follow
         // the app's hide_personal_info setting (upstream 0.50.1 #2960).
@@ -138,21 +120,23 @@ impl SnapshotProducer {
             .map(|id| id.cli_name().to_string())
             .collect();
         let enabled: BTreeSet<String> = order.iter().cloned().collect();
-        let input = SnapshotInput {
+        let collection = SnapshotCollection {
             providers,
             costs,
             claude_accounts,
-            identity,
             generated_at: Utc::now(),
             refresh_seconds: self.refresh_seconds,
-            version: Some(self.version.clone()),
             order,
             enabled,
         };
-        let metrics = MetricsSnapshot::from_input(&input);
+        let metrics = MetricsSnapshot::from_collection(&collection);
         Ok(SnapshotArtifacts {
-            dashboard: build_snapshot(&input),
-            metrics: Some(metrics),
+            dashboard: build_snapshot(&SnapshotInput {
+                collection,
+                identity,
+                version: Some(self.version.clone()),
+            }),
+            sidecar: Some(metrics),
         })
     }
 }

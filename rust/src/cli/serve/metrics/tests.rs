@@ -6,12 +6,10 @@ use std::time::Duration;
 use chrono::{TimeZone, Utc};
 
 use super::*;
+use crate::cli::serve::collection::{ProviderFetchEnvelope, RawCostPayload, SnapshotCollection};
 use crate::cli::serve::dashboard;
-use crate::cli::serve::dashboard::coordinator::SnapshotArtifactsBuildFn;
-use crate::cli::serve::dashboard::snapshot::{
-    DashboardIdentity, ProviderFetchEnvelope, RawCostPayload, SnapshotInput, build_snapshot,
-};
-use crate::cli::serve::dashboard::source::SnapshotArtifacts;
+use crate::cli::serve::dashboard::coordinator::{SnapshotArtifacts, SnapshotArtifactsBuildFn};
+use crate::cli::serve::dashboard::snapshot::{DashboardIdentity, SnapshotInput, build_snapshot};
 use crate::core::{NamedRateWindow, ProviderFetchResult, RateWindow, UsageSnapshot};
 use crate::providers::codex::CodexApi;
 
@@ -49,7 +47,7 @@ fn codex_usage_from_json(json: serde_json::Value) -> UsageSnapshot {
 fn input(
     providers: Vec<ProviderFetchEnvelope>,
     costs: HashMap<String, RawCostPayload>,
-) -> SnapshotInput {
+) -> SnapshotCollection {
     let enabled = providers
         .iter()
         .map(|provider| provider.id.clone())
@@ -61,16 +59,14 @@ fn input_with_enabled(
     providers: Vec<ProviderFetchEnvelope>,
     costs: HashMap<String, RawCostPayload>,
     enabled: BTreeSet<String>,
-) -> SnapshotInput {
+) -> SnapshotCollection {
     let order = enabled.iter().cloned().collect();
-    SnapshotInput {
+    SnapshotCollection {
         providers,
         costs,
         claude_accounts: None,
-        identity: DashboardIdentity::Full,
         generated_at: at(0),
         refresh_seconds: 60,
-        version: Some("0.56.8".to_string()),
         order,
         enabled,
     }
@@ -80,14 +76,19 @@ fn metrics_snapshot(
     providers: Vec<ProviderFetchEnvelope>,
     costs: HashMap<String, RawCostPayload>,
 ) -> MetricsSnapshot {
-    MetricsSnapshot::from_input(&input(providers, costs))
+    MetricsSnapshot::from_collection(&input(providers, costs))
 }
 
-fn artifacts(input: SnapshotInput) -> SnapshotArtifacts {
-    let metrics = MetricsSnapshot::from_input(&input);
+fn artifacts(collection: SnapshotCollection) -> SnapshotArtifacts<MetricsSnapshot> {
+    let metrics = MetricsSnapshot::from_collection(&collection);
+    let input = SnapshotInput {
+        collection,
+        identity: DashboardIdentity::Full,
+        version: Some("0.56.8".to_string()),
+    };
     SnapshotArtifacts {
         dashboard: build_snapshot(&input),
-        metrics: Some(metrics),
+        sidecar: Some(metrics),
     }
 }
 
@@ -522,7 +523,7 @@ fn partial_claude_failure_keeps_codex_metrics_usable() {
             .map(str::to_string)
             .collect(),
     );
-    let body = render_at(&MetricsSnapshot::from_input(&input), at(2)).unwrap();
+    let body = render_at(&MetricsSnapshot::from_collection(&input), at(2)).unwrap();
 
     assert!(body.contains("codexbar_provider_up{provider=\"codex\"} 1\n"));
     assert!(body.contains("codexbar_provider_up{provider=\"claude\"} 0\n"));
@@ -556,7 +557,7 @@ async fn scrape_reads_cache_and_single_flights_the_shared_snapshot_builder() {
         HashMap::new(),
     ));
     let builder_count = build_count.clone();
-    let build: SnapshotArtifactsBuildFn = Arc::new(move || {
+    let build: SnapshotArtifactsBuildFn<MetricsSnapshot> = Arc::new(move || {
         let started_tx = started_tx.clone();
         let release_rx = release_rx.clone();
         let build_count = builder_count.clone();

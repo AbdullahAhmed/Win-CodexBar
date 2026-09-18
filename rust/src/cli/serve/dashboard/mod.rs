@@ -19,7 +19,7 @@ use snapshot::DashboardIdentity;
 /// Everything the dashboard routes need, assembled once at serve startup.
 #[derive(Clone)]
 pub struct DashboardState {
-    pub coordinator: SnapshotCoordinator,
+    pub coordinator: SnapshotCoordinator<MetricsSnapshot>,
     /// `None` = follow the app's `hide_personal_info` setting per request
     /// (upstream 0.50.1 #2960).
     pub identity: Option<DashboardIdentity>,
@@ -54,7 +54,7 @@ impl DashboardState {
     /// Return the cached metrics projection and trigger the shared dashboard
     /// refresh when it is missing or expired.
     pub(crate) fn latest_metrics_snapshot(&self) -> Option<std::sync::Arc<MetricsSnapshot>> {
-        self.coordinator.latest_metrics_or_trigger_refresh()
+        self.coordinator.latest_sidecar_or_trigger_refresh()
     }
 
     /// Test wiring: any build closure (stubbed counters, delays, failures).
@@ -76,7 +76,7 @@ impl DashboardState {
 
     #[cfg(test)]
     pub(crate) fn stub_with_artifacts(
-        build: coordinator::SnapshotArtifactsBuildFn,
+        build: coordinator::SnapshotArtifactsBuildFn<MetricsSnapshot>,
         ttl_seconds: u32,
         identity: Option<DashboardIdentity>,
     ) -> Self {

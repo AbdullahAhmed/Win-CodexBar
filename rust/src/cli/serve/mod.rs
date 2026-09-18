@@ -11,6 +11,7 @@
 //! behind the same bearer gate + `Cache-Control: no-store` (+ `WWW-Authenticate`
 //! on its 401s, per pinned upstream).
 
+pub(crate) mod collection;
 pub mod dashboard;
 mod data;
 mod metrics;
