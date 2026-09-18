@@ -39,7 +39,7 @@ Top-level (from `codexbar --help`):
 | `guard` | Gate automation on remaining quota for one provider |
 | `diagnose` | Export safe provider diagnostics as JSON |
 | `sessions` | List or focus local / SSH agent sessions |
-| `serve` | HTTP JSON for usage/cost on loopback (dashboard token optional/required by bind) |
+| `serve` | HTTP JSON/dashboard server with optional Prometheus metrics |
 | `autostart` | Manage Windows boot auto-start |
 | `account` | Token accounts for providers |
 | `config` | validate / dump / providers / enable / disable / set-api-key / path |
@@ -85,7 +85,19 @@ codexbar serve --port 8080
 # Prefer: $env:CODEXBAR_DASHBOARD_TOKEN = '...'
 ```
 
-Typical endpoints: `/health`, `/usage`, `/cost` (and dashboard snapshot routes when enabled). Loopback default keeps local use simple; treat non-loopback as a threat-model choice (token on every request over HTTP).
+Typical endpoints: `/health`, `/usage`, `/cost`, and `/dashboard/v1/snapshot`. Loopback default keeps local use simple; treat non-loopback as a threat-model choice because the token for protected requests crosses the network over HTTP.
+
+Pass `--metrics` to enable the Prometheus text endpoint at `/metrics`; it returns `404` when the flag is absent. The endpoint uses the same Host allowlist, Bearer token, snapshot cache, and single-flight collection as the dashboard snapshot. A scrape never waits for provider I/O: it returns the last successful snapshot while an expired value refreshes in the background, or `codexbar_up 0` until the first collection succeeds.
+
+```powershell
+$env:CODEXBAR_DASHBOARD_TOKEN = 'replace-with-a-long-random-token'
+codexbar serve --metrics --port 8080
+curl.exe -H "Authorization: Bearer $env:CODEXBAR_DASHBOARD_TOKEN" http://127.0.0.1:8080/metrics
+```
+
+The metrics contract exports collection health for every enabled, known provider. The only provider label is its bounded canonical CLI slug, for example `codexbar_provider_up{provider="claude"}`; disabled providers are absent, and an ordinary provider fetch failure does not suppress healthy provider series. Quota semantics are currently exported only for Codex through fixed `session`, `weekly`, `monthly`, and `code_review` metric families. Used and remaining values are ratios from `0` to `1`, with no dynamic window label. Available local Codex cost estimates are also exported.
+
+Unknown, informational, non-finite, and dynamic additional-limit values are omitted instead of being inferred or replaced with sentinels. Account identity, display labels, source names, free-form provider errors, and version strings are not exposed. Consumers should alert on provider health, snapshot staleness, and quota values together.
 
 ### Config
 

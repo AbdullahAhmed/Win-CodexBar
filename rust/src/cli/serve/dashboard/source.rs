@@ -17,10 +17,14 @@ use crate::core::{CostScanOptions, FetchContext, ProviderId, SourceMode, instant
 use crate::cost_scanner::{self, CostScanner};
 use crate::settings::Settings;
 
-use super::snapshot::{
-    AccountFetchEnvelope, ClaudeAccountsInput, DashboardIdentity, ProviderFetchEnvelope,
-    RawCostPayload, SnapshotInput, SnapshotPayload, build_snapshot,
+use crate::cli::serve::collection::{
+    AccountFetchEnvelope, ClaudeAccountsInput, ProviderFetchEnvelope, RawCostPayload,
+    SnapshotCollection,
 };
+use crate::cli::serve::dashboard::coordinator::{BoxSnapshotArtifactsFuture, SnapshotArtifacts};
+use crate::cli::serve::metrics::MetricsSnapshot;
+
+use super::snapshot::{DashboardIdentity, SnapshotInput, SnapshotPayload, build_snapshot};
 
 pub type BoxSnapshotFuture = Pin<Box<dyn Future<Output = Result<SnapshotPayload, String>> + Send>>;
 
@@ -63,10 +67,15 @@ impl SnapshotProducer {
 
     pub fn collect(&self) -> BoxSnapshotFuture {
         let this = self.clone();
-        Box::pin(async move { this.collect_inner().await })
+        Box::pin(async move { Ok(this.collect_artifacts_inner().await?.dashboard) })
     }
 
-    async fn collect_inner(&self) -> Result<SnapshotPayload, String> {
+    pub(crate) fn collect_artifacts(&self) -> BoxSnapshotArtifactsFuture<MetricsSnapshot> {
+        let this = self.clone();
+        Box::pin(async move { this.collect_artifacts_inner().await })
+    }
+
+    async fn collect_artifacts_inner(&self) -> Result<SnapshotArtifacts<MetricsSnapshot>, String> {
         let settings = Settings::load();
         // Resolve identity: explicit --identity flag wins; otherwise follow
         // the app's hide_personal_info setting (upstream 0.50.1 #2960).
@@ -111,18 +120,24 @@ impl SnapshotProducer {
             .map(|id| id.cli_name().to_string())
             .collect();
         let enabled: BTreeSet<String> = order.iter().cloned().collect();
-        let input = SnapshotInput {
+        let collection = SnapshotCollection {
             providers,
             costs,
             claude_accounts,
-            identity,
             generated_at: Utc::now(),
             refresh_seconds: self.refresh_seconds,
-            version: Some(self.version.clone()),
             order,
             enabled,
         };
-        Ok(build_snapshot(&input))
+        let metrics = MetricsSnapshot::from_collection(&collection);
+        Ok(SnapshotArtifacts {
+            dashboard: build_snapshot(&SnapshotInput {
+                collection,
+                identity,
+                version: Some(self.version.clone()),
+            }),
+            sidecar: Some(metrics),
+        })
     }
 }
 

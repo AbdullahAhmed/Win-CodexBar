@@ -23,17 +23,19 @@ mod tests {
 
     fn input(providers: Vec<ProviderFetchEnvelope>, identity: DashboardIdentity) -> SnapshotInput {
         SnapshotInput {
-            providers,
-            costs: HashMap::new(),
-            claude_accounts: None,
+            collection: SnapshotCollection {
+                providers,
+                costs: HashMap::new(),
+                claude_accounts: None,
+                generated_at: DateTime::parse_from_rfc3339("2026-08-08T01:02:03Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+                refresh_seconds: 60,
+                order: vec!["claude".to_string(), "codex".to_string()],
+                enabled: BTreeSet::from(["claude".to_string()]),
+            },
             identity,
-            generated_at: DateTime::parse_from_rfc3339("2026-08-08T01:02:03Z")
-                .unwrap()
-                .with_timezone(&Utc),
-            refresh_seconds: 60,
             version: Some("0.48.0-test".to_string()),
-            order: vec!["claude".to_string(), "codex".to_string()],
-            enabled: BTreeSet::from(["claude".to_string()]),
         }
     }
 
@@ -335,9 +337,9 @@ mod tests {
     #[test]
     fn stale_after_floor_and_scaling() {
         let mut input_fast = input(vec![], DashboardIdentity::Redacted);
-        input_fast.refresh_seconds = 30;
+        input_fast.collection.refresh_seconds = 30;
         assert_eq!(build_snapshot(&input_fast).stale_after_seconds, 180);
-        input_fast.refresh_seconds = 120;
+        input_fast.collection.refresh_seconds = 120;
         assert_eq!(build_snapshot(&input_fast).stale_after_seconds, 360);
     }
 
@@ -355,7 +357,7 @@ mod tests {
             vec![provider_envelope(Ok(fetch_result(5.0, None, None)))],
             DashboardIdentity::Redacted,
         );
-        input.costs = costs;
+        input.collection.costs = costs;
         let row = &serde_json::to_value(build_snapshot(&input)).unwrap()["providers"][0];
         assert_eq!(row["cost"]["todayUSD"], 1.25);
         assert_eq!(row["cost"]["last30DaysUSD"], 40.5);
@@ -374,7 +376,7 @@ mod tests {
             vec![provider_envelope(Ok(fetch_result(3.0, None, None))), second],
             DashboardIdentity::Redacted,
         );
-        input.claude_accounts = Some(ClaudeAccountsInput {
+        input.collection.claude_accounts = Some(ClaudeAccountsInput {
             accounts: Ok(vec![AccountFetchEnvelope {
                 id: "uuid-1".to_string(),
                 label: "Work".to_string(),
@@ -403,7 +405,7 @@ mod tests {
             vec![provider_envelope(Ok(fetch_result(3.0, None, None)))],
             DashboardIdentity::Redacted,
         );
-        input.claude_accounts = Some(ClaudeAccountsInput {
+        input.collection.claude_accounts = Some(ClaudeAccountsInput {
             accounts: Ok(vec![AccountFetchEnvelope {
                 id: "uuid-1".to_string(),
                 label: "Broken".to_string(),
@@ -450,7 +452,7 @@ mod tests {
             vec![provider_envelope(Ok(fetch_result(3.0, None, None)))],
             DashboardIdentity::Redacted,
         );
-        input.claude_accounts = Some(ClaudeAccountsInput {
+        input.collection.claude_accounts = Some(ClaudeAccountsInput {
             accounts: Err("token store unreadable".to_string()),
         });
         let row = &serde_json::to_value(build_snapshot(&input)).unwrap()["providers"][0];
@@ -470,7 +472,7 @@ mod tests {
             vec![provider_envelope(Ok(fetch_result(3.0, None, None)))],
             DashboardIdentity::Redacted,
         );
-        input.claude_accounts = Some(ClaudeAccountsInput {
+        input.collection.claude_accounts = Some(ClaudeAccountsInput {
             accounts: Ok(vec![
                 AccountFetchEnvelope {
                     id: "u1".to_string(),

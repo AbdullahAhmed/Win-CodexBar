@@ -12,13 +12,14 @@ pub mod snapshot;
 pub mod source;
 mod window;
 
+use crate::cli::serve::metrics::MetricsSnapshot;
 use coordinator::SnapshotCoordinator;
 use snapshot::DashboardIdentity;
 
 /// Everything the dashboard routes need, assembled once at serve startup.
 #[derive(Clone)]
 pub struct DashboardState {
-    pub coordinator: SnapshotCoordinator,
+    pub(crate) coordinator: SnapshotCoordinator<MetricsSnapshot>,
     /// `None` = follow the app's `hide_personal_info` setting per request
     /// (upstream 0.50.1 #2960).
     pub identity: Option<DashboardIdentity>,
@@ -39,15 +40,21 @@ impl DashboardState {
     /// Production wiring: live producer behind the TTL coordinator.
     pub fn live(refresh_seconds: u32, identity: Option<DashboardIdentity>) -> Self {
         let producer = source::SnapshotProducer::new(refresh_seconds, identity);
-        let coordinator = SnapshotCoordinator::new(
+        let coordinator = SnapshotCoordinator::new_with_artifacts(
             std::time::Duration::from_secs(refresh_seconds.max(1) as u64),
-            std::sync::Arc::new(move || producer.collect()),
+            std::sync::Arc::new(move || producer.collect_artifacts()),
         );
         Self {
             coordinator,
             identity,
             refresh_seconds,
         }
+    }
+
+    /// Return the cached metrics projection and trigger the shared dashboard
+    /// refresh when it is missing or expired.
+    pub(crate) fn latest_metrics_snapshot(&self) -> Option<std::sync::Arc<MetricsSnapshot>> {
+        self.coordinator.latest_sidecar_or_trigger_refresh()
     }
 
     /// Test wiring: any build closure (stubbed counters, delays, failures).
@@ -57,8 +64,36 @@ impl DashboardState {
         ttl_seconds: u32,
         identity: Option<DashboardIdentity>,
     ) -> Self {
+        let build: coordinator::SnapshotArtifactsBuildFn<MetricsSnapshot> =
+            std::sync::Arc::new(move || {
+                let future = build();
+                Box::pin(async move {
+                    future
+                        .await
+                        .map(|dashboard| coordinator::SnapshotArtifacts {
+                            dashboard,
+                            sidecar: None,
+                        })
+                })
+            });
         Self {
-            coordinator: SnapshotCoordinator::new(
+            coordinator: SnapshotCoordinator::new_with_artifacts(
+                std::time::Duration::from_secs(ttl_seconds as u64),
+                build,
+            ),
+            identity,
+            refresh_seconds: 60,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stub_with_artifacts(
+        build: coordinator::SnapshotArtifactsBuildFn<MetricsSnapshot>,
+        ttl_seconds: u32,
+        identity: Option<DashboardIdentity>,
+    ) -> Self {
+        Self {
+            coordinator: SnapshotCoordinator::new_with_artifacts(
                 std::time::Duration::from_secs(ttl_seconds as u64),
                 build,
             ),
