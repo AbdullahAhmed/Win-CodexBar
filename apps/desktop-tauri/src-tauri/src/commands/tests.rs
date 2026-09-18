@@ -377,7 +377,7 @@ fn fetch_context_grok_cookie_off_keeps_explicit_cli() {
 }
 
 #[test]
-fn fetch_context_grok_empty_manual_preserves_oauth_without_browser_import() {
+fn fetch_context_grok_empty_manual_preserves_auto_without_browser_import() {
     let mut settings = Settings::default();
     settings.set_cookie_source(ProviderId::Grok, "manual");
     settings.set_usage_source(ProviderId::Grok, "auto");
@@ -389,7 +389,7 @@ fn fetch_context_grok_empty_manual_preserves_oauth_without_browser_import() {
         &HashMap::new(),
     );
 
-    assert_eq!(ctx.source_mode, SourceMode::OAuth);
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
     assert!(ctx.manual_cookie_header.is_none());
 }
 

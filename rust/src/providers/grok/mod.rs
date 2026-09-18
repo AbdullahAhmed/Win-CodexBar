@@ -163,6 +163,7 @@ impl GrokProvider {
             ctx.manual_cookie_header
                 .as_deref()
                 .is_some_and(|cookie| !cookie.trim().is_empty()),
+            !ctx.auto_prefer_web,
         ) {
             match step {
                 GrokAutoStep::AmbientOAuth => {
@@ -389,7 +390,11 @@ enum GrokAutoStep {
 /// Auto must try the switched ~/.grok/auth.json before leftover cookies or
 /// token keys. Account rows already fetch per login; Weekly, pace, and
 /// notifications use this provider snapshot.
-fn grok_auto_steps(has_api_key: bool, has_manual_cookie: bool) -> Vec<GrokAutoStep> {
+fn grok_auto_steps(
+    has_api_key: bool,
+    has_manual_cookie: bool,
+    allow_cookie_refresh: bool,
+) -> Vec<GrokAutoStep> {
     let mut steps = vec![GrokAutoStep::AmbientOAuth, GrokAutoStep::AmbientCli];
     if has_api_key {
         steps.push(GrokAutoStep::ApiKey);
@@ -397,7 +402,9 @@ fn grok_auto_steps(has_api_key: bool, has_manual_cookie: bool) -> Vec<GrokAutoSt
     if has_manual_cookie {
         steps.push(GrokAutoStep::ManualCookie);
     }
-    steps.push(GrokAutoStep::CookieRefresh);
+    if allow_cookie_refresh {
+        steps.push(GrokAutoStep::CookieRefresh);
+    }
     steps
 }
 

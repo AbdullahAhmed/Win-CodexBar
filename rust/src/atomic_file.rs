@@ -5,6 +5,11 @@ use std::path::{Path, PathBuf};
 /// replacement semantics. Windows `rename` does not replace an existing
 /// file, so use `MoveFileExW` with replace and write-through flags there.
 pub fn replace_staged(staged: &Path, destination: &Path) -> io::Result<()> {
+    // Callers may use a secure writer that does not expose its file handle.
+    // Sync the staged bytes here so every replacement has the same durability
+    // boundary before the destination is changed.
+    std::fs::File::open(staged)?.sync_all()?;
+
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
@@ -28,7 +33,12 @@ pub fn replace_staged(staged: &Path, destination: &Path) -> io::Result<()> {
     }
     #[cfg(not(windows))]
     {
-        std::fs::rename(staged, destination)
+        std::fs::rename(staged, destination)?;
+        let parent = destination
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        std::fs::File::open(parent)?.sync_all()
     }
 }
 

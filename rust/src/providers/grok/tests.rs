@@ -54,7 +54,7 @@ fn cli_and_oauth_select_distinct_auth_entries() {
 #[test]
 fn auto_tries_switched_login_before_cookies() {
     assert_eq!(
-        grok_auto_steps(true, true),
+        grok_auto_steps(true, true, true),
         vec![
             GrokAutoStep::AmbientOAuth,
             GrokAutoStep::AmbientCli,
@@ -64,12 +64,16 @@ fn auto_tries_switched_login_before_cookies() {
         ]
     );
     assert_eq!(
-        grok_auto_steps(false, false),
+        grok_auto_steps(false, false, true),
         vec![
             GrokAutoStep::AmbientOAuth,
             GrokAutoStep::AmbientCli,
             GrokAutoStep::CookieRefresh,
         ]
+    );
+    assert_eq!(
+        grok_auto_steps(false, false, false),
+        vec![GrokAutoStep::AmbientOAuth, GrokAutoStep::AmbientCli]
     );
 }
 

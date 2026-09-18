@@ -12,33 +12,40 @@ export function useGrokAccounts({ reloadOnFocus = false }: { reloadOnFocus?: boo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(false);
+  const reloadSequence = useRef(0);
 
-  const reportError = useCallback((value: unknown) => {
-    if (mounted.current) setError(String(value));
+  const reportError = useCallback((value: unknown, sequence = reloadSequence.current) => {
+    if (mounted.current && sequence === reloadSequence.current) setError(String(value));
   }, []);
 
   const reload = useCallback(async () => {
-    const next = await grokAccountsList();
-    const snapshots: Record<string, GrokAccountUsage> = {};
-    await Promise.all(
-      next.map(async (account) => {
-        try {
-          snapshots[account.id] = await grokAccountFetch(account.id);
-        } catch {
-          // Keep the account row even if that login's usage fetch fails.
-        }
-      }),
-    );
-    if (mounted.current) {
+    const sequence = ++reloadSequence.current;
+    try {
+      const next = await grokAccountsList();
+      const snapshots: Record<string, GrokAccountUsage> = {};
+      await Promise.all(
+        next.map(async (account) => {
+          try {
+            snapshots[account.id] = await grokAccountFetch(account.id);
+          } catch {
+            // Keep the account row even if that login's usage fetch fails.
+          }
+        }),
+      );
+      if (!mounted.current || sequence !== reloadSequence.current) return false;
       setAccounts(next);
       setUsage(snapshots);
       setError(null);
+      return true;
+    } catch (value) {
+      reportError(value, sequence);
+      return false;
     }
-  }, []);
+  }, [reportError]);
 
   useEffect(() => {
     mounted.current = true;
-    const refresh = () => void reload().catch(reportError);
+    const refresh = () => void reload();
     refresh();
     const unlisten = listen("grok-accounts-updated", refresh);
     if (reloadOnFocus) window.addEventListener("focus", refresh);
@@ -59,7 +66,7 @@ export function useGrokAccounts({ reloadOnFocus = false }: { reloadOnFocus?: boo
       setError(null);
       try {
         await operation();
-        await reload();
+        if (!(await reload())) return false;
         if (mounted.current) onSuccess?.();
         return true;
       } catch (value) {
