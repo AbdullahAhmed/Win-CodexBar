@@ -51,7 +51,10 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
 /// existing destination; `std::fs::rename` does not provide that contract on
 /// every supported Windows filesystem.
 pub fn replace_staged(staged: &Path, destination: &Path) -> io::Result<()> {
-    std::fs::File::open(staged)?.sync_all()?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(staged)?
+        .sync_all()?;
     replace_staged_platform(staged, destination)
 }
 
