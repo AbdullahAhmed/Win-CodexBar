@@ -86,7 +86,7 @@ fn replace_staged_platform(staged: &Path, destination: &Path) -> io::Result<()> 
             ReplaceFileW(
                 PCWSTR(destination.as_ptr()),
                 PCWSTR(staged.as_ptr()),
-                None::<PCWSTR>,
+                PCWSTR::null(),
                 REPLACEFILE_WRITE_THROUGH,
                 None,
                 None,
