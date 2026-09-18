@@ -32,7 +32,7 @@ pub(super) fn scan_codex_detailed_with_cache(
         CodexPendingScanDisposition::PreservePause
     ) {
         return (
-            paused_codex_summary(&cache, start_date, today),
+            paused_codex_summary(&cache, start_date, today, &range),
             stats,
             cache,
         );
@@ -94,7 +94,7 @@ pub(super) fn scan_codex_detailed_with_cache(
     let established_report_before_scan = (!cache.codex_scan_incomplete
         && cache.previous_report.is_none()
         && (cache.scan_since_key.is_some() || !cache.days.is_empty() || !cache.files.is_empty()))
-    .then(|| JsonlScanner::cached_cost_report_from_days(&cache));
+    .then(|| JsonlScanner::cached_cost_report_for_range(&cache, &range));
 
     // Persist the source-bound work range before doing bounded work.
     cache.codex_pending_scan_since_key = Some(scan_range.scan_since_key.clone());
@@ -258,10 +258,10 @@ pub(super) fn scan_codex_detailed_with_cache(
     cache.last_scan_unix_ms = now_ms;
     if cache.codex_scan_incomplete {
         if pending_disposition.keeps_live_rows() {
-            // Preserve the live, verified daily rows while the unresolved
-            // fork remains queued. Its missing parent affects only that
-            // file, so an old global report would hide healthy new days.
-            cache.previous_report = None;
+            // Preserve live rows only when there is no validated report to
+            // protect. v0.60.5 keeps the prior report for unresolved current
+            // work; the current window is not authoritative until the fork
+            // dependency is resolved.
             // The healthy files in this range are now validated. Keep the
             // incomplete flag as the coverage marker while acknowledging
             // the range so unchanged files stay on the cache fast path.
@@ -326,7 +326,16 @@ pub(super) fn scan_codex_detailed_with_cache(
     let preserving_previous_report = cache.codex_scan_incomplete
         && cache.previous_report.is_some()
         && !cancelled_with_missing_cache_rows;
-    summary = if preserving_previous_report {
+    let current_window_report = (cache.codex_scan_incomplete && !is_cancelled(cancel))
+        .then(|| codex_current_window_report(&cache, &range))
+        .flatten();
+    let published_current_window = current_window_report.is_some();
+    let using_cached_report = preserving_previous_report || published_current_window;
+    summary = if let Some(report) = current_window_report {
+        let mut summary = summary_from_cached_report(&report, start_date, today);
+        summary.history_coverage_established = true;
+        summary
+    } else if preserving_previous_report {
         cache
             .previous_report
             .as_ref()
@@ -339,7 +348,7 @@ pub(super) fn scan_codex_detailed_with_cache(
     // OMP / pi-compatible agent sessions (upstream #2269). Dedup by entry id.
     // Skip when tests inject sessions roots — avoid scanning the real home tree.
     // A16 --provider-native-only: skip pi/OMP mirrors when disabled.
-    if !preserving_previous_report
+    if !using_cached_report
         && scanner.sessions_dirs_override.is_none()
         && scanner.options.include_pi_sessions
     {
@@ -358,11 +367,14 @@ pub(super) fn scan_codex_detailed_with_cache(
     // pruning may retain `previous_report`, but that must not make a
     // completed in-memory scan stale or make a cancelled partial scan look
     // complete.
-    summary.history_coverage_established = !is_cancelled(cancel) && !cache.codex_scan_incomplete;
+    summary.history_coverage_established =
+        !is_cancelled(cancel) && (!cache.codex_scan_incomplete || published_current_window);
     // Upstream 0.50.1 #2932: a completed scan with zero results is a
-    // *known* zero. Only set when coverage is established; an incomplete
-    // scan must NOT fabricate a zero.
-    summary.known_zero = summary.history_coverage_established && summary.sessions_count == 0;
+    // *known* zero. An incomplete scan may publish only a non-empty validated
+    // current window; it must not infer zero from historical metadata alone.
+    summary.known_zero = summary.history_coverage_established
+        && summary.sessions_count == 0
+        && (!cache.codex_scan_incomplete || published_current_window);
 
     (summary, stats, cache)
 }

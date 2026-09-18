@@ -4,12 +4,123 @@ pub(super) fn paused_codex_summary(
     cache: &CostUsageCache,
     start_date: NaiveDate,
     today: NaiveDate,
+    range: &CostUsageDayRange,
 ) -> CostSummary {
+    if let Some(report) = codex_current_window_report(cache, range) {
+        let mut summary = summary_from_cached_report(&report, start_date, today);
+        summary.history_coverage_established = true;
+        return summary;
+    }
+
     let report = cache
         .previous_report
         .clone()
         .unwrap_or_else(|| JsonlScanner::cached_cost_report_from_days(cache));
     summary_from_cached_report(&report, start_date, today)
+}
+
+/// Whether incomplete Codex work is confined to history older than the
+/// requested reporting window. This is deliberately conservative: an unknown
+/// queue context, source error, malformed path, or unconsumed file tail keeps
+/// the current window incomplete until a later scan proves it.
+pub(super) fn codex_current_window_is_established(
+    cache: &CostUsageCache,
+    range: &CostUsageDayRange,
+) -> bool {
+    if !cache.codex_scan_incomplete {
+        return true;
+    }
+    if cache.codex_pending_paths.is_empty()
+        || matches!(
+            cache.codex_scan_pause_reason,
+            Some(CodexScanPauseReason::Error(_))
+        )
+    {
+        return false;
+    }
+
+    let Some(pending_since) = cache.codex_pending_scan_since_key.as_deref() else {
+        return false;
+    };
+    let Some(pending_until) = cache.codex_pending_scan_until_key.as_deref() else {
+        return false;
+    };
+    if pending_since > range.scan_since_key.as_str()
+        || pending_until < range.scan_until_key.as_str()
+        || cache.codex_pending_scan_root_paths.is_empty()
+        || cache.codex_pending_scan_timezone.is_none()
+    {
+        return false;
+    }
+
+    cache
+        .codex_pending_paths
+        .iter()
+        .all(|path| !codex_pending_path_affects_current_window(cache, path, range))
+}
+
+/// Current-window publication requires positive decoded evidence. A missing
+/// day cannot be treated as a validated zero while historical discovery is
+/// still pending.
+pub(super) fn codex_current_window_has_evidence(
+    cache: &CostUsageCache,
+    range: &CostUsageDayRange,
+) -> bool {
+    cache
+        .days
+        .keys()
+        .any(|day| CostUsageDayRange::is_in_range(day, &range.since_key, &range.until_key))
+}
+
+pub(super) fn codex_current_window_report(
+    cache: &CostUsageCache,
+    range: &CostUsageDayRange,
+) -> Option<CachedCostReport> {
+    (codex_current_window_is_established(cache, range)
+        && codex_current_window_has_evidence(cache, range))
+    .then(|| JsonlScanner::cached_cost_report_for_range(cache, range))
+}
+
+fn codex_pending_path_affects_current_window(
+    cache: &CostUsageCache,
+    path_key: &str,
+    range: &CostUsageDayRange,
+) -> bool {
+    if cache.files.get(path_key).is_some_and(|usage| {
+        usage
+            .days
+            .keys()
+            .any(|day| CostUsageDayRange::is_in_range(day, &range.since_key, &range.until_key))
+    }) {
+        return true;
+    }
+
+    if let (Some(usage), Some(metadata)) = (cache.files.get(path_key), fs::metadata(path_key).ok())
+    {
+        #[allow(clippy::cast_possible_wrap, reason = "file sizes are clamped to i64")]
+        let observed_size = metadata.len().min(i64::MAX as u64) as i64;
+        if codex_logical_target_has_unconsumed_tail(observed_size, usage) {
+            return true;
+        }
+    }
+
+    let Some(path_day) = codex_path_day(Path::new(path_key)) else {
+        return true;
+    };
+    path_day >= range.scan_since_key
+}
+
+fn codex_path_day(path: &Path) -> Option<String> {
+    let mut components = path.components().rev();
+    components.next()?;
+    let day = components.next()?.as_os_str().to_str()?;
+    let month = components.next()?.as_os_str().to_str()?;
+    let year = components.next()?.as_os_str().to_str()?;
+    if year.len() != 4 || month.len() != 2 || day.len() != 2 {
+        return None;
+    }
+    let day_key = format!("{year}-{month}-{day}");
+    CostUsageDayRange::parse_day_key(&day_key).map(|_| day_key)
 }
 
 /// Return cached Codex files that are provably gone from the portion of the
@@ -73,4 +184,103 @@ pub(super) fn cache_has_codex_path_under(cache: &CostUsageCache, parent: &Path) 
         .keys()
         .chain(cache.codex_pending_paths.iter())
         .any(|path| Path::new(path).starts_with(parent))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn usage(day: &str, input: i64) -> CostUsageFileUsage {
+        CostUsageFileUsage {
+            mtime_unix_ms: 0,
+            size: 100,
+            codex_file_identity: None,
+            days: HashMap::from([(
+                day.to_string(),
+                HashMap::from([("gpt-5.6-sol".to_string(), vec![input, 0, 10])]),
+            )]),
+            parsed_bytes: Some(100),
+            codex_scan_target_size: None,
+            last_model: Some("gpt-5.6-sol".to_string()),
+            last_totals: None,
+            codex_token_timestamps_monotonic: Some(true),
+            codex_last_token_timestamp: None,
+            codex_session_id: None,
+            codex_forked_from_id: None,
+            codex_lineage: CodexSessionLineage::Root,
+            codex_fork_timestamp: None,
+            codex_unresolved_fork_parent: false,
+        }
+    }
+
+    fn historical_pending_cache(old_path: &str, current_path: &str) -> CostUsageCache {
+        CostUsageCache {
+            last_scan_unix_ms: 1,
+            files: HashMap::from([
+                (old_path.to_string(), usage("2026-09-01", 900)),
+                (current_path.to_string(), usage("2026-09-19", 100)),
+            ]),
+            days: HashMap::from([
+                (
+                    "2026-09-01".to_string(),
+                    HashMap::from([("gpt-5.6-sol".to_string(), vec![900, 0, 10])]),
+                ),
+                (
+                    "2026-09-19".to_string(),
+                    HashMap::from([("gpt-5.6-sol".to_string(), vec![100, 0, 10])]),
+                ),
+            ]),
+            codex_pending_paths: vec![old_path.to_string()],
+            codex_scan_incomplete: true,
+            codex_pending_scan_since_key: Some("2026-09-01".to_string()),
+            codex_pending_scan_until_key: Some("2026-09-20".to_string()),
+            codex_pending_scan_root_paths: vec!["C:\\sessions".to_string()],
+            codex_pending_scan_timezone: Some("UTC".to_string()),
+            ..CostUsageCache::default()
+        }
+    }
+
+    fn active_range() -> CostUsageDayRange {
+        CostUsageDayRange {
+            since_key: "2026-09-19".to_string(),
+            until_key: "2026-09-19".to_string(),
+            scan_since_key: "2026-09-18".to_string(),
+            scan_until_key: "2026-09-20".to_string(),
+        }
+    }
+
+    #[test]
+    fn historical_pending_work_keeps_current_window_publishable() {
+        let old_path = r"C:\sessions\2026\09\01\old.jsonl";
+        let current_path = r"C:\sessions\2026\09\19\current.jsonl";
+        let cache = historical_pending_cache(old_path, current_path);
+        let range = active_range();
+
+        assert!(codex_current_window_is_established(&cache, &range));
+        assert!(codex_current_window_has_evidence(&cache, &range));
+        let report = codex_current_window_report(&cache, &range).unwrap();
+        assert_eq!(report.input_tokens, 100);
+        assert_eq!(report.sessions_count, 1);
+    }
+
+    #[test]
+    fn current_pending_work_and_source_errors_block_publication() {
+        let old_path = r"C:\sessions\2026\09\01\old.jsonl";
+        let current_path = r"C:\sessions\2026\09\19\current.jsonl";
+        let range = active_range();
+
+        let mut current_pending = historical_pending_cache(old_path, current_path);
+        current_pending.codex_pending_paths = vec![current_path.to_string()];
+        assert!(!codex_current_window_is_established(
+            &current_pending,
+            &range
+        ));
+
+        let mut source_error = historical_pending_cache(old_path, current_path);
+        source_error.codex_scan_pause_reason = Some(CodexScanPauseReason::Error(
+            "source unavailable".to_string(),
+        ));
+        assert!(!codex_current_window_is_established(&source_error, &range));
+        assert!(codex_current_window_report(&source_error, &range).is_none());
+    }
 }
