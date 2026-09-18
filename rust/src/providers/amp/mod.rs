@@ -11,10 +11,7 @@ use std::path::PathBuf;
 mod cli;
 mod subscription;
 
-use subscription::{
-    AMP_MONTHLY_WINDOW_MINUTES, parse_amp_free_percent_remaining, parse_amp_subscription_usage,
-    usage_snapshot_from_amp_display_text,
-};
+use subscription::usage_snapshot_from_amp_display_text;
 
 use crate::core::{
     FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
@@ -258,6 +255,9 @@ impl Provider for AmpProvider {
 
 #[cfg(test)]
 mod tests {
+    use super::subscription::{
+        AMP_MONTHLY_WINDOW_MINUTES, parse_amp_free_percent_remaining, parse_amp_subscription_usage,
+    };
     use super::*;
     use chrono::{TimeZone, Utc};
 
@@ -424,6 +424,7 @@ period 2026-09-13 to 2026-10-13, resets upon renewal in 27 days";
 
 #[cfg(test)]
 mod current_subscription_tests {
+    use super::subscription::parse_amp_subscription_usage;
     use super::*;
     use chrono::{TimeZone, Utc};
     #[test]
