@@ -1035,6 +1035,7 @@ fn session_meta_pre_read_accepts_snake_and_camel_fork_identity() {
         CodexSessionMetadata {
             session_id: Some("child-snake".to_string()),
             forked_from_id: Some("parent-snake".to_string()),
+            lineage: CodexSessionLineage::Child,
             fork_timestamp: Some("2026-05-31T10:00:00Z".to_string()),
         }
     );
