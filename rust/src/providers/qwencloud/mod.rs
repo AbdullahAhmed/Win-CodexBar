@@ -139,7 +139,7 @@ impl QwenCloudProvider {
             subscription_body.as_deref(),
             quota_config_body.as_deref(),
         )?;
-        Self::snapshot_to_usage(snapshot)
+        self.snapshot_to_usage(snapshot)
     }
 
     fn resolve_cookie_header(ctx: &FetchContext) -> Result<String, ProviderError> {
@@ -317,7 +317,7 @@ impl QwenCloudProvider {
         parse_legacy_token_plan(&expanded)
     }
 
-    fn snapshot_to_usage(snapshot: QwenCloudSnapshot) -> Result<UsageSnapshot, ProviderError> {
+    fn snapshot_to_usage(&self, snapshot: QwenCloudSnapshot) -> Result<UsageSnapshot, ProviderError> {
         let five_hour = snapshot.five_hour_used_percent.map(|percent| {
             RateWindow::with_details(
                 percent,
@@ -357,7 +357,7 @@ impl QwenCloudProvider {
         // promote it to primary in that case instead of failing the whole fetch.
         let (primary, secondary, primary_label) = match (five_hour.or(legacy), weekly) {
             (Some(primary), secondary) => (primary, secondary, None),
-            (None, Some(weekly)) => (weekly, None, Some("Weekly")),
+            (None, Some(weekly)) => (weekly, None, Some(self.metadata.weekly_label)),
             (None, None) => {
                 return Err(ProviderError::Parse(
                     "Qwen Cloud usage windows missing".into(),
@@ -1259,7 +1259,7 @@ mod tests {
             Some(Utc.timestamp_opt(1_700_086_400, 0).single().unwrap())
         );
 
-        let usage = QwenCloudProvider::snapshot_to_usage(snapshot).unwrap();
+        let usage = QwenCloudProvider::new().snapshot_to_usage(snapshot).unwrap();
         assert_eq!(usage.primary.used_percent, 3.0);
         assert_eq!(usage.primary.window_minutes, Some(FIVE_HOUR_MINUTES));
         assert_eq!(usage.primary_label, None);
@@ -1291,7 +1291,7 @@ mod tests {
             },
             "successResponse": true
         });
-        let usage = QwenCloudProvider::snapshot_to_usage(
+        let usage = QwenCloudProvider::new().snapshot_to_usage(
             QwenCloudProvider::parse(payload.to_string().as_bytes(), None, None).unwrap(),
         )
         .unwrap();
@@ -1331,7 +1331,7 @@ mod tests {
             QwenCloudProvider::parse(payload.to_string().as_bytes(), None, None).unwrap();
         assert_eq!(snapshot.total_quota, Some(1000.0));
         assert_eq!(snapshot.remaining_quota, Some(875.0));
-        let usage = QwenCloudProvider::snapshot_to_usage(snapshot).unwrap();
+        let usage = QwenCloudProvider::new().snapshot_to_usage(snapshot).unwrap();
         assert_eq!(usage.primary.used_percent, 12.5);
         assert_eq!(usage.primary.window_minutes, Some(LEGACY_MINUTES));
     }
@@ -1391,7 +1391,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(snapshot.plan_name.as_deref(), Some("Pro"));
-        let usage = QwenCloudProvider::snapshot_to_usage(snapshot).unwrap();
+        let usage = QwenCloudProvider::new().snapshot_to_usage(snapshot).unwrap();
         assert_eq!(usage.login_method.as_deref(), Some("Pro"));
     }
 
@@ -1439,7 +1439,7 @@ mod tests {
             },
             "successResponse": true
         });
-        let usage = QwenCloudProvider::snapshot_to_usage(
+        let usage = QwenCloudProvider::new().snapshot_to_usage(
             QwenCloudProvider::parse(payload.to_string().as_bytes(), None, None).unwrap(),
         )
         .unwrap();
