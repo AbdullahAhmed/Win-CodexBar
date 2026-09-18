@@ -439,7 +439,7 @@ impl CostScanner {
         });
         let is_fork = codex_lineage.uses_parent_baseline();
         let fork_baseline = is_fork
-            .then(|| codex_forked_from_id.as_deref())
+            .then_some(codex_forked_from_id.as_deref())
             .flatten()
             .and_then(|parent_id| {
                 codex_parent_baseline(cache, parent_id, codex_fork_timestamp.as_deref())
