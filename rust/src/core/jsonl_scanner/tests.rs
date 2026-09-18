@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::CodexSessionLineage;
 use chrono::TimeZone;
 use std::io::Write;
 
@@ -1034,6 +1035,7 @@ fn session_meta_pre_read_accepts_snake_and_camel_fork_identity() {
         CodexSessionMetadata {
             session_id: Some("child-snake".to_string()),
             forked_from_id: Some("parent-snake".to_string()),
+            lineage: CodexSessionLineage::Child,
             fork_timestamp: Some("2026-05-31T10:00:00Z".to_string()),
         }
     );
@@ -1153,6 +1155,7 @@ fn catch_up_snapshot_preserves_established_codex_cost_and_tokens() {
             codex_last_token_timestamp: None,
             codex_session_id: None,
             codex_forked_from_id: None,
+            codex_lineage: CodexSessionLineage::Root,
             codex_fork_timestamp: None,
             codex_unresolved_fork_parent: false,
         },
@@ -1172,6 +1175,7 @@ fn catch_up_snapshot_preserves_established_codex_cost_and_tokens() {
             codex_last_token_timestamp: None,
             codex_session_id: None,
             codex_forked_from_id: None,
+            codex_lineage: CodexSessionLineage::Root,
             codex_fork_timestamp: None,
             codex_unresolved_fork_parent: false,
         },
@@ -1235,6 +1239,43 @@ fn codex_cache_round_trip_preserves_64_bit_counts_and_rebuilds_legacy_schema() {
     assert!(invalidated.files.is_empty());
     let status = JsonlScanner::load_cache_status(ProviderId::Codex, Some(cache_root));
     assert!(!status.has_days);
+    assert!(status.previous_report.is_none());
+}
+
+#[test]
+fn codex_v1_cache_rebuild_clears_stalled_subagent_refresh_state() {
+    let root = tempfile::tempdir().unwrap();
+    let mut cache = CostUsageCache {
+        codex_scan_incomplete: true,
+        codex_pending_paths: vec!["stalled-subagent.jsonl".to_string()],
+        codex_scan_pause_reason: Some(CodexScanPauseReason::NoProgress),
+        previous_report: Some(CachedCostReport {
+            total_cost_usd: 1.0,
+            input_tokens: 11,
+            cached_tokens: 2,
+            output_tokens: 3,
+            reasoning_tokens: None,
+            sessions_count: 1,
+            updated_at: Some("2026-09-16T10:00:00Z".to_string()),
+            partial: false,
+        }),
+        last_scan_unix_ms: i64::MAX,
+        ..CostUsageCache::default()
+    };
+    JsonlScanner::save_cache(ProviderId::Codex, &mut cache, Some(root.path()));
+    let cache_path = JsonlScanner::cache_path(ProviderId::Codex, Some(root.path()));
+    let mut old: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
+    old["codex_cache_schema_version"] = serde_json::json!(1);
+    std::fs::write(&cache_path, serde_json::to_vec(&old).unwrap()).unwrap();
+
+    let rebuilt = JsonlScanner::load_cache(ProviderId::Codex, Some(root.path()));
+    assert!(!rebuilt.codex_scan_incomplete);
+    assert!(rebuilt.codex_pending_paths.is_empty());
+    assert!(rebuilt.codex_scan_pause_reason.is_none());
+    assert!(rebuilt.previous_report.is_none());
+    assert_eq!(rebuilt.last_scan_unix_ms, 0);
+    let status = JsonlScanner::load_cache_status(ProviderId::Codex, Some(root.path()));
     assert!(status.previous_report.is_none());
 }
 
@@ -1310,6 +1351,7 @@ fn save_cache_persists_small_codex_artifact() {
                 codex_last_token_timestamp: None,
                 codex_session_id: None,
                 codex_forked_from_id: None,
+                codex_lineage: CodexSessionLineage::Root,
                 codex_fork_timestamp: None,
                 codex_unresolved_fork_parent: false,
             },
@@ -1378,6 +1420,7 @@ fn save_cache_refuses_non_bounded_provider_oversize() {
             codex_last_token_timestamp: None,
             codex_session_id: None,
             codex_forked_from_id: None,
+            codex_lineage: CodexSessionLineage::Root,
             codex_fork_timestamp: None,
             codex_unresolved_fork_parent: false,
         },
@@ -1415,6 +1458,7 @@ fn save_cache_refusal_removes_preexisting_destination_artifact() {
             codex_last_token_timestamp: None,
             codex_session_id: None,
             codex_forked_from_id: None,
+            codex_lineage: CodexSessionLineage::Root,
             codex_fork_timestamp: None,
             codex_unresolved_fork_parent: false,
         },
@@ -1533,3 +1577,7 @@ fn save_cache_one_over_limit_is_refused_and_removes_destination() {
         "one-over-limit encoded artifact must be refused"
     );
 }
+
+#[cfg(test)]
+#[path = "tests/codex_metadata.rs"]
+mod codex_metadata;

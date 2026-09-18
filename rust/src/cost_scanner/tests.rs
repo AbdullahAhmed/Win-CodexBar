@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::CodexSessionLineage;
 use std::io::Write;
 
 #[test]
@@ -571,6 +572,7 @@ fn cached_usage_with_packed(day: &str, model: &str, packed: Vec<i64>) -> CostUsa
         codex_last_token_timestamp: None,
         codex_session_id: None,
         codex_forked_from_id: None,
+        codex_lineage: CodexSessionLineage::Root,
         codex_fork_timestamp: None,
         codex_unresolved_fork_parent: false,
     }
@@ -1436,6 +1438,7 @@ fn cancelled_fresh_cache_hit_is_not_authoritative() {
                 codex_last_token_timestamp: None,
                 codex_session_id: None,
                 codex_forked_from_id: None,
+                codex_lineage: CodexSessionLineage::Root,
                 codex_fork_timestamp: None,
                 codex_unresolved_fork_parent: false,
             },
@@ -2820,3 +2823,7 @@ fn incomplete_or_buffered_empty_codex_fragment_is_not_marked_complete() {
     assert!(buffered_cache.codex_scan_incomplete);
     assert!(buffered_cache.codex_pending_paths.contains(&buffered_key));
 }
+
+#[cfg(test)]
+#[path = "tests/paginated.rs"]
+mod paginated;

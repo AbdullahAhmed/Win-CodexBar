@@ -319,6 +319,7 @@ pub fn is_unpriced_codex_routing_model(model: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::CodexSessionLineage;
 
     fn entry(days: &[&str], parsed: Option<i64>, size: i64) -> CostUsageFileUsage {
         let mut day_map: HashMap<String, HashMap<String, Vec<i64>>> = HashMap::new();
@@ -341,6 +342,7 @@ mod tests {
             codex_last_token_timestamp: None,
             codex_session_id: None,
             codex_forked_from_id: None,
+            codex_lineage: CodexSessionLineage::Root,
             codex_fork_timestamp: None,
             codex_unresolved_fork_parent: false,
         }
