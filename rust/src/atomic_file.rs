@@ -60,7 +60,12 @@ pub fn replace_staged(staged: &Path, destination: &Path) -> io::Result<()> {
 
 #[cfg(not(windows))]
 fn replace_staged_platform(staged: &Path, destination: &Path) -> io::Result<()> {
-    std::fs::rename(staged, destination)
+    std::fs::rename(staged, destination)?;
+    let parent = destination
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::File::open(parent)?.sync_all()
 }
 
 #[cfg(windows)]
