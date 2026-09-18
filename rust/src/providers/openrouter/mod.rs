@@ -286,7 +286,7 @@ impl OpenRouterProvider {
             Ok(credits) => {
                 let mut usage = Self::build_credits_usage(&credits.data);
                 if let Some(key_data) = key_data {
-                    Self::enrich_usage_with_key_data(&mut usage, key_data);
+                    Self::apply_key_lanes(&mut usage, &key_data, "Spending cap, not balance");
                 }
                 Ok(usage)
             }
@@ -294,10 +294,9 @@ impl OpenRouterProvider {
                 let Some(key_data) = key_data else {
                     return Err(error);
                 };
-                let Some(mut usage) = Self::build_key_fallback_usage(&key_data) else {
+                let Some(usage) = Self::build_key_fallback_usage(&key_data) else {
                     return Err(error);
                 };
-                Self::add_spend_windows(&mut usage, &key_data);
                 Ok(usage)
             }
         }
@@ -307,12 +306,11 @@ impl OpenRouterProvider {
     /// are unavailable. The key limit is the only authoritative percentage in
     /// this situation; the account balance remains deliberately unknown.
     fn build_key_fallback_usage(key_data: &KeyData) -> Option<UsageSnapshot> {
-        let key_window = Self::key_quota_window(key_data, "Account balance unavailable")?;
-        Some(
-            UsageSnapshot::new(RateWindow::informational("Account balance unavailable"))
-                .with_secondary(key_window)
-                .with_secondary_label("API key limit"),
-        )
+        let mut usage =
+            UsageSnapshot::new(RateWindow::informational("Account balance unavailable"));
+        Self::apply_key_lanes(&mut usage, key_data, "Account balance unavailable");
+        usage.secondary.as_ref()?;
+        Some(usage)
     }
 
     async fn fetch_key_data(api_key: &str) -> Result<Option<KeyData>, ProviderError> {
@@ -359,9 +357,9 @@ impl OpenRouterProvider {
             .await
     }
 
-    fn enrich_usage_with_key_data(usage: &mut UsageSnapshot, key_data: KeyData) {
-        Self::add_key_quota(usage, &key_data);
-        Self::add_spend_windows(usage, &key_data);
+    fn apply_key_lanes(usage: &mut UsageSnapshot, key_data: &KeyData, quota_suffix: &str) {
+        Self::add_key_quota_with_suffix(usage, key_data, quota_suffix);
+        Self::add_spend_windows(usage, key_data);
     }
 
     fn add_spend_windows(usage: &mut UsageSnapshot, key_data: &KeyData) {
@@ -417,7 +415,11 @@ impl OpenRouterProvider {
     /// declared reset window, then cumulative usage; with no usable source the
     /// meter stays hidden.
     fn add_key_quota(usage: &mut UsageSnapshot, key_data: &KeyData) {
-        let Some(key_window) = Self::key_quota_window(key_data, "Spending cap, not balance") else {
+        Self::add_key_quota_with_suffix(usage, key_data, "Spending cap, not balance");
+    }
+
+    fn add_key_quota_with_suffix(usage: &mut UsageSnapshot, key_data: &KeyData, suffix: &str) {
+        let Some(key_window) = Self::key_quota_window(key_data, suffix) else {
             return;
         };
         *usage = usage
