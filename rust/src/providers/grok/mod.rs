@@ -334,16 +334,15 @@ impl Provider for GrokProvider {
             SourceMode::OAuth => {
                 // Prefer the switched ~/.grok/auth.json over a leftover token
                 // account so Weekly/notifications follow Grok account Switch.
-                match Self::load_credentials(GrokAuthKind::OAuth) {
-                    Ok(credentials) => match self
+                if let Ok(credentials) = Self::load_credentials(GrokAuthKind::OAuth) {
+                    match self
                         .fetch_with_auth(&credentials, GrokAuthKind::OAuth)
                         .await
                     {
                         Ok(result) => return Ok(result),
                         Err(ProviderError::AuthRequired) => {}
                         Err(error) => return Err(error),
-                    },
-                    Err(_) => {}
+                    }
                 }
                 let credentials = if let Some(token) = ctx.api_key.as_deref() {
                     GrokCredentials::from_bearer(token)
