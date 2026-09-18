@@ -476,6 +476,7 @@ impl CostScanner {
         if let Some(entry) = &cached
             && cached_codex_file_is_fresh(cache, entry, cache_covers_range, mtime_ms, size)
             && (entry.codex_file_identity.is_none() || identity_matches_cached(entry))
+            && !cached_identity_changed
         {
             let (session_cost, has_tokens) =
                 add_codex_days_map_to_summary(summary, &entry.days, range);

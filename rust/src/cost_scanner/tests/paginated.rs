@@ -226,6 +226,33 @@ fn paginated_v2_subagent_recovers_unchanged_previously_unresolved_cache() {
 }
 
 #[test]
+fn paginated_v2_subagent_repairs_stale_complete_cache_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let base = Utc::now() - Duration::hours(1);
+    let child = write_codex_paginated_subagent_fixture(&sessions, "child.jsonl", "child-id", base);
+    let scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+    let (_, _, mut cache) = scanner.scan_codex_detailed_with_cache(None);
+    let child_key = child.to_string_lossy().to_string();
+    let usage = cache.files.get_mut(&child_key).unwrap();
+    usage.codex_forked_from_id = Some("parent-id".to_string());
+    usage.codex_lineage = CodexSessionLineage::Root;
+    usage.codex_unresolved_fork_parent = false;
+    JsonlScanner::save_cache(ProviderId::Codex, &mut cache, Some(&cache_root));
+
+    let (_, stats, recovered) = scanner.scan_codex_detailed_with_cache(None);
+    let usage = &recovered.files[&child_key];
+    assert!(stats.codex_history_read_paths.contains(&child_key));
+    assert_eq!(usage.codex_forked_from_id, None);
+    assert_eq!(usage.codex_lineage, CodexSessionLineage::Independent);
+    assert!(!usage.codex_unresolved_fork_parent);
+}
+
+#[test]
 fn paginated_v2_subagent_background_refresh_adds_new_local_day_without_repair() {
     let root = tempfile::tempdir().unwrap();
     let sessions = root.path().join("sessions");
