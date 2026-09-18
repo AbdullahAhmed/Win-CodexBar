@@ -266,7 +266,14 @@ fn derives_claude_dedup_key_from_message_and_request_ids() {
     assert_eq!(
         claude_usage_dedup_key(Some("msg_1"), Some("req_1"), None),
         Some(ClaudeUsageDedupKey::Request {
-            message_id: "msg_1".to_string(),
+            message_id: Some("msg_1".to_string()),
+            request_id: "req_1".to_string(),
+        })
+    );
+    assert_eq!(
+        claude_usage_dedup_key(None, Some(" req_1 "), None),
+        Some(ClaudeUsageDedupKey::Request {
+            message_id: None,
             request_id: "req_1".to_string(),
         })
     );
@@ -280,7 +287,10 @@ fn derives_claude_dedup_key_from_message_and_request_ids() {
     assert_eq!(claude_usage_dedup_key(Some("msg_1"), None, None), None);
     assert_eq!(
         claude_usage_dedup_key(None, Some("req_1"), Some("session_1")),
-        None
+        Some(ClaudeUsageDedupKey::Request {
+            message_id: None,
+            request_id: "req_1".to_string(),
+        })
     );
     assert_eq!(
         claude_usage_dedup_key(Some("msg_1"), Some(" "), Some("session_1")),
@@ -299,7 +309,7 @@ fn derives_claude_dedup_key_from_message_and_request_ids() {
 #[test]
 fn session_id_falls_back_from_blank_direct_id_to_metadata() {
     let event: ClaudeEvent = serde_json::from_str(
-        r#"{"type":"assistant","sessionId":"  ","metadata":{"session_id":"metadata-session"},"message":{"id":"msg_1","model":"claude-sonnet-4-6","usage":{"input_tokens":10}}}"#,
+        r#"{"type":"assistant","sessionId":"  ","metadata":{"session_id":" metadata-session "},"message":{"id":"msg_1","model":"claude-sonnet-4-6","usage":{"input_tokens":10}}}"#,
     )
     .unwrap();
 
@@ -309,7 +319,7 @@ fn session_id_falls_back_from_blank_direct_id_to_metadata() {
 #[test]
 fn session_id_falls_back_from_blank_direct_and_metadata_ids_to_nested_metadata() {
     let event: ClaudeEvent = serde_json::from_str(
-        r#"{"type":"assistant","sessionId":" ","metadata":{"sessionId":"\t","metadata":{"session_id":"nested-session"}},"message":{"id":"msg_1","model":"claude-sonnet-4-6","usage":{"input_tokens":10}}}"#,
+        r#"{"type":"assistant","sessionId":" ","metadata":{"sessionId":"\t","metadata":{"session_id":" nested-session "}},"message":{"id":"msg_1","model":"claude-sonnet-4-6","usage":{"input_tokens":10}}}"#,
     )
     .unwrap();
 

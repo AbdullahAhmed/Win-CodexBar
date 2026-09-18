@@ -7,7 +7,7 @@ use super::ClaudeUsageRecord;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) enum ClaudeUsageDedupKey {
     Request {
-        message_id: String,
+        message_id: Option<String>,
         request_id: String,
     },
     Session {
@@ -23,7 +23,7 @@ where
     let mut metadata = None;
     for (key, value) in entries {
         if key == "sessionId" || key == "session_id" {
-            if let Some(session_id) = value.as_str().filter(|id| !id.trim().is_empty()) {
+            if let Some(session_id) = value.as_str().map(str::trim).filter(|id| !id.is_empty()) {
                 return Some(session_id);
             }
         } else if key == "metadata" {
@@ -45,19 +45,28 @@ pub(super) fn claude_usage_dedup_key(
     request_id: Option<&str>,
     session_id: Option<&str>,
 ) -> Option<ClaudeUsageDedupKey> {
-    let message_id = message_id.filter(|message_id| !message_id.trim().is_empty())?;
-    let request_id = request_id.filter(|request_id| !request_id.trim().is_empty());
+    let message_id = message_id
+        .map(str::trim)
+        .filter(|message_id| !message_id.is_empty())
+        .map(str::to_string);
+    let request_id = request_id
+        .map(str::trim)
+        .filter(|request_id| !request_id.is_empty())
+        .map(str::to_string);
     if let Some(request_id) = request_id {
         return Some(ClaudeUsageDedupKey::Request {
-            message_id: message_id.to_string(),
+            message_id,
             request_id: request_id.to_string(),
         });
     }
 
-    let session_id = session_id.filter(|session_id| !session_id.trim().is_empty())?;
+    let session_id = session_id
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())
+        .map(str::to_string)?;
     Some(ClaudeUsageDedupKey::Session {
-        session_id: session_id.to_string(),
-        message_id: message_id.to_string(),
+        session_id,
+        message_id: message_id?,
     })
 }
 
