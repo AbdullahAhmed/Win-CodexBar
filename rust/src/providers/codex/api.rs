@@ -409,9 +409,10 @@ impl CodexApi {
     /// OFF (the default), external OAuth credential files without refresh
     /// provenance fail closed instead of being used silently. An external
     /// OAuth source is an auth.json `tokens` object with a `refresh_token`
-    /// (CLI-owned OAuth, not an API key). When the access token is a JWT, its
-    /// native expiry is the validity authority; opaque tokens are sent to the
-    /// read-only usage request and the server decides whether they remain valid.
+    /// (CLI-owned OAuth, not an API key). Win-CodexBar never refreshes or
+    /// writes this source: the gate only decides whether the read-only usage
+    /// request may use it. When the access token is a JWT, its native expiry
+    /// is the validity authority; opaque tokens are sent to the server.
     fn enforce_external_oauth_gate(credentials: &CodexCredentials) -> Result<(), ProviderError> {
         Self::enforce_external_oauth_gate_at(
             credentials,
@@ -988,12 +989,13 @@ struct CodexCredentials {
     access_token: String,
     account_id: Option<String>,
     /// True when the source is an external OAuth token set (has a
-    /// `refresh_token`), as opposed to an `OPENAI_API_KEY`. Used by the
-    /// `codex_external_oauth_sources_allowed` gate (upstream 0.50.1 #2944).
+    /// `refresh_token`), as opposed to an `OPENAI_API_KEY`. The Codex CLI owns
+    /// refresh and persistence for this source; this app only reads it. The
+    /// `codex_external_oauth_sources_allowed` setting gates that read
+    /// (upstream 0.50.1 #2944).
     is_external_oauth: bool,
     /// Native access-token JWT expiry. When available, this is authoritative
-    /// for validity and refresh scheduling; the CLI still owns the refresh
-    /// lifecycle.
+    /// for validity; the Codex CLI still owns the refresh lifecycle.
     access_token_expires_at: Option<DateTime<Utc>>,
     /// `last_refresh` timestamp from auth.json, when present. Its presence
     /// supplies provenance when the external-source opt-in setting is OFF;
@@ -1151,8 +1153,8 @@ fn timestamp_to_datetime(timestamp: Option<i64>) -> Option<DateTime<Utc>> {
     timestamp.and_then(|ts| Utc.timestamp_opt(ts, 0).single())
 }
 
-/// Parse an ISO-8601 / RFC-3339 timestamp from the `last_refresh` field of
-/// auth.json. Accepts the same formats the Codex CLI writes.
+/// Parse the native `exp` claim from an access-token JWT. Opaque or malformed
+/// tokens return `None` and are handled by the read-only usage request.
 fn parse_access_token_expiry(token: &str) -> Option<DateTime<Utc>> {
     let payload = token.split('.').nth(1)?;
     let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -2033,7 +2035,7 @@ mod tests {
     }
 
     #[test]
-    fn external_oauth_gate_passes_fresh_tokens() {
+    fn external_oauth_gate_allows_refresh_provenance() {
         let fresh = Utc::now() - chrono::Duration::hours(1);
         let creds = CodexCredentials {
             access_token: "access".to_string(),
@@ -2106,7 +2108,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_or_opaque_jwt_falls_back_to_last_refresh() {
+    fn opaque_token_uses_refresh_provenance_when_no_jwt_expiry_exists() {
         let fresh = Utc::now().to_rfc3339();
         let json = format!(
             r#"{{"tokens":{{"access_token":"opaque-token","refresh_token":"refresh"}},"last_refresh":"{fresh}"}}"#
