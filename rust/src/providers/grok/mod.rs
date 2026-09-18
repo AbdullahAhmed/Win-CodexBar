@@ -156,14 +156,16 @@ impl GrokProvider {
     }
 
     async fn fetch_auto(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
+        let allow_browser_cookie_fallback = !ctx.auto_prefer_web;
         for step in grok_auto_steps(
             ctx.api_key
                 .as_deref()
                 .is_some_and(|token| !token.trim().is_empty()),
             ctx.manual_cookie_header
                 .as_deref()
-                .is_some_and(|cookie| !cookie.trim().is_empty()),
-            !ctx.auto_prefer_web,
+                .is_some_and(|cookie| !cookie.trim().is_empty())
+                && allow_browser_cookie_fallback,
+            allow_browser_cookie_fallback,
         ) {
             match step {
                 GrokAutoStep::AmbientOAuth => {
@@ -334,23 +336,30 @@ impl Provider for GrokProvider {
             SourceMode::OAuth => {
                 // Prefer the switched ~/.grok/auth.json over a leftover token
                 // account so Weekly/notifications follow Grok account Switch.
-                if let Ok(credentials) = Self::load_credentials(GrokAuthKind::OAuth) {
-                    match self
-                        .fetch_with_auth(&credentials, GrokAuthKind::OAuth)
-                        .await
-                    {
-                        Ok(result) => return Ok(result),
-                        Err(ProviderError::AuthRequired) => {}
-                        Err(error) => return Err(error),
+                let credentials = match Self::load_credentials(GrokAuthKind::OAuth) {
+                    Ok(credentials) => credentials,
+                    Err(error) => {
+                        let Some(token) = ctx.api_key.as_deref() else {
+                            return Err(error);
+                        };
+                        GrokCredentials::from_bearer(token)
                     }
-                }
-                let credentials = if let Some(token) = ctx.api_key.as_deref() {
-                    GrokCredentials::from_bearer(token)
-                } else {
-                    Self::load_credentials(GrokAuthKind::OAuth)?
                 };
-                self.fetch_with_auth(&credentials, GrokAuthKind::OAuth)
+                match self
+                    .fetch_with_auth(&credentials, GrokAuthKind::OAuth)
                     .await
+                {
+                    Ok(result) => Ok(result),
+                    Err(ProviderError::AuthRequired) => {
+                        if let Some(token) = ctx.api_key.as_deref() {
+                            let fallback = GrokCredentials::from_bearer(token);
+                            self.fetch_with_auth(&fallback, GrokAuthKind::OAuth).await
+                        } else {
+                            Err(ProviderError::AuthRequired)
+                        }
+                    }
+                    Err(error) => Err(error),
+                }
             }
         }
     }
@@ -392,16 +401,16 @@ enum GrokAutoStep {
 fn grok_auto_steps(
     has_api_key: bool,
     has_manual_cookie: bool,
-    allow_cookie_refresh: bool,
+    allow_browser_cookie_fallback: bool,
 ) -> Vec<GrokAutoStep> {
     let mut steps = vec![GrokAutoStep::AmbientOAuth, GrokAutoStep::AmbientCli];
     if has_api_key {
         steps.push(GrokAutoStep::ApiKey);
     }
-    if has_manual_cookie {
+    if has_manual_cookie && allow_browser_cookie_fallback {
         steps.push(GrokAutoStep::ManualCookie);
     }
-    if allow_cookie_refresh {
+    if allow_browser_cookie_fallback {
         steps.push(GrokAutoStep::CookieRefresh);
     }
     steps

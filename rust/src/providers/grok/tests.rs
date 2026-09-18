@@ -75,6 +75,14 @@ fn auto_tries_switched_login_before_cookies() {
         grok_auto_steps(false, false, false),
         vec![GrokAutoStep::AmbientOAuth, GrokAutoStep::AmbientCli]
     );
+    assert_eq!(
+        grok_auto_steps(true, true, false),
+        vec![
+            GrokAutoStep::AmbientOAuth,
+            GrokAutoStep::AmbientCli,
+            GrokAutoStep::ApiKey,
+        ]
+    );
 }
 
 #[test]
