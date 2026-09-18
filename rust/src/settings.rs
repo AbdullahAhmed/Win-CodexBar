@@ -338,11 +338,11 @@ pub struct Settings {
     #[serde(default = "default_alibaba_token_plan_region")]
     pub alibaba_token_plan_region: String,
 
-    /// Opt-in: allow Codex usage reads from external (non-CLI-owned) OAuth
-    /// credential sources. Default OFF — when disabled, stale external OAuth
-    /// credential files fail closed instead of being used silently (upstream
-    /// 0.50.1 #2944). The CLI-owned `auth.json` is always read read-only; this
-    /// gate only controls whether stale external OAuth tokens are trusted.
+    /// Opt-in: allow read-only Codex usage reads from the CLI-owned OAuth
+    /// credential source. Win-CodexBar never refreshes or writes `auth.json`.
+    /// Default OFF — when disabled, the source must contain refresh
+    /// provenance; JWT expiry is checked when available (upstream 0.50.1
+    /// #2944).
     #[serde(default)]
     pub codex_external_oauth_sources_allowed: bool,
 
