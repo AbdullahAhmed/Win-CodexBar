@@ -31,6 +31,8 @@ use crate::cli::serve::collection::SnapshotCollection;
 pub use crate::cli::serve::collection::{
     AccountFetchEnvelope, ClaudeAccountsInput, ProviderFetchEnvelope, RawCostPayload,
 };
+#[cfg(test)]
+use crate::core::ProviderFetchResult;
 use crate::core::{RateWindow, UsagePace, UsageSnapshot};
 
 /// How much account identity a snapshot exposes. Upstream 0.48.0 exposes two

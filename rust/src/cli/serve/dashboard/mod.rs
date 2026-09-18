@@ -19,7 +19,7 @@ use snapshot::DashboardIdentity;
 /// Everything the dashboard routes need, assembled once at serve startup.
 #[derive(Clone)]
 pub struct DashboardState {
-    pub coordinator: SnapshotCoordinator<MetricsSnapshot>,
+    pub(crate) coordinator: SnapshotCoordinator<MetricsSnapshot>,
     /// `None` = follow the app's `hide_personal_info` setting per request
     /// (upstream 0.50.1 #2960).
     pub identity: Option<DashboardIdentity>,
@@ -64,8 +64,20 @@ impl DashboardState {
         ttl_seconds: u32,
         identity: Option<DashboardIdentity>,
     ) -> Self {
+        let build: coordinator::SnapshotArtifactsBuildFn<MetricsSnapshot> =
+            std::sync::Arc::new(move || {
+                let future = build();
+                Box::pin(async move {
+                    future
+                        .await
+                        .map(|dashboard| coordinator::SnapshotArtifacts {
+                            dashboard,
+                            sidecar: None,
+                        })
+                })
+            });
         Self {
-            coordinator: SnapshotCoordinator::new(
+            coordinator: SnapshotCoordinator::new_with_artifacts(
                 std::time::Duration::from_secs(ttl_seconds as u64),
                 build,
             ),
