@@ -32,12 +32,17 @@ use crate::core::{
 use crate::providers::opencodego::local as opencodego_local;
 use crate::settings::Settings;
 mod claude_pricing;
+mod claude_usage;
 mod codex;
 mod read_receipt;
 mod stats;
 use claude_pricing::ClaudeScanPricingResolver;
 #[cfg(test)]
 use claude_pricing::{ClaudePricing, FALLBACK_CLAUDE_MODEL};
+use claude_usage::{
+    ClaudeUsageDedupKey, claude_usage_dedup_key, session_id_from_entries,
+    should_count_claude_record,
+};
 pub use read_receipt::CodexScanReadReceipt;
 pub use stats::CostScanStats;
 
@@ -198,6 +203,8 @@ struct ClaudeEvent {
     timestamp: Option<String>,
     #[serde(rename = "requestId", alias = "request_id")]
     request_id: Option<String>,
+    #[serde(rename = "sessionId", alias = "session_id")]
+    session_id: Option<String>,
     message: Option<ClaudeMessage>,
     #[serde(flatten)]
     extra: HashMap<String, Value>,
@@ -209,6 +216,19 @@ impl ClaudeEvent {
         DateTime::parse_from_rfc3339(timestamp)
             .ok()
             .map(|ts| ts.with_timezone(&Utc))
+    }
+
+    fn session_id(&self) -> Option<&str> {
+        self.session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|session_id| !session_id.is_empty())
+            .or_else(|| session_id_from_entries(self.extra.iter()))
+            .or_else(|| {
+                self.message
+                    .as_ref()
+                    .and_then(|message| session_id_from_entries(message.extra.iter()))
+            })
     }
 
     fn is_vertex_ai_usage_entry(&self) -> bool {
@@ -385,7 +405,7 @@ struct ClaudeUsageRecord {
     model: String,
     pricing_known: bool,
     timestamp: Option<DateTime<Utc>>,
-    dedup_key: Option<String>,
+    dedup_key: Option<ClaudeUsageDedupKey>,
     input: u64,
     output: u64,
     cache_create: u64,
@@ -574,7 +594,7 @@ impl CostScanner {
 fn for_each_claude_usage_record<F>(
     path: &Path,
     cutoff: &DateTime<Utc>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<ClaudeUsageDedupKey>,
     cancel: Option<&AtomicBool>,
     on_record: F,
 ) -> usize
@@ -588,7 +608,7 @@ where
 fn for_each_claude_usage_record_with_pricing<F>(
     path: &Path,
     cutoff: &DateTime<Utc>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<ClaudeUsageDedupKey>,
     cancel: Option<&AtomicBool>,
     pricing: &mut ClaudeScanPricingResolver,
     mut on_record: F,
@@ -690,42 +710,17 @@ fn claude_usage_record_from_event_with_pricing(
         model: model.to_string(),
         pricing_known,
         timestamp: event.parsed_timestamp(),
-        dedup_key: claude_usage_dedup_key(message.id.as_deref(), event.request_id.as_deref()),
+        dedup_key: claude_usage_dedup_key(
+            message.id.as_deref(),
+            event.request_id.as_deref(),
+            event.session_id(),
+        ),
         input,
         output,
         cache_create,
         cache_read,
         cost,
     })
-}
-
-fn claude_usage_dedup_key(message_id: Option<&str>, request_id: Option<&str>) -> Option<String> {
-    match (message_id, request_id) {
-        (Some(message_id), Some(request_id)) => Some(format!("{message_id}:{request_id}")),
-        (Some(message_id), None) => Some(format!("message:{message_id}")),
-        (None, Some(request_id)) => Some(format!("request:{request_id}")),
-        (None, None) => None,
-    }
-}
-
-fn should_count_claude_record(
-    record: &ClaudeUsageRecord,
-    cutoff: &DateTime<Utc>,
-    seen: &mut HashSet<String>,
-) -> bool {
-    if let Some(timestamp) = record.timestamp
-        && timestamp < *cutoff
-    {
-        return false;
-    }
-
-    if let Some(key) = &record.dedup_key
-        && !seen.insert(key.clone())
-    {
-        return false;
-    }
-
-    true
 }
 
 fn add_claude_record_to_summary(summary: &mut CostSummary, record: &ClaudeUsageRecord) {
