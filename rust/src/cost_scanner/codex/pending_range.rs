@@ -7,6 +7,79 @@ pub(super) struct CodexPendingScanContext {
     pub(super) timezone: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CodexPendingScanDisposition {
+    Proceed,
+    PreservePause,
+    Complete,
+    Cancelled,
+    SourceUnavailable,
+    UnresolvedForks,
+    NoProgress,
+    Pending,
+}
+
+impl CodexPendingScanDisposition {
+    pub(super) fn before_scan(cache: &CostUsageCache, is_app_driven: bool) -> Self {
+        if is_app_driven || !cache.codex_scan_incomplete {
+            return Self::Proceed;
+        }
+        if cache.codex_scan_pause_reason.is_none() {
+            return Self::Proceed;
+        }
+        if matches!(
+            cache.codex_scan_pause_reason,
+            Some(CodexScanPauseReason::NoProgress)
+        ) && codex_only_unresolved_forks_pending(cache)
+        {
+            Self::Proceed
+        } else {
+            Self::PreservePause
+        }
+    }
+
+    pub(super) fn after_scan(
+        cache: &CostUsageCache,
+        discovery_complete: bool,
+        cancelled: bool,
+        has_pruned_paths: bool,
+        bytes_read: i64,
+    ) -> Self {
+        if !cache.codex_scan_incomplete {
+            Self::Complete
+        } else if cancelled {
+            Self::Cancelled
+        } else if !discovery_complete {
+            Self::SourceUnavailable
+        } else if codex_only_unresolved_forks_pending(cache) {
+            Self::UnresolvedForks
+        } else if has_pruned_paths || (bytes_read == 0 && !cache.codex_pending_paths.is_empty()) {
+            Self::NoProgress
+        } else {
+            Self::Pending
+        }
+    }
+
+    pub(super) fn pause_reason(self) -> Option<CodexScanPauseReason> {
+        match self {
+            Self::SourceUnavailable => Some(CodexScanPauseReason::Error(
+                "Codex session source unavailable".to_string(),
+            )),
+            Self::NoProgress => Some(CodexScanPauseReason::NoProgress),
+            Self::Proceed
+            | Self::PreservePause
+            | Self::Complete
+            | Self::Cancelled
+            | Self::UnresolvedForks
+            | Self::Pending => None,
+        }
+    }
+
+    pub(super) fn keeps_live_rows(self) -> bool {
+        matches!(self, Self::UnresolvedForks)
+    }
+}
+
 impl CodexPendingScanContext {
     pub(super) fn new(
         cache: &CostUsageCache,
@@ -53,30 +126,6 @@ impl CodexPendingScanContext {
         }
     }
 
-    pub(super) fn should_preserve_pause(
-        &self,
-        cache: &CostUsageCache,
-        is_app_driven: bool,
-    ) -> bool {
-        if is_app_driven || !cache.codex_scan_incomplete {
-            return false;
-        }
-
-        // A legacy fork whose parent is outside the requested history window
-        // is intentionally unresolved, but it must not freeze unrelated
-        // healthy sessions. Keep retrying that one queued path on scheduled
-        // refreshes. Other source errors and no-progress states remain
-        // foreground-only until an explicit refresh can safely retry them.
-        if matches!(
-            cache.codex_scan_pause_reason,
-            Some(CodexScanPauseReason::NoProgress)
-        ) && codex_only_unresolved_forks_pending(cache)
-        {
-            return false;
-        }
-
-        cache.codex_scan_pause_reason.is_some()
-    }
 }
 
 pub(super) fn codex_only_unresolved_forks_pending(cache: &CostUsageCache) -> bool {

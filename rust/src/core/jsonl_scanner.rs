@@ -278,6 +278,10 @@ pub struct CostUsageFileUsage {
     /// Native Codex parent session identity for forked rollouts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_forked_from_id: Option<String>,
+    /// Native Codex session lineage. This distinguishes a root session from a
+    /// paginated subagent whose ancestry is independent for billing purposes.
+    #[serde(default, skip_serializing_if = "CodexSessionLineage::is_root")]
+    pub codex_lineage: CodexSessionLineage,
     /// Native Codex fork timestamp used for safe parent-baseline validation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_fork_timestamp: Option<String>,
@@ -286,12 +290,33 @@ pub struct CostUsageFileUsage {
     pub codex_unresolved_fork_parent: bool,
 }
 
+/// Billing-relevant Codex session lineage.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexSessionLineage {
+    #[default]
+    Root,
+    Independent,
+    Child,
+}
+
+impl CodexSessionLineage {
+    fn is_root(&self) -> bool {
+        matches!(self, Self::Root)
+    }
+
+    pub(crate) fn uses_parent_baseline(self) -> bool {
+        matches!(self, Self::Child)
+    }
+}
+
 /// Lightweight identity metadata read from the first authoritative Codex
 /// `session_meta` row.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct CodexSessionMetadata {
     pub session_id: Option<String>,
     pub forked_from_id: Option<String>,
+    pub lineage: CodexSessionLineage,
     pub fork_timestamp: Option<String>,
 }
 

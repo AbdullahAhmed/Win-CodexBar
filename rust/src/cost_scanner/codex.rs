@@ -7,7 +7,7 @@ mod reconciliation;
 use cache_days::rebuild_cache_days;
 use logical_target::*;
 use pending_range::{
-    CodexPendingScanContext, codex_cache_has_validated_state, codex_only_unresolved_forks_pending,
+    CodexPendingScanContext, CodexPendingScanDisposition, codex_cache_has_validated_state,
 };
 use reconciliation::*;
 
@@ -40,13 +40,14 @@ fn summary_from_cached_report(
 }
 
 fn codex_fork_parent_is_safe(cache: &CostUsageCache, usage: &CostUsageFileUsage) -> bool {
-    usage.codex_forked_from_id.as_deref().is_none()
-        || codex_parent_baseline(
-            cache,
-            usage.codex_forked_from_id.as_deref().unwrap_or_default(),
-            usage.codex_fork_timestamp.as_deref(),
-        )
-        .is_some()
+    let uses_parent_baseline = usage.codex_lineage.uses_parent_baseline()
+        || (matches!(usage.codex_lineage, CodexSessionLineage::Root)
+            && usage.codex_forked_from_id.is_some());
+    !uses_parent_baseline
+        || usage.codex_forked_from_id.as_deref().is_some_and(|parent_id| {
+            codex_parent_baseline(cache, parent_id, usage.codex_fork_timestamp.as_deref())
+                .is_some()
+        })
 }
 
 /// Return a parent cumulative baseline only when exactly one cached session
@@ -179,7 +180,10 @@ impl CostScanner {
         // A no-progress or source-error catch-up is terminal for background
         // synchronization. Keep the resumable queue and last validated report
         // intact until the user explicitly requests an app-driven refresh.
-        if pending_scan.should_preserve_pause(&cache, self.options.is_app_driven()) {
+        if matches!(
+            CodexPendingScanDisposition::before_scan(&cache, self.options.is_app_driven()),
+            CodexPendingScanDisposition::PreservePause
+        ) {
             return (
                 paused_codex_summary(&cache, start_date, today),
                 stats,
@@ -399,14 +403,17 @@ impl CostScanner {
         cache.codex_pending_paths = pending_next;
         cache.codex_scan_incomplete =
             !discovery_complete || is_cancelled(cancel) || !cache.codex_pending_paths.is_empty();
-        let unresolved_only_pending = cache.codex_scan_incomplete
-            && discovery_complete
-            && !is_cancelled(cancel)
-            && codex_only_unresolved_forks_pending(&cache);
+        let pending_disposition = CodexPendingScanDisposition::after_scan(
+            &cache,
+            discovery_complete,
+            is_cancelled(cancel),
+            !pruned_paths_pending.is_empty(),
+            bytes_read_this_refresh,
+        );
         rebuild_cache_days(&mut cache);
         cache.last_scan_unix_ms = now_ms;
         if cache.codex_scan_incomplete {
-            if unresolved_only_pending {
+            if pending_disposition.keeps_live_rows() {
                 // Preserve the live, verified daily rows while the unresolved
                 // fork remains queued. Its missing parent affects only that
                 // file, so an old global report would hide healthy new days.
@@ -424,14 +431,8 @@ impl CostScanner {
                     Some(CodexScanPauseReason::Error(
                         "Codex session source unavailable".to_string(),
                     ))
-                } else if unresolved_only_pending {
-                    None
-                } else if !pruned_paths_pending.is_empty()
-                    || (bytes_read_this_refresh == 0 && !cache.codex_pending_paths.is_empty())
-                {
-                    Some(CodexScanPauseReason::NoProgress)
                 } else {
-                    None
+                    pending_disposition.pause_reason()
                 };
             }
         } else {
@@ -769,6 +770,16 @@ impl CostScanner {
                 .then(|| cached.as_ref()?.codex_fork_timestamp.clone())
                 .flatten()
         });
+        let codex_lineage = if session_metadata.session_id.is_some() {
+            session_metadata.lineage
+        } else if cached_identity_matches {
+            cached
+                .as_ref()
+                .map(|entry| entry.codex_lineage)
+                .unwrap_or_default()
+        } else {
+            CodexSessionLineage::Root
+        };
         let cached_identity_changed = cached.as_ref().is_some_and(|entry| {
             session_metadata
                 .session_id
@@ -783,9 +794,10 @@ impl CostScanner {
                 || (session_metadata.session_id.is_some()
                     && session_metadata.forked_from_id.is_none()
                     && entry.codex_forked_from_id.is_some())
+                || (session_metadata.session_id.is_some() && session_metadata.lineage != entry.codex_lineage)
         });
-        let is_fork = codex_forked_from_id.is_some();
-        let fork_baseline = codex_forked_from_id.as_deref().and_then(|parent_id| {
+        let is_fork = codex_lineage.uses_parent_baseline();
+        let fork_baseline = is_fork.then(|| codex_forked_from_id.as_deref()).flatten().and_then(|parent_id| {
             codex_parent_baseline(cache, parent_id, codex_fork_timestamp.as_deref())
         });
 
@@ -805,6 +817,7 @@ impl CostScanner {
                     codex_last_token_timestamp: None,
                     codex_session_id,
                     codex_forked_from_id,
+                    codex_lineage,
                     codex_fork_timestamp,
                     codex_unresolved_fork_parent: true,
                 },
@@ -913,6 +926,7 @@ impl CostScanner {
                             .or_else(|| entry.codex_last_token_timestamp.clone()),
                         codex_session_id: codex_session_id.clone(),
                         codex_forked_from_id: codex_forked_from_id.clone(),
+                        codex_lineage,
                         codex_fork_timestamp: codex_fork_timestamp.clone(),
                         codex_unresolved_fork_parent: false,
                     },
@@ -969,6 +983,7 @@ impl CostScanner {
                     codex_last_token_timestamp: None,
                     codex_session_id,
                     codex_forked_from_id,
+                    codex_lineage,
                     codex_fork_timestamp,
                     codex_unresolved_fork_parent: true,
                 },
