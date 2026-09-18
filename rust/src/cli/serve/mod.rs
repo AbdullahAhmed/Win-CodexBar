@@ -539,7 +539,10 @@ async fn route_request(request: &ServeRequest, config: &ServeConfig) -> String {
                 return unauthorized_dashboard_response();
             }
             match &config.dashboard {
-                Some(state) => metrics::response(state),
+                Some(state) => {
+                    let snapshot = state.latest_metrics_snapshot();
+                    metrics::metrics_response(snapshot.as_deref())
+                }
                 None => json_response(
                     500,
                     serde_json::json!({ "error": "dashboard not configured" }),

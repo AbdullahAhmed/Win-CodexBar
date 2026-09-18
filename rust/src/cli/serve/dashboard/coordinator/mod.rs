@@ -79,7 +79,7 @@ impl SnapshotCoordinator {
             .map(|cached| cached.payload)
     }
 
-    pub(crate) fn latest_metrics_or_trigger_refresh(&self) -> Option<Arc<MetricsSnapshot>> {
+    pub(super) fn latest_metrics_or_trigger_refresh(&self) -> Option<Arc<MetricsSnapshot>> {
         self.latest_cached_or_trigger_refresh()
             .and_then(|cached| cached.metrics)
     }

@@ -6,6 +6,7 @@ use std::time::Duration;
 use chrono::{TimeZone, Utc};
 
 use super::*;
+use crate::cli::serve::dashboard;
 use crate::cli::serve::dashboard::coordinator::SnapshotArtifactsBuildFn;
 use crate::cli::serve::dashboard::snapshot::{
     DashboardIdentity, ProviderFetchEnvelope, RawCostPayload, SnapshotInput, build_snapshot,
@@ -580,7 +581,8 @@ async fn scrape_reads_cache_and_single_flights_the_shared_snapshot_builder() {
         Some(DashboardIdentity::Redacted),
     );
 
-    let first = response(&state);
+    let first_snapshot = state.latest_metrics_snapshot();
+    let first = metrics_response(first_snapshot.as_deref());
     assert!(first.starts_with("HTTP/1.1 200 OK\r\n"));
     assert!(first.contains("codexbar_up 0\n"));
     tokio::time::timeout(Duration::from_secs(5), started_rx)
@@ -588,7 +590,8 @@ async fn scrape_reads_cache_and_single_flights_the_shared_snapshot_builder() {
         .expect("background collection did not start")
         .expect("background collection start sender dropped");
 
-    let second = response(&state);
+    let second_snapshot = state.latest_metrics_snapshot();
+    let second = metrics_response(second_snapshot.as_deref());
     assert!(second.contains("codexbar_up 0\n"));
     assert_eq!(build_count.load(Ordering::SeqCst), 1);
     release_tx
@@ -596,7 +599,8 @@ async fn scrape_reads_cache_and_single_flights_the_shared_snapshot_builder() {
         .expect("background collection must still be waiting");
     state.coordinator.get().await.unwrap();
 
-    let ready = response(&state);
+    let ready_snapshot = state.latest_metrics_snapshot();
+    let ready = metrics_response(ready_snapshot.as_deref());
     assert!(ready.contains("codexbar_up 1\n"));
     assert!(ready.contains("codexbar_quota_session_used_ratio"));
     assert_eq!(build_count.load(Ordering::SeqCst), 1);

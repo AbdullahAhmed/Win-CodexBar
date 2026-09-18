@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 
-use super::dashboard::snapshot::SnapshotInput;
+use crate::cli::serve::dashboard::snapshot::SnapshotInput;
 use crate::core::{ProviderId, RateWindow, RateWindowCadence};
 
 #[derive(Debug, Clone)]

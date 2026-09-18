@@ -12,6 +12,7 @@ pub mod snapshot;
 pub mod source;
 mod window;
 
+use crate::cli::serve::metrics::MetricsSnapshot;
 use coordinator::SnapshotCoordinator;
 use snapshot::DashboardIdentity;
 
@@ -48,6 +49,12 @@ impl DashboardState {
             identity,
             refresh_seconds,
         }
+    }
+
+    /// Return the cached metrics projection and trigger the shared dashboard
+    /// refresh when it is missing or expired.
+    pub(crate) fn latest_metrics_snapshot(&self) -> Option<std::sync::Arc<MetricsSnapshot>> {
+        self.coordinator.latest_metrics_or_trigger_refresh()
     }
 
     /// Test wiring: any build closure (stubbed counters, delays, failures).

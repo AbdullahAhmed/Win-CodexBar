@@ -2,17 +2,9 @@
 
 use chrono::{DateTime, Utc};
 
-use super::dashboard;
 use super::encoding::MetricsWriter;
 use super::snapshot::{MetricsSnapshot, QuotaMetric};
 use super::{CONTENT_TYPE, MetricsRenderError};
-
-/// Scrapes never wait for provider I/O. An expired snapshot is refreshed in the
-/// background while the last successful metrics sidecar remains available.
-pub(super) fn response(state: &dashboard::DashboardState) -> String {
-    let snapshot = state.coordinator.latest_metrics_or_trigger_refresh();
-    metrics_response(snapshot.as_deref())
-}
 
 pub(in crate::cli::serve::metrics) fn metrics_response(
     snapshot: Option<&MetricsSnapshot>,
