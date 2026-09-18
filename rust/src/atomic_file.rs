@@ -8,7 +8,10 @@ pub fn replace_staged(staged: &Path, destination: &Path) -> io::Result<()> {
     // Callers may use a secure writer that does not expose its file handle.
     // Sync the staged bytes here so every replacement has the same durability
     // boundary before the destination is changed.
-    std::fs::File::open(staged)?.sync_all()?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(staged)?
+        .sync_all()?;
 
     #[cfg(windows)]
     {
