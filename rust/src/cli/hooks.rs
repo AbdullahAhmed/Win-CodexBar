@@ -382,6 +382,7 @@ fn hook_refresh_failure_status(error: &ProviderError) -> String {
         | ProviderError::OAuth(_)
         | ProviderError::OAuthExpired(_)
         | ProviderError::OAuthRevoked(_) => "auth_required".into(),
+        ProviderError::OAuthTransient(_) => "rate_limited".into(),
         ProviderError::Timeout => "timeout".into(),
         ProviderError::Network(err) => {
             if err.is_timeout() {

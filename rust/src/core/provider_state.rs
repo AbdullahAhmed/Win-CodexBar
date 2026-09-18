@@ -63,6 +63,7 @@ impl ProviderError {
             ProviderError::OAuthRevoked(_) => ProviderStateKind::NeedsAuthentication,
             ProviderError::OAuthExpired(_) => ProviderStateKind::ExpiredSession,
             ProviderError::OAuth(_) => ProviderStateKind::NeedsAuthentication,
+            ProviderError::OAuthTransient(_) => ProviderStateKind::Unknown,
             ProviderError::AuthRequired | ProviderError::NoCookies => {
                 ProviderStateKind::NeedsAuthentication
             }

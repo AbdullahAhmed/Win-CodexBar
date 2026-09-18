@@ -173,23 +173,48 @@ impl AccountManager {
         self.import(current)
     }
 
-    /// Keep an already-saved account's OAuth blob aligned with the live CLI
-    /// login after a token refresh. Does not create a new saved account.
-    pub fn sync_saved_oauth_from_current(&self) -> io::Result<()> {
+    pub(super) fn current_account_id(&self) -> io::Result<Option<String>> {
         let Some(current) = read_login(&self.config_dir, &self.config_file)? else {
-            return Ok(());
+            return Ok(None);
         };
-        current.validate()?;
-        let id = current.id()?;
+        current.id().map(Some)
+    }
+
+    /// Update the already-saved account identified before a token refresh.
+    /// The refreshed OAuth fields are merged into the saved blob so account
+    /// metadata remains intact, and an unknown identity is ignored rather
+    /// than creating a new saved account.
+    pub(super) fn update_saved_oauth(
+        &self,
+        account_id: &str,
+        refreshed_oauth: &Value,
+    ) -> io::Result<()> {
+        required_string(refreshed_oauth, "accessToken")?;
+        required_string(refreshed_oauth, "refreshToken")?;
         let mut store = self.load()?;
         let Some(saved) = store
             .accounts
             .iter_mut()
-            .find(|account| account.id().ok().as_deref() == Some(id.as_str()))
+            .find(|account| account.id().ok().as_deref() == Some(account_id))
         else {
             return Ok(());
         };
-        saved.oauth = current.oauth;
+        let saved_oauth = saved
+            .oauth
+            .as_object_mut()
+            .ok_or_else(|| io::Error::other("Saved Claude OAuth data is invalid."))?;
+        for key in [
+            "accessToken",
+            "refreshToken",
+            "expiresAt",
+            "scopes",
+            "rateLimitTier",
+        ] {
+            if let Some(value) = refreshed_oauth.get(key).filter(|value| !value.is_null()) {
+                saved_oauth.insert(key.to_string(), value.clone());
+            }
+        }
+        saved.validate()?;
         self.save(&store)
     }
 
@@ -503,18 +528,25 @@ mod tests {
     fn token_refresh_updates_saved_account_without_creating_one() {
         let dir = tempfile::tempdir().unwrap();
         let manager = manager(dir.path());
-        activate(&manager, &login("a", "one", "rotated"));
-        manager.sync_saved_oauth_from_current().unwrap();
-        assert!(manager.load().unwrap().accounts.is_empty());
-
         manager.import(login("a", "one", "stale")).unwrap();
-        activate(&manager, &login("a", "one", "rotated"));
-        manager.sync_saved_oauth_from_current().unwrap();
+        let refreshed = login("a", "one", "rotated");
+        manager
+            .update_saved_oauth("a:one", &refreshed.oauth)
+            .unwrap();
         assert_eq!(manager.load().unwrap().accounts.len(), 1);
         assert_eq!(
             manager.load().unwrap().accounts[0].oauth["accessToken"],
             "rotated"
         );
+        assert_eq!(
+            manager.load().unwrap().accounts[0].oauth["subscriptionType"],
+            "max"
+        );
+
+        manager
+            .update_saved_oauth("missing:account", &refreshed.oauth)
+            .unwrap();
+        assert_eq!(manager.load().unwrap().accounts.len(), 1);
     }
 
     #[test]

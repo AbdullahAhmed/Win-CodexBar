@@ -375,6 +375,7 @@ fn error_category(err: &ProviderError) -> &'static str {
         | ProviderError::OAuthExpired(_)
         | ProviderError::OAuthRevoked(_)
         | ProviderError::NoCookies => "auth",
+        ProviderError::OAuthTransient(_) => "api",
         ProviderError::Network(_) | ProviderError::Timeout => "network",
         ProviderError::NotInstalled(_) | ProviderError::UnsupportedSource(_) => "config",
         ProviderError::Parse(_) => "parse",

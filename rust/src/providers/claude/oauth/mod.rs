@@ -290,9 +290,9 @@ impl ClaudeOAuthFetcher {
         // honest message instead of a generic "expired" error (or another
         // doomed API call).
         if credentials.is_expired()
-            && let Some(message) = refresh_outcome
+            && let Some(error) = refresh_outcome
         {
-            return Err(ProviderError::OAuth(message));
+            return Err(error);
         }
         self.fetch_with_credentials(credentials).await
     }
@@ -343,7 +343,7 @@ impl ClaudeOAuthFetcher {
         &self,
         mut credentials: ClaudeOAuthCredentials,
         source: credentials_store::CredentialSource,
-    ) -> (ClaudeOAuthCredentials, Option<String>) {
+    ) -> (ClaudeOAuthCredentials, Option<ProviderError>) {
         // Prefer an in-memory refreshed token if it is fresher than what we just
         // read from disk (covers a prior persist that failed to write). Scoped
         // to this credential's own source so a refresh cached for one source
@@ -380,37 +380,54 @@ impl ClaudeOAuthFetcher {
         // transient failure should not hammer the endpoint every poll.
         let now = Instant::now();
         if let Some(kind) = active_refresh_backoff(&source, now, Some(refresh_token.as_str())) {
-            let message = match kind {
-                refresh::RefreshFailureKind::Terminal => terminal_refresh_message(),
-                refresh::RefreshFailureKind::Transient => refresh_cooldown_message(),
+            let error = match kind {
+                refresh::RefreshFailureKind::Terminal => {
+                    ProviderError::OAuth(terminal_refresh_message())
+                }
+                refresh::RefreshFailureKind::Transient => {
+                    ProviderError::OAuthTransient(refresh_cooldown_message())
+                }
             };
-            return (credentials, Some(message));
+            return (credentials, Some(error));
         }
+
+        let account_manager = super::accounts::AccountManager::new().ok();
+        let saved_account_id = account_manager
+            .as_ref()
+            .and_then(|manager| manager.current_account_id().ok().flatten());
 
         match refresh::refresh_access_token(&self.client, &refresh_token, &credentials).await {
             Ok(refreshed) => {
                 clear_refresh_backoff(&source);
                 credentials_store::store_refreshed(&source, &refreshed);
-                if let Err(err) = credentials_store::persist_refreshed_credentials(&refreshed) {
+                let persisted = credentials_store::persist_refreshed_credentials(&refreshed);
+                if let Err(err) = persisted {
                     tracing::debug!("Claude OAuth token refreshed but could not persist: {err}");
-                } else if let Err(err) = super::accounts::AccountManager::new()
-                    .and_then(|manager| manager.sync_saved_oauth_from_current())
+                } else if let (Some(manager), Some(account_id)) =
+                    (account_manager.as_ref(), saved_account_id.as_deref())
                 {
-                    tracing::debug!(
-                        "Claude OAuth token refreshed but saved account store was not updated: {err}"
-                    );
+                    let refreshed_oauth = Self::refreshed_oauth_value(&refreshed);
+                    if let Err(err) = manager.update_saved_oauth(account_id, &refreshed_oauth) {
+                        tracing::debug!(
+                            "Claude OAuth token refreshed but saved account store was not updated: {err}"
+                        );
+                    }
                 }
                 tracing::debug!("Refreshed expired Claude OAuth token");
                 (refreshed, None)
             }
             Err(failure) => {
                 tracing::debug!("Claude OAuth token refresh failed: {}", failure.message);
-                let message = match failure.kind {
-                    refresh::RefreshFailureKind::Terminal => Some(terminal_refresh_message()),
-                    refresh::RefreshFailureKind::Transient => Some(refresh_cooldown_message()),
+                let error = match failure.kind {
+                    refresh::RefreshFailureKind::Terminal => {
+                        ProviderError::OAuth(terminal_refresh_message())
+                    }
+                    refresh::RefreshFailureKind::Transient => {
+                        ProviderError::OAuthTransient(refresh_cooldown_message())
+                    }
                 };
                 record_refresh_backoff(&source, failure.kind, now, Some(refresh_token.as_str()));
-                (credentials, message)
+                (credentials, Some(error))
             }
         }
     }
@@ -510,10 +527,11 @@ impl ClaudeOAuthFetcher {
     }
 
     fn rate_limit_backoff_remaining() -> Option<Duration> {
-        let guard = Self::rate_limit_gate().lock().ok()?;
+        let mut guard = Self::rate_limit_gate().lock().ok()?;
         let gate = guard.as_ref()?;
         let now = Instant::now();
         if gate.until <= now {
+            *guard = None;
             None
         } else {
             Some(gate.until.saturating_duration_since(now))
@@ -532,19 +550,30 @@ impl ClaudeOAuthFetcher {
     }
 
     fn record_rate_limit(retry_after: Duration) -> Duration {
-        let consecutive = Self::rate_limit_gate()
-            .lock()
-            .ok()
-            .and_then(|guard| guard.as_ref().map(|gate| gate.consecutive))
+        let Ok(mut guard) = Self::rate_limit_gate().lock() else {
+            return Self::bounded_rate_limit_backoff(retry_after, 1);
+        };
+        Self::record_rate_limit_locked(&mut guard, Instant::now(), retry_after)
+    }
+
+    fn record_rate_limit_locked(
+        gate: &mut Option<RateLimitGate>,
+        now: Instant,
+        retry_after: Duration,
+    ) -> Duration {
+        if gate.as_ref().is_some_and(|gate| gate.until <= now) {
+            *gate = None;
+        }
+        let consecutive = gate
+            .as_ref()
+            .map(|gate| gate.consecutive)
             .unwrap_or(0)
             .saturating_add(1);
         let backoff = Self::bounded_rate_limit_backoff(retry_after, consecutive);
-        if let Ok(mut guard) = Self::rate_limit_gate().lock() {
-            *guard = Some(RateLimitGate {
-                until: Instant::now() + backoff,
-                consecutive,
-            });
-        }
+        *gate = Some(RateLimitGate {
+            until: now + backoff,
+            consecutive,
+        });
         backoff
     }
 
@@ -577,10 +606,20 @@ impl ClaudeOAuthFetcher {
     }
 
     fn rate_limited_error(duration: Duration) -> ProviderError {
-        ProviderError::OAuth(format!(
+        ProviderError::OAuthTransient(format!(
             "Claude OAuth usage endpoint is rate limited. Retrying in about {}s; credentials were preserved.",
             duration.as_secs().max(1)
         ))
+    }
+
+    fn refreshed_oauth_value(credentials: &ClaudeOAuthCredentials) -> serde_json::Value {
+        serde_json::json!({
+            "accessToken": credentials.access_token,
+            "refreshToken": credentials.refresh_token,
+            "expiresAt": credentials.expires_at.map(|expires_at| expires_at.timestamp_millis()),
+            "scopes": credentials.scopes,
+            "rateLimitTier": credentials.rate_limit_tier,
+        })
     }
 
     /// Build UsageSnapshot from OAuth response
