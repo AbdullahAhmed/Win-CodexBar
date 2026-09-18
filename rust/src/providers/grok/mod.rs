@@ -3,6 +3,7 @@
 //! Uses the grok.com billing gRPC-web endpoint via either browser cookies or
 //! `~/.grok/auth.json` produced by `grok login`.
 
+pub mod accounts;
 mod billing;
 pub mod local_sessions;
 
@@ -20,6 +21,7 @@ use crate::core::{
     RateWindow, SourceMode, UsageSnapshot,
 };
 
+use self::accounts::{GrokAuthKind, ParsedGrokAuthFile};
 use self::billing::GrokBillingSnapshot;
 
 const BILLING_ENDPOINT: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
@@ -68,6 +70,23 @@ impl GrokProvider {
             ProviderError::NotInstalled("Grok auth.json not found. Run `grok login`.".to_string())
         })?;
         GrokCredentials::parse_for_kind(&text, kind)
+    }
+
+    pub async fn fetch_usage_from_auth_json(
+        &self,
+        text: &str,
+    ) -> Result<crate::providers::grok::accounts::GrokAccountUsage, ProviderError> {
+        let (credentials, kind) =
+            if let Ok(credentials) = GrokCredentials::parse_for_kind(text, GrokAuthKind::OAuth) {
+                (credentials, GrokAuthKind::OAuth)
+            } else {
+                (
+                    GrokCredentials::parse_for_kind(text, GrokAuthKind::Cli)?,
+                    GrokAuthKind::Cli,
+                )
+            };
+        let result = self.fetch_with_auth(&credentials, kind).await?;
+        Ok(account_usage_from_result(&result))
     }
 
     async fn fetch_with_auth(
@@ -134,6 +153,65 @@ impl GrokProvider {
         // successful cookie billing result from ambient auth.json metadata,
         // which may belong to a different account or change during the fetch.
         Ok(result_from_cookie_billing(billing))
+    }
+
+    async fn fetch_auto(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
+        let allow_browser_cookie_fallback = !ctx.auto_prefer_web;
+        for step in grok_auto_steps(
+            ctx.api_key
+                .as_deref()
+                .is_some_and(|token| !token.trim().is_empty()),
+            ctx.manual_cookie_header
+                .as_deref()
+                .is_some_and(|cookie| !cookie.trim().is_empty())
+                && allow_browser_cookie_fallback,
+            allow_browser_cookie_fallback,
+        ) {
+            match step {
+                GrokAutoStep::AmbientOAuth => {
+                    if let Some(result) = self.try_ambient(GrokAuthKind::OAuth).await {
+                        return result;
+                    }
+                }
+                GrokAutoStep::AmbientCli => {
+                    if let Some(result) = self.try_ambient(GrokAuthKind::Cli).await {
+                        return result;
+                    }
+                }
+                GrokAutoStep::ApiKey => {
+                    if let Some(token) = ctx.api_key.as_deref() {
+                        let credentials = GrokCredentials::from_bearer(token);
+                        return self
+                            .fetch_with_auth(&credentials, GrokAuthKind::OAuth)
+                            .await;
+                    }
+                }
+                GrokAutoStep::ManualCookie => {
+                    if let Some(cookie_header) = &ctx.manual_cookie_header {
+                        return self.fetch_with_cookie(cookie_header).await;
+                    }
+                }
+                GrokAutoStep::CookieRefresh => {
+                    return self.fetch_with_cookie_refresh().await;
+                }
+            }
+        }
+        Err(ProviderError::AuthRequired)
+    }
+
+    async fn try_ambient(
+        &self,
+        kind: GrokAuthKind,
+    ) -> Option<Result<ProviderFetchResult, ProviderError>> {
+        let credentials = Self::load_credentials(kind).ok()?;
+        match self.fetch_with_auth(&credentials, kind).await {
+            Ok(result) => Some(Ok(result)),
+            Err(ProviderError::AuthRequired) => None,
+            Err(error) => {
+                tracing::debug!("Grok login path failed: {error}");
+                None
+            }
+        }
     }
 
     /// Cookie refresh path (upstream #2458):
@@ -244,29 +322,7 @@ impl Provider for GrokProvider {
 
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         match ctx.source_mode {
-            SourceMode::Auto => {
-                if let Some(token) = ctx.api_key.as_deref() {
-                    let credentials = GrokCredentials::from_bearer(token);
-                    return self
-                        .fetch_with_auth(&credentials, GrokAuthKind::OAuth)
-                        .await;
-                }
-                if let Some(cookie_header) = &ctx.manual_cookie_header {
-                    return self.fetch_with_cookie(cookie_header).await;
-                }
-                for kind in [GrokAuthKind::Cli, GrokAuthKind::OAuth] {
-                    if let Ok(credentials) = Self::load_credentials(kind) {
-                        match self.fetch_with_auth(&credentials, kind).await {
-                            Ok(result) => return Ok(result),
-                            Err(ProviderError::AuthRequired) => {}
-                            Err(error) => {
-                                tracing::debug!("Grok login path failed in Auto: {error}")
-                            }
-                        }
-                    }
-                }
-                self.fetch_with_cookie_refresh().await
-            }
+            SourceMode::Auto => self.fetch_auto(ctx).await,
             SourceMode::Web => {
                 if let Some(cookie_header) = &ctx.manual_cookie_header {
                     return self.fetch_with_cookie(cookie_header).await;
@@ -278,13 +334,32 @@ impl Provider for GrokProvider {
                 self.fetch_with_auth(&credentials, GrokAuthKind::Cli).await
             }
             SourceMode::OAuth => {
-                let credentials = if let Some(token) = ctx.api_key.as_deref() {
-                    GrokCredentials::from_bearer(token)
-                } else {
-                    Self::load_credentials(GrokAuthKind::OAuth)?
+                // Prefer the switched ~/.grok/auth.json over a leftover token
+                // account so Weekly/notifications follow Grok account Switch.
+                let credentials = match Self::load_credentials(GrokAuthKind::OAuth) {
+                    Ok(credentials) => credentials,
+                    Err(error) => {
+                        let Some(token) = ctx.api_key.as_deref() else {
+                            return Err(error);
+                        };
+                        GrokCredentials::from_bearer(token)
+                    }
                 };
-                self.fetch_with_auth(&credentials, GrokAuthKind::OAuth)
+                match self
+                    .fetch_with_auth(&credentials, GrokAuthKind::OAuth)
                     .await
+                {
+                    Ok(result) => Ok(result),
+                    Err(ProviderError::AuthRequired) => {
+                        if let Some(token) = ctx.api_key.as_deref() {
+                            let fallback = GrokCredentials::from_bearer(token);
+                            self.fetch_with_auth(&fallback, GrokAuthKind::OAuth).await
+                        } else {
+                            Err(ProviderError::AuthRequired)
+                        }
+                    }
+                    Err(error) => Err(error),
+                }
             }
         }
     }
@@ -312,9 +387,33 @@ impl Provider for GrokProvider {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GrokAuthKind {
-    Cli,
-    OAuth,
+enum GrokAutoStep {
+    AmbientOAuth,
+    AmbientCli,
+    ApiKey,
+    ManualCookie,
+    CookieRefresh,
+}
+
+/// Auto must try the switched ~/.grok/auth.json before leftover cookies or
+/// token keys. Account rows already fetch per login; Weekly, pace, and
+/// notifications use this provider snapshot.
+fn grok_auto_steps(
+    has_api_key: bool,
+    has_manual_cookie: bool,
+    allow_browser_cookie_fallback: bool,
+) -> Vec<GrokAutoStep> {
+    let mut steps = vec![GrokAutoStep::AmbientOAuth, GrokAutoStep::AmbientCli];
+    if has_api_key {
+        steps.push(GrokAutoStep::ApiKey);
+    }
+    if has_manual_cookie && allow_browser_cookie_fallback {
+        steps.push(GrokAutoStep::ManualCookie);
+    }
+    if allow_browser_cookie_fallback {
+        steps.push(GrokAutoStep::CookieRefresh);
+    }
+    steps
 }
 
 #[derive(Debug, Clone)]
@@ -338,37 +437,16 @@ impl GrokCredentials {
     }
 
     fn parse_for_kind(text: &str, kind: GrokAuthKind) -> Result<Self, ProviderError> {
-        let root: Value = serde_json::from_str(text)
-            .map_err(|e| ProviderError::Parse(format!("Failed to decode Grok auth.json: {e}")))?;
-        let map = root
-            .as_object()
-            .ok_or_else(|| ProviderError::Parse("Invalid Grok auth.json".to_string()))?;
-        let selected = map.iter().find(|(scope, entry)| {
-            let has_key = entry
-                .get("key")
-                .and_then(Value::as_str)
-                .is_some_and(|value| !value.is_empty());
-            if !has_key {
-                return false;
-            }
-            let is_oauth = scope.starts_with("https://auth.x.ai::")
-                || entry
-                    .get("auth_mode")
-                    .and_then(Value::as_str)
-                    .is_some_and(|mode| mode.eq_ignore_ascii_case("oidc"));
-            match kind {
-                GrokAuthKind::Cli => !is_oauth,
-                GrokAuthKind::OAuth => is_oauth,
-            }
-        });
-        let (_, entry) = selected.ok_or(ProviderError::AuthRequired)?;
-        let access_token = entry
-            .get("key")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or(ProviderError::AuthRequired)?
-            .to_string();
+        let parsed = ParsedGrokAuthFile::parse(text)
+            .map_err(|error| ProviderError::Parse(error.to_string()))?;
+        let entry = parsed
+            .view()
+            .map_err(|error| ProviderError::Parse(error.to_string()))?
+            .select(kind)
+            .ok_or(ProviderError::AuthRequired)?;
+        let access_token = entry.key().ok_or(ProviderError::AuthRequired)?.to_owned();
         let expires_at = entry
+            .value()
             .get("expires_at")
             .and_then(Value::as_str)
             .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
@@ -378,9 +456,9 @@ impl GrokCredentials {
         }
         Ok(Self {
             access_token,
-            auth_mode: text_field(entry, "auth_mode"),
-            email: text_field(entry, "email"),
-            team_id: text_field(entry, "team_id"),
+            auth_mode: text_field(entry.value(), "auth_mode"),
+            email: text_field(entry.value(), "email"),
+            team_id: text_field(entry.value(), "team_id"),
             expires_at,
         })
     }
@@ -443,6 +521,25 @@ fn primary_label_for_cycle_minutes(minutes: u32) -> Option<&'static str> {
 fn result_from_cookie_billing(billing: GrokBillingSnapshot) -> ProviderFetchResult {
     result_from_billing(billing, "grok-browser", None, None, None)
 }
+
+fn account_usage_from_result(
+    result: &ProviderFetchResult,
+) -> crate::providers::grok::accounts::GrokAccountUsage {
+    let primary = &result.usage.primary;
+    let usage_available = !primary.is_informational;
+    crate::providers::grok::accounts::GrokAccountUsage {
+        usage_available,
+        used_percent: usage_available.then_some(primary.used_percent),
+        plan: result
+            .usage
+            .login_method
+            .clone()
+            .or(result.usage.primary_label.clone()),
+        window_minutes: primary.window_minutes,
+        resets_at: primary.resets_at,
+    }
+}
+
 fn result_from_billing(
     billing: GrokBillingSnapshot,
     source_label: &str,

@@ -998,6 +998,23 @@ export interface ClaudeAccount {
   isSaved: boolean;
 }
 
+export interface GrokAccount {
+  id: string;
+  email: string;
+  organization: string | null;
+  plan: string | null;
+  isActive: boolean;
+  isSaved: boolean;
+}
+
+export interface GrokAccountUsage {
+  usageAvailable: boolean;
+  usedPercent: number | null;
+  plan: string | null;
+  windowMinutes: number | null;
+  resetsAt: string | null;
+}
+
 /** One source-issued usage window from the external claude-swap adapter. */
 export interface ClaudeSwapUsageWindow {
   usedPercent: number;
