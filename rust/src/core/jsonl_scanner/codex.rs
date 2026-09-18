@@ -184,18 +184,22 @@ impl JsonlScanner {
                             .pointer("/source/subagent/thread_spawn")
                             .is_some_and(Value::is_object))
             });
-            let forked_from_id = session_meta_field(
-                &obj,
-                payload,
-                &[
-                    "forked_from_id",
-                    "forkedFromId",
-                    "parent_session_id",
-                    "parentSessionId",
-                    "parent_thread_id",
-                    "parentThreadId",
-                ],
-            );
+            let forked_from_id = (!independent_subagent)
+                .then(|| {
+                    session_meta_field(
+                        &obj,
+                        payload,
+                        &[
+                            "forked_from_id",
+                            "forkedFromId",
+                            "parent_session_id",
+                            "parentSessionId",
+                            "parent_thread_id",
+                            "parentThreadId",
+                        ],
+                    )
+                })
+                .flatten();
             return Ok(CodexSessionMetadata {
                 session_id: session_meta_field(&obj, payload, &["id", "session_id", "sessionId"]),
                 lineage: if independent_subagent {
