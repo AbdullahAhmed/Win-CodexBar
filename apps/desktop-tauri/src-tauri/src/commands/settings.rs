@@ -52,6 +52,7 @@ pub struct SettingsUpdate {
     pub theme: Option<String>,
     pub window_scale_percent: Option<u16>,
     pub tray_scale_percent: Option<u16>,
+    pub tray_panel_always_on_top: Option<bool>,
     pub powertoys_status_pipe_enabled: Option<bool>,
     pub claude_avoid_keychain_prompts: Option<bool>,
     pub claude_allow_reading_claude_code_credentials: Option<bool>,
@@ -225,6 +226,9 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.tray_scale_percent {
             settings.tray_scale_percent = codexbar::settings::clamp_tray_scale_percent(v);
+        }
+        if let Some(v) = self.tray_panel_always_on_top {
+            settings.tray_panel_always_on_top = v;
         }
         if let Some(v) = self.switcher_shows_icons {
             settings.switcher_shows_icons = v;
@@ -466,6 +470,7 @@ pub async fn update_settings(
     let rebuild_tray_menu = patch.rebuilds_tray_menu();
     let refresh_tray_presentation = patch.refreshes_tray_presentation();
     let tray_promotion_changed = patch.changes_tray_promotion();
+    let tray_panel_always_on_top_changed = patch.tray_panel_always_on_top.is_some();
     let previous_promoted = settings.promote_tray_icon;
     let previous_language = settings.ui_language;
 
@@ -504,6 +509,9 @@ pub async fn update_settings(
         {
             crate::tray_visibility::apply_promotion(new_promoted);
         }
+    }
+    if tray_panel_always_on_top_changed {
+        crate::shell::flyout_window::apply_always_on_top(&app, &settings);
     }
 
     // Notify other windows (PopOut dashboard, tray, float bar) so they re-read
@@ -635,6 +643,26 @@ mod tests {
         }
         .apply_display_settings(&mut settings);
         assert_eq!(settings.tray_scale_percent, 100);
+    }
+
+    #[test]
+    fn apply_display_settings_updates_tray_panel_always_on_top() {
+        let mut settings = Settings::default();
+        assert!(!settings.tray_panel_always_on_top);
+
+        SettingsUpdate {
+            tray_panel_always_on_top: Some(true),
+            ..Default::default()
+        }
+        .apply_display_settings(&mut settings);
+        assert!(settings.tray_panel_always_on_top);
+
+        SettingsUpdate {
+            tray_panel_always_on_top: Some(false),
+            ..Default::default()
+        }
+        .apply_display_settings(&mut settings);
+        assert!(!settings.tray_panel_always_on_top);
     }
 
     #[test]

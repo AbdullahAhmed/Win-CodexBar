@@ -15,6 +15,7 @@ import type { SettingsSnapshot } from "../../../types/bridge";
 
 const baseSettings = {
   trayIconMode: "single",
+  trayPanelAlwaysOnTop: false,
   switcherShowsIcons: false,
   menuBarShowsHighestUsage: false,
   menuBarShowsPercent: false,
@@ -72,5 +73,16 @@ describe("DisplayTab window scale", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "ShowPace" }));
 
     expect(set).toHaveBeenCalledWith({ showPace: true });
+  });
+
+  it("updates the tray panel always-on-top preference", () => {
+    const set = vi.fn();
+    renderTab(set);
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "TrayPanelAlwaysOnTopLabel" }),
+    );
+
+    expect(set).toHaveBeenCalledWith({ trayPanelAlwaysOnTop: true });
   });
 });

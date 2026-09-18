@@ -154,6 +154,18 @@ export default function DisplayTab({
             />
           </Field>
           <Field
+            label={t("TrayPanelAlwaysOnTopLabel")}
+            description={t("TrayPanelAlwaysOnTopHelper")}
+            leading
+          >
+            <Toggle
+              checked={settings.trayPanelAlwaysOnTop}
+              ariaLabel={t("TrayPanelAlwaysOnTopLabel")}
+              disabled={saving}
+              onChange={(v) => set({ trayPanelAlwaysOnTop: v })}
+            />
+          </Field>
+          <Field
             label={t("ShowAsUsedLabel")}
             description={t("ShowAsUsedHelper")}
             leading

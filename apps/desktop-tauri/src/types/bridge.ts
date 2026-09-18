@@ -220,6 +220,8 @@ export interface SettingsSnapshot {
   windowScalePercent: number;
   /** 100..=200 — clamped server-side. */
   trayScalePercent: number;
+  /** Keep the tray panel above other windows after it loses focus. */
+  trayPanelAlwaysOnTop: boolean;
   powertoysStatusPipeEnabled: boolean;
   claudeAvoidKeychainPrompts: boolean;
   /** Opt-in external claude-swap (`cswap`) account import (Claude only). */
@@ -316,6 +318,7 @@ export interface SettingsUpdate {
   theme?: ThemePreference;
   windowScalePercent?: number;
   trayScalePercent?: number;
+  trayPanelAlwaysOnTop?: boolean;
   powertoysStatusPipeEnabled?: boolean;
   claudeAvoidKeychainPrompts?: boolean;
   claudeAllowReadingClaudeCodeCredentials?: boolean;

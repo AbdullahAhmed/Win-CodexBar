@@ -161,6 +161,7 @@ function settings(): SettingsSnapshot {
     theme: "dark",
     windowScalePercent: 125,
     trayScalePercent: 100,
+    trayPanelAlwaysOnTop: false,
     powertoysStatusPipeEnabled: false,
     claudeAvoidKeychainPrompts: false,
     codexSparkUsageVisible: true,

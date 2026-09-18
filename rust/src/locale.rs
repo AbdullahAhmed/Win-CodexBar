@@ -807,6 +807,8 @@ locale_keys! {
     WindowScaleLabel,
     WindowScaleHelper,
     WindowScaleAriaLabel,
+    TrayPanelAlwaysOnTopLabel,
+    TrayPanelAlwaysOnTopHelper,
     WindowMinimize,
     WindowMaximize,
     WindowRestore,

@@ -230,6 +230,7 @@ fn settings_snapshot_preserves_partial_config_order_for_enabled_providers() {
             .collect::<Vec<_>>(),
         vec!["gemini", "claude", "codex"],
     );
+    assert_eq!(snapshot["trayPanelAlwaysOnTop"], false);
 }
 
 #[test]
