@@ -86,41 +86,43 @@ fn codex_pending_path_affects_current_window(
     path_key: &str,
     range: &CostUsageDayRange,
 ) -> bool {
-    if cache.files.get(path_key).is_some_and(|usage| {
-        usage
-            .days
-            .keys()
-            .any(|day| CostUsageDayRange::is_in_range(day, &range.since_key, &range.until_key))
+    let Some(usage) = cache.files.get(path_key) else {
+        return true;
+    };
+    if usage.codex_unresolved_fork_parent || usage.days.is_empty() {
+        return true;
+    }
+    if usage.days.keys().any(|day| {
+        CostUsageDayRange::parse_day_key(day).is_none()
+            || day >= &range.scan_since_key
+            || CostUsageDayRange::is_in_range(day, &range.since_key, &range.until_key)
     }) {
         return true;
     }
 
-    if let (Some(usage), Some(metadata)) = (cache.files.get(path_key), fs::metadata(path_key).ok())
-    {
+    if let Some(metadata) = fs::metadata(path_key).ok() {
         #[allow(clippy::cast_possible_wrap, reason = "file sizes are clamped to i64")]
         let observed_size = metadata.len().min(i64::MAX as u64) as i64;
         if codex_logical_target_has_unconsumed_tail(observed_size, usage) {
             return true;
         }
+        let identity_matches = match (
+            usage.codex_file_identity.as_ref(),
+            JsonlScanner::codex_file_identity(Path::new(path_key), &metadata).as_ref(),
+        ) {
+            (Some(expected), Some(actual)) => expected == actual,
+            (Some(_), None) => false,
+            (None, _) => true,
+        };
+        if !identity_matches
+            || usage.mtime_unix_ms != system_time_to_unix_ms(metadata.modified().ok())
+            || usage.size != observed_size
+        {
+            return true;
+        }
     }
 
-    let Some(path_day) = codex_path_day(Path::new(path_key)) else {
-        return true;
-    };
-    path_day >= range.scan_since_key
-}
-
-fn codex_path_day(path: &Path) -> Option<String> {
-    let mut components = path.components().rev();
-    components.next()?;
-    let day = components.next()?.as_os_str().to_str()?;
-    let month = components.next()?.as_os_str().to_str()?;
-    let year = components.next()?.as_os_str().to_str()?;
-    if year.len() != 4 || month.len() != 2 || day.len() != 2 {
-        return None;
-    }
-    let day_key = format!("{year}-{month}-{day}");
-    CostUsageDayRange::parse_day_key(&day_key).map(|_| day_key)
+    false
 }
 
 /// Return cached Codex files that are provably gone from the portion of the
@@ -251,8 +253,8 @@ mod tests {
 
     #[test]
     fn historical_pending_work_keeps_current_window_publishable() {
-        let old_path = r"C:\sessions\2026\09\01\old.jsonl";
-        let current_path = r"C:\sessions\2026\09\19\current.jsonl";
+        let old_path = r"C:\sessions\old.jsonl";
+        let current_path = r"C:\sessions\current.jsonl";
         let cache = historical_pending_cache(old_path, current_path);
         let range = active_range();
 
@@ -265,8 +267,8 @@ mod tests {
 
     #[test]
     fn current_pending_work_and_source_errors_block_publication() {
-        let old_path = r"C:\sessions\2026\09\01\old.jsonl";
-        let current_path = r"C:\sessions\2026\09\19\current.jsonl";
+        let old_path = r"C:\sessions\old.jsonl";
+        let current_path = r"C:\sessions\current.jsonl";
         let range = active_range();
 
         let mut current_pending = historical_pending_cache(old_path, current_path);
