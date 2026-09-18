@@ -125,7 +125,6 @@ impl CodexPendingScanContext {
             timezone,
         }
     }
-
 }
 
 pub(super) fn codex_only_unresolved_forks_pending(cache: &CostUsageCache) -> bool {
