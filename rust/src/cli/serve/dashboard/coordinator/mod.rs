@@ -61,9 +61,9 @@ pub struct SnapshotCoordinator<S = ()> {
     state: Arc<StdMutex<CoordinatorState<S>>>,
 }
 
-impl<S: Send + Sync + 'static> SnapshotCoordinator<S> {
+impl SnapshotCoordinator<()> {
     pub fn new(ttl: Duration, build: SnapshotBuildFn) -> Self {
-        let build_artifacts: SnapshotArtifactsBuildFn<S> = Arc::new(move || {
+        let build_artifacts: SnapshotArtifactsBuildFn<()> = Arc::new(move || {
             let future = build();
             Box::pin(async move {
                 future.await.map(|dashboard| SnapshotArtifacts {
@@ -74,7 +74,9 @@ impl<S: Send + Sync + 'static> SnapshotCoordinator<S> {
         });
         Self::new_with_artifacts(ttl, build_artifacts)
     }
+}
 
+impl<S: Clone + Send + Sync + 'static> SnapshotCoordinator<S> {
     pub(crate) fn new_with_artifacts(ttl: Duration, build: SnapshotArtifactsBuildFn<S>) -> Self {
         Self {
             ttl,
