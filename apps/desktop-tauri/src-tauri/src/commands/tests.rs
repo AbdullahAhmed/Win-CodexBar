@@ -409,7 +409,10 @@ fn fetch_context_grok_manual_cookie_keeps_auto_for_switched_login() {
     );
 
     assert_eq!(ctx.source_mode, SourceMode::Auto);
-    assert_eq!(ctx.manual_cookie_header.as_deref(), Some("sso=other-account"));
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("sso=other-account")
+    );
 }
 
 #[test]
