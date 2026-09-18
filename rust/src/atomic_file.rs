@@ -65,6 +65,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
         let mut file = std::fs::File::create(&temp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
+        drop(file);
         replace_staged(&temp, path)?;
         Ok(())
     })();
