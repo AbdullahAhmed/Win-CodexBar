@@ -343,45 +343,36 @@ fn entry_cost(
 fn pricing_model(entry: &OpenCodexEntry) -> Option<String> {
     let target = route_entry(entry);
     let model = entry.model.trim();
-    let model_tail = model.split_once('/').map(|(_, tail)| tail).unwrap_or(model);
-    let model_prefix = model.split_once('/').map(|(prefix, _)| prefix);
-    let recorded_provider = entry.provider.trim();
     match target {
         RouteTarget::Subscription("codex") => Some(model.to_string()),
-        RouteTarget::Subscription("opencodego") => Some(format!(
-            "opencode/{}",
-            provider_model_id(entry, recorded_provider, model_prefix, model_tail, target)
-        )),
-        RouteTarget::Subscription("kimi") => Some(format!(
-            "kimi/{}",
-            provider_model_id(entry, recorded_provider, model_prefix, model_tail, target)
-        )),
-        RouteTarget::Subscription("deepseek") => Some(format!(
-            "deepseek/{}",
-            provider_model_id(entry, recorded_provider, model_prefix, model_tail, target)
-        )),
+        RouteTarget::Subscription("opencodego") => {
+            Some(format!("opencode/{}", provider_model_id(entry, target)))
+        }
+        RouteTarget::Subscription("kimi") => {
+            Some(format!("kimi/{}", provider_model_id(entry, target)))
+        }
+        RouteTarget::Subscription("deepseek") => {
+            Some(format!("deepseek/{}", provider_model_id(entry, target)))
+        }
         RouteTarget::Subscription(_) | RouteTarget::TokenOnly | RouteTarget::Unknown => None,
     }
 }
 
-fn provider_model_id(
-    entry: &OpenCodexEntry,
-    recorded_provider: &str,
-    model_prefix: Option<&str>,
-    model_tail: &str,
-    target: RouteTarget,
-) -> String {
-    let prefix_matches_recorded_provider = model_prefix.is_some_and(|prefix| {
-        prefix.eq_ignore_ascii_case(recorded_provider)
-            || (recorded_provider.eq_ignore_ascii_case("kimi-for-coding")
-                && prefix.eq_ignore_ascii_case("kimi-coding"))
-    });
+fn provider_model_id(entry: &OpenCodexEntry, target: RouteTarget) -> String {
+    let model = entry.model.trim();
+    let Some((model_prefix, model_tail)) = model.split_once('/') else {
+        return model.to_string();
+    };
+    let recorded_provider = entry.provider.trim();
+    let prefix_matches_recorded_provider = model_prefix.eq_ignore_ascii_case(recorded_provider)
+        || (recorded_provider.eq_ignore_ascii_case("kimi-for-coding")
+            && model_prefix.eq_ignore_ascii_case("kimi-coding"));
     let is_legacy_openai_route =
-        recorded_provider.eq_ignore_ascii_case("openai") && route_model(&entry.model) == target;
+        recorded_provider.eq_ignore_ascii_case("openai") && route_provider(model_prefix) == target;
     if prefix_matches_recorded_provider || is_legacy_openai_route {
         model_tail.to_string()
     } else {
-        entry.model.trim().to_string()
+        model.to_string()
     }
 }
 
