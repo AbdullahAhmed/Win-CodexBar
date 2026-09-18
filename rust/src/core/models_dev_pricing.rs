@@ -663,11 +663,10 @@ impl ModelsDevCache {
 #[cfg(test)]
 mod models_dev_cache_atomic_tests {
     use super::ModelsDevCache;
-    use std::path::PathBuf;
     use tempfile::tempdir;
 
     #[test]
-    fn failed_atomic_write_preserves_previous_cache() {
+    fn failed_staged_replacement_preserves_previous_cache() {
         let root = tempdir().unwrap();
         let cache_path = ModelsDevCache::cache_path(Some(root.path()));
         let parent = cache_path.parent().unwrap();
@@ -675,11 +674,10 @@ mod models_dev_cache_atomic_tests {
 
         crate::atomic_file::write_atomic(&cache_path, b"old-cache").unwrap();
 
-        let mut temp_name = cache_path.as_os_str().to_os_string();
-        temp_name.push(format!(".tmp-{}", std::process::id()));
-        std::fs::create_dir(PathBuf::from(temp_name)).unwrap();
+        let staged = parent.join("failed-staged-replacement");
+        std::fs::create_dir(&staged).unwrap();
 
-        assert!(crate::atomic_file::write_atomic(&cache_path, b"new-cache").is_err());
+        assert!(crate::atomic_file::replace_staged(&staged, &cache_path).is_err());
         assert_eq!(std::fs::read(cache_path).unwrap(), b"old-cache");
     }
 }

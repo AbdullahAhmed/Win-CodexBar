@@ -564,6 +564,9 @@ pub enum ProviderError {
     #[error("OAuth error: {0}")]
     OAuth(String),
 
+    #[error("Transient OAuth error: {0}")]
+    OAuthTransient(String),
+
     #[error("OAuth session expired: {0}")]
     OAuthExpired(String),
 
@@ -800,6 +803,9 @@ pub trait Provider: Send + Sync {
     /// string method. Transport retention is selected by the provider
     /// capability and the typed error classification above.
     fn last_good_failure_policy_for_error(&self, error: &ProviderError) -> LastGoodFailurePolicy {
+        if matches!(error, ProviderError::OAuthTransient(_)) {
+            return LastGoodFailurePolicy::Preserve;
+        }
         if self.retains_last_good_on_transport_failure() && error.is_transport_failure() {
             return LastGoodFailurePolicy::Preserve;
         }

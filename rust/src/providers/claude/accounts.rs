@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::secure_file;
+use crate::{atomic_file, secure_file};
 
 pub use login::{begin_login, cancel_login, cleanup_abandoned_logins, login, require_cli_closed};
 
@@ -130,7 +130,7 @@ impl AccountManager {
                 &temp,
                 &serde_json::to_string(store).map_err(io::Error::other)?,
             )?;
-            std::fs::rename(&temp, &path)
+            atomic_file::replace_staged(&temp, &path)
         })();
         if result.is_err() {
             let _cleanup = std::fs::remove_file(temp);
@@ -171,6 +171,52 @@ impl AccountManager {
             io::Error::other("No Claude Code subscription login found. Add an account first.")
         })?;
         self.import(current)
+    }
+
+    pub(super) fn current_account_id(&self) -> io::Result<Option<String>> {
+        let config = read_object(&self.config_file)?;
+        let Some(identity) = config.get("oauthAccount").filter(|value| !value.is_null()) else {
+            return Ok(None);
+        };
+        identity_id(identity).map(Some)
+    }
+
+    /// Update the already-saved account identified before a token refresh.
+    /// The refreshed OAuth fields are merged into the saved blob so account
+    /// metadata remains intact, and an unknown identity is ignored rather
+    /// than creating a new saved account.
+    pub(super) fn update_saved_oauth(
+        &self,
+        account_id: &str,
+        refreshed_oauth: &Value,
+    ) -> io::Result<()> {
+        required_string(refreshed_oauth, "accessToken")?;
+        required_string(refreshed_oauth, "refreshToken")?;
+        let mut store = self.load()?;
+        let Some(saved) = store
+            .accounts
+            .iter_mut()
+            .find(|account| account.id().ok().as_deref() == Some(account_id))
+        else {
+            return Ok(());
+        };
+        let saved_oauth = saved
+            .oauth
+            .as_object_mut()
+            .ok_or_else(|| io::Error::other("Saved Claude OAuth data is invalid."))?;
+        for key in [
+            "accessToken",
+            "refreshToken",
+            "expiresAt",
+            "scopes",
+            "rateLimitTier",
+        ] {
+            if let Some(value) = refreshed_oauth.get(key).filter(|value| !value.is_null()) {
+                saved_oauth.insert(key.to_string(), value.clone());
+            }
+        }
+        saved.validate()?;
+        self.save(&store)
     }
 
     pub fn import(&self, login: SavedLogin) -> io::Result<()> {
@@ -222,15 +268,20 @@ impl AccountManager {
                 return Err(e);
             }
         };
-        if let Err(e) = std::fs::rename(&staged_credentials, &credential_path) {
+        if let Err(e) = atomic_file::replace_staged(&staged_credentials, &credential_path) {
             let _cleanup = std::fs::remove_file(staged_credentials);
             let _cleanup = std::fs::remove_file(staged_config);
             return Err(e);
         }
-        if let Err(e) = std::fs::rename(&staged_config, &self.config_file) {
+        if let Err(e) = atomic_file::replace_staged(&staged_config, &self.config_file) {
             let _cleanup = std::fs::remove_file(staged_config);
-            let restored = stage_json(&credential_path, &old_credentials)
-                .and_then(|p| std::fs::rename(p, &credential_path));
+            let restored = stage_json(&credential_path, &old_credentials).and_then(|p| {
+                let result = atomic_file::replace_staged(&p, &credential_path);
+                if result.is_err() {
+                    let _cleanup = std::fs::remove_file(p);
+                }
+                result
+            });
             return Err(io::Error::other(if restored.is_ok() {
                 format!("Could not update Claude identity; the previous login was restored: {e}")
             } else {
@@ -477,6 +528,31 @@ mod tests {
             manager.load().unwrap().accounts[0].oauth["accessToken"],
             "updated"
         );
+    }
+
+    #[test]
+    fn token_refresh_updates_saved_account_without_creating_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = manager(dir.path());
+        manager.import(login("a", "one", "stale")).unwrap();
+        let refreshed = login("a", "one", "rotated");
+        manager
+            .update_saved_oauth("a:one", &refreshed.oauth)
+            .unwrap();
+        assert_eq!(manager.load().unwrap().accounts.len(), 1);
+        assert_eq!(
+            manager.load().unwrap().accounts[0].oauth["accessToken"],
+            "rotated"
+        );
+        assert_eq!(
+            manager.load().unwrap().accounts[0].oauth["subscriptionType"],
+            "max"
+        );
+
+        manager
+            .update_saved_oauth("missing:account", &refreshed.oauth)
+            .unwrap();
+        assert_eq!(manager.load().unwrap().accounts.len(), 1);
     }
 
     #[test]

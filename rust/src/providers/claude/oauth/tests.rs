@@ -2,9 +2,10 @@ use super::{
     ClaudeOAuthCredentials, ClaudeOAuthFetcher, OAuthUsageResponse, UsageWindow,
     credential_identity,
 };
+use crate::core::ProviderError;
 use base64::Engine;
 use reqwest::header::HeaderValue;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn test_credentials(access_token: &str) -> ClaudeOAuthCredentials {
     ClaudeOAuthCredentials {
@@ -336,6 +337,51 @@ fn parses_retry_after_seconds() {
 }
 
 #[test]
+fn tiny_retry_after_is_floored_and_consecutive_429s_ramp() {
+    let floor = ClaudeOAuthFetcher::DEFAULT_RATE_LIMIT_BACKOFF;
+    assert_eq!(
+        ClaudeOAuthFetcher::bounded_rate_limit_backoff(Duration::from_secs(1), 1),
+        floor
+    );
+    assert_eq!(
+        ClaudeOAuthFetcher::bounded_rate_limit_backoff(Duration::from_secs(0), 2),
+        floor * 2
+    );
+    assert_eq!(
+        ClaudeOAuthFetcher::bounded_rate_limit_backoff(Duration::from_secs(1), 4),
+        floor * 8
+    );
+    assert_eq!(
+        ClaudeOAuthFetcher::bounded_rate_limit_backoff(Duration::from_secs(90 * 60), 1),
+        Duration::from_secs(60 * 60)
+    );
+}
+
+#[test]
+fn expired_rate_limit_gate_resets_consecutive_ramp() {
+    let floor = ClaudeOAuthFetcher::DEFAULT_RATE_LIMIT_BACKOFF;
+    let start = Instant::now();
+    let mut gate = None;
+
+    assert_eq!(
+        ClaudeOAuthFetcher::record_rate_limit_locked(&mut gate, start, Duration::from_secs(1)),
+        floor
+    );
+    assert_eq!(
+        ClaudeOAuthFetcher::record_rate_limit_locked(&mut gate, start, Duration::from_secs(1)),
+        floor * 2
+    );
+    assert_eq!(
+        ClaudeOAuthFetcher::record_rate_limit_locked(
+            &mut gate,
+            start + floor * 2 + Duration::from_secs(1),
+            Duration::from_secs(1)
+        ),
+        floor
+    );
+}
+
+#[test]
 fn invalid_retry_after_uses_default_backoff() {
     let header = HeaderValue::from_static("not-a-date");
     let duration = ClaudeOAuthFetcher::retry_after_duration(Some(&header));
@@ -359,6 +405,7 @@ fn rate_limited_error_preserves_credentials_language() {
     let error = ClaudeOAuthFetcher::rate_limited_error(Duration::from_secs(5));
     let message = error.to_string();
 
+    assert!(matches!(error, ProviderError::OAuthTransient(_)));
     assert!(message.contains("rate limited"));
     assert!(message.contains("credentials were preserved"));
 }

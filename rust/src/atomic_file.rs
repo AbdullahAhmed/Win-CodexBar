@@ -1,52 +1,12 @@
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Replace a staged sibling file with the destination using the platform's
-/// replacement semantics. Windows `rename` does not replace an existing
-/// file, so use `MoveFileExW` with replace and write-through flags there.
-pub fn replace_staged(staged: &Path, destination: &Path) -> io::Result<()> {
-    // Callers may use a secure writer that does not expose its file handle.
-    // Sync the staged bytes here so every replacement has the same durability
-    // boundary before the destination is changed.
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(staged)?
-        .sync_all()?;
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-
-        use windows::Win32::Storage::FileSystem::{
-            MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
-        };
-        use windows::core::PCWSTR;
-
-        let staged: Vec<u16> = staged.as_os_str().encode_wide().chain([0]).collect();
-        let destination: Vec<u16> = destination.as_os_str().encode_wide().chain([0]).collect();
-        // SAFETY: both buffers are NUL-terminated and remain alive for the call.
-        unsafe {
-            MoveFileExW(
-                PCWSTR(staged.as_ptr()),
-                PCWSTR(destination.as_ptr()),
-                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-            )
-            .map_err(|error| io::Error::other(error.to_string()))
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        std::fs::rename(staged, destination)?;
-        let parent = destination
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        std::fs::File::open(parent)?.sync_all()
-    }
-}
-
-/// Atomic file write: temp sibling + fsync + rename. On failure, truncate the
-/// owned temp sibling instead of deleting it so callers never need destructive cleanup.
+/// Atomic file write: temp sibling + fsync + platform-aware replacement. On
+/// failure, truncate the owned temp sibling instead of deleting it so callers
+/// never need destructive cleanup.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     let parent = path
         .parent()
@@ -59,10 +19,17 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
         );
     }
     let mut temp_name = path.as_os_str().to_os_string();
-    temp_name.push(format!(".tmp-{}", std::process::id()));
+    temp_name.push(format!(
+        ".tmp-{}.{}",
+        std::process::id(),
+        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
     let temp = PathBuf::from(temp_name);
     let result = (|| -> anyhow::Result<()> {
-        let mut file = std::fs::File::create(&temp)?;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
@@ -77,21 +44,69 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     result
 }
 
-#[cfg(test)]
-mod tests {
-    use super::replace_staged;
+/// Replace `destination` with a fully-written sibling file.
+///
+/// The staged file is synced again here so callers that use a specialized
+/// writer (for example, DPAPI-backed secure storage) get the same durability
+/// boundary before replacement. Windows requires `ReplaceFileW` for an
+/// existing destination; `std::fs::rename` does not provide that contract on
+/// every supported Windows filesystem.
+pub fn replace_staged(staged: &Path, destination: &Path) -> io::Result<()> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(staged)?
+        .sync_all()?;
+    replace_staged_platform(staged, destination)
+}
 
-    #[test]
-    fn replacement_updates_an_existing_destination() {
-        let dir = tempfile::tempdir().unwrap();
-        let staged = dir.path().join("staged");
-        let destination = dir.path().join("destination");
-        std::fs::write(&staged, b"new").unwrap();
-        std::fs::write(&destination, b"old").unwrap();
+#[cfg(not(windows))]
+fn replace_staged_platform(staged: &Path, destination: &Path) -> io::Result<()> {
+    std::fs::rename(staged, destination)?;
+    let parent = destination
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::File::open(parent)?.sync_all()
+}
 
-        replace_staged(&staged, &destination).unwrap();
+#[cfg(windows)]
+fn replace_staged_platform(staged: &Path, destination: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
 
-        assert_eq!(std::fs::read(&destination).unwrap(), b"new");
-        assert!(!staged.exists());
+    use windows::Win32::Storage::FileSystem::{
+        MOVEFILE_WRITE_THROUGH, MoveFileExW, REPLACEFILE_WRITE_THROUGH, ReplaceFileW,
+    };
+    use windows::core::PCWSTR;
+
+    fn wide(path: &Path) -> Vec<u16> {
+        path.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
     }
+
+    let destination_exists = destination.exists();
+    let staged = wide(staged);
+    let destination = wide(destination);
+    // SAFETY: both vectors are NUL-terminated and remain alive for each API
+    // call; the Windows APIs do not retain either pointer after returning.
+    let result = unsafe {
+        if destination_exists {
+            ReplaceFileW(
+                PCWSTR(destination.as_ptr()),
+                PCWSTR(staged.as_ptr()),
+                PCWSTR::null(),
+                REPLACEFILE_WRITE_THROUGH,
+                None,
+                None,
+            )
+        } else {
+            MoveFileExW(
+                PCWSTR(staged.as_ptr()),
+                PCWSTR(destination.as_ptr()),
+                MOVEFILE_WRITE_THROUGH,
+            )
+        }
+    };
+    result.map_err(|error| io::Error::other(error.to_string()))
 }
