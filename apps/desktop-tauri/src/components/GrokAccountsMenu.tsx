@@ -1,78 +1,30 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { useEffect, useState } from "react";
 import type { GrokAccount, GrokAccountUsage } from "../types/bridge";
-import { grokAccountsList, grokAccountSwitch, grokAccountFetch } from "../lib/tauri";
+import { grokAccountSwitch } from "../lib/tauri";
 import { useLocale } from "../hooks/useLocale";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
+import { useGrokAccounts } from "../hooks/useGrokAccounts";
 import { maskEmail } from "./MenuCard";
 
 export default function GrokAccountsMenu({
   hideEmail,
   resetTimeRelative,
   onLayoutChange,
-}: {
+  }: {
   hideEmail: boolean;
   resetTimeRelative: boolean;
   onLayoutChange?: () => void;
 }) {
   const { t } = useLocale();
-  const [accounts, setAccounts] = useState<GrokAccount[]>([]);
-  const [usage, setUsage] = useState<Record<string, GrokAccountUsage>>({});
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [switched, setSwitched] = useState(false);
-  const mounted = useRef(false);
-  const load = useCallback(async () => {
-    const next = await grokAccountsList();
-    if (mounted.current) {
-      setAccounts(next);
-      setError(null);
-    }
-    const snapshots: Record<string, GrokAccountUsage> = {};
-    await Promise.all(
-      next.map(async (account) => {
-        try {
-          snapshots[account.id] = await grokAccountFetch(account.id);
-        } catch {
-          // Keep the row even if usage is unavailable.
-        }
-      }),
-    );
-    if (mounted.current) setUsage(snapshots);
-  }, []);
-  useEffect(() => {
-    mounted.current = true;
-    const reload = () => {
-      void load().catch((e) => {
-        if (mounted.current) setError(String(e));
-      });
-    };
-    reload();
-    window.addEventListener("focus", reload);
-    const unlisten = listen("grok-accounts-updated", reload);
-    return () => {
-      mounted.current = false;
-      window.removeEventListener("focus", reload);
-      void unlisten.then((fn) => fn()).catch(() => {});
-    };
-  }, [load]);
+  const { accounts, usage, busy, error, run } = useGrokAccounts({ reloadOnFocus: true });
   useEffect(() => {
     onLayoutChange?.();
   }, [accounts.length, error, switched, onLayoutChange]);
 
   const switchAccount = async (id: string) => {
-    setBusy(true);
-    setError(null);
     setSwitched(false);
-    try {
-      await grokAccountSwitch(id);
-      await load();
-      if (mounted.current) setSwitched(true);
-    } catch (e) {
-      if (mounted.current) setError(String(e));
-    } finally {
-      if (mounted.current) setBusy(false);
-    }
+    await run(() => grokAccountSwitch(id), () => setSwitched(true));
   };
 
   const hasSwitchableAccount = accounts.some(
@@ -125,7 +77,10 @@ function GrokAccountRow({
 }) {
   const { t } = useLocale();
   const email = hideEmail ? maskEmail(account.email) : account.email;
-  const pct = snapshot?.usedPercent != null ? Math.round(snapshot.usedPercent) : null;
+  const pct =
+    snapshot?.usageAvailable && snapshot.usedPercent != null
+      ? Math.round(snapshot.usedPercent)
+      : null;
   const resetText = useFormattedResetTime(
     snapshot?.resetsAt ?? null,
     null,

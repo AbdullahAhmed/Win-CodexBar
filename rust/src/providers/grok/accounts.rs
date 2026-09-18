@@ -7,9 +7,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use uuid::Uuid;
 
+use crate::atomic_file::replace_staged;
 use crate::secure_file;
 
 pub use login::{begin_login, cancel_login, cleanup_abandoned_logins, login};
@@ -30,10 +31,111 @@ pub struct GrokAccount {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GrokAccountUsage {
+    pub usage_available: bool,
     pub used_percent: Option<f64>,
     pub plan: Option<String>,
     pub window_minutes: Option<u32>,
     pub resets_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum GrokAuthFileError {
+    #[error("Failed to decode Grok auth.json: {0}")]
+    InvalidJson(#[from] serde_json::Error),
+    #[error("Grok auth.json must be an object.")]
+    NotObject,
+    #[error("Grok login is missing an account. Sign in again.")]
+    MissingAccount,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GrokAuthKind {
+    Cli,
+    OAuth,
+}
+
+pub(crate) struct ParsedGrokAuthFile {
+    root: Value,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct GrokAuthFile<'a> {
+    entries: &'a Map<String, Value>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct GrokAuthEntry<'a> {
+    scope: &'a str,
+    value: &'a Value,
+}
+
+impl ParsedGrokAuthFile {
+    pub(crate) fn parse(text: &str) -> Result<Self, GrokAuthFileError> {
+        Ok(Self {
+            root: serde_json::from_str(text)?,
+        })
+    }
+
+    pub(crate) fn view(&self) -> Result<GrokAuthFile<'_>, GrokAuthFileError> {
+        GrokAuthFile::from_value(&self.root)
+    }
+}
+
+impl<'a> GrokAuthFile<'a> {
+    fn from_value(value: &'a Value) -> Result<Self, GrokAuthFileError> {
+        Ok(Self {
+            entries: value.as_object().ok_or(GrokAuthFileError::NotObject)?,
+        })
+    }
+
+    pub(crate) fn select(&self, kind: GrokAuthKind) -> Option<GrokAuthEntry<'a>> {
+        self.entries.iter().find_map(|(scope, value)| {
+            let entry = GrokAuthEntry { scope, value };
+            (entry.has_key() && entry.kind() == kind).then_some(entry)
+        })
+    }
+
+    fn select_account(&self) -> Result<GrokAuthEntry<'a>, GrokAuthFileError> {
+        self.select(GrokAuthKind::OAuth)
+            .or_else(|| {
+                self.entries.iter().find_map(|(scope, value)| {
+                    let entry = GrokAuthEntry { scope, value };
+                    (entry.has_key() && text_field(value, "email").is_some()).then_some(entry)
+                })
+            })
+            .ok_or(GrokAuthFileError::MissingAccount)
+    }
+}
+
+impl<'a> GrokAuthEntry<'a> {
+    pub(crate) fn value(self) -> &'a Value {
+        self.value
+    }
+
+    pub(crate) fn key(self) -> Option<&'a str> {
+        self.value
+            .get("key")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+    }
+
+    fn has_key(self) -> bool {
+        self.key().is_some()
+    }
+
+    fn kind(self) -> GrokAuthKind {
+        if self.scope.starts_with("https://auth.x.ai::")
+            || self
+                .value
+                .get("auth_mode")
+                .and_then(Value::as_str)
+                .is_some_and(|mode| mode.eq_ignore_ascii_case("oidc"))
+        {
+            GrokAuthKind::OAuth
+        } else {
+            GrokAuthKind::Cli
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -47,20 +149,24 @@ impl SavedLogin {
     }
 
     fn validate(&self) -> io::Result<()> {
-        selected_entry(&self.auth)?;
-        self.id()?;
-        required_string(selected_entry(&self.auth)?, "email")?;
-        required_string(selected_entry(&self.auth)?, "key")?;
+        let entry = auth_file(&self.auth)?
+            .select_account()
+            .map_err(io::Error::other)?;
+        required_string(entry.value(), "user_id")?;
+        required_string(entry.value(), "email")?;
+        required_string(entry.value(), "key")?;
         Ok(())
     }
 
     fn summary(&self, active: bool, saved: bool) -> io::Result<GrokAccount> {
-        let entry = selected_entry(&self.auth)?;
+        let entry = auth_file(&self.auth)?
+            .select_account()
+            .map_err(io::Error::other)?;
         Ok(GrokAccount {
             id: self.id()?,
-            email: required_string(entry, "email")?.to_owned(),
-            organization: text_field(entry, "team_id"),
-            plan: plan_name(entry),
+            email: required_string(entry.value(), "email")?.to_owned(),
+            organization: text_field(entry.value(), "team_id"),
+            plan: plan_name(entry.value()),
             is_active: active,
             is_saved: saved,
         })
@@ -125,7 +231,7 @@ impl AccountManager {
                 &temp,
                 &serde_json::to_string(store).map_err(io::Error::other)?,
             )?;
-            std::fs::rename(&temp, &path)
+            replace_staged(&temp, &path)
         })();
         if result.is_err() {
             let _cleanup = std::fs::remove_file(temp);
@@ -191,7 +297,7 @@ impl AccountManager {
             std::fs::create_dir_all(parent)?;
         }
         let staged = stage_json(&self.ambient_auth, &target.auth)?;
-        if let Err(e) = std::fs::rename(&staged, &self.ambient_auth) {
+        if let Err(e) = replace_staged(&staged, &self.ambient_auth) {
             let _cleanup = std::fs::remove_file(staged);
             return Err(e);
         }
@@ -230,31 +336,8 @@ fn upsert(store: &mut Store, login: SavedLogin) -> io::Result<()> {
     Ok(())
 }
 
-fn selected_entry(root: &Value) -> io::Result<&Value> {
-    let map = root
-        .as_object()
-        .ok_or_else(|| io::Error::other("Grok auth.json must be an object."))?;
-    let oauth = map.iter().find(|(scope, entry)| {
-        has_key(entry)
-            && (scope.starts_with("https://auth.x.ai::")
-                || entry
-                    .get("auth_mode")
-                    .and_then(Value::as_str)
-                    .is_some_and(|mode| mode.eq_ignore_ascii_case("oidc")))
-    });
-    if let Some((_, entry)) = oauth {
-        return Ok(entry);
-    }
-    map.values()
-        .find(|entry| has_key(entry) && text_field(entry, "email").is_some())
-        .ok_or_else(|| io::Error::other("Grok login is missing an account. Sign in again."))
-}
-
-fn has_key(entry: &Value) -> bool {
-    entry
-        .get("key")
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.is_empty())
+fn auth_file(value: &Value) -> io::Result<GrokAuthFile<'_>> {
+    GrokAuthFile::from_value(value).map_err(io::Error::other)
 }
 
 fn required_string<'a>(object: &'a Value, key: &str) -> io::Result<&'a str> {
@@ -275,7 +358,10 @@ fn text_field(value: &Value, key: &str) -> Option<String> {
 }
 
 fn identity_id(auth: &Value) -> io::Result<String> {
-    required_string(selected_entry(auth)?, "user_id").map(str::to_owned)
+    let entry = auth_file(auth)?
+        .select_account()
+        .map_err(io::Error::other)?;
+    required_string(entry.value(), "user_id").map(str::to_owned)
 }
 
 fn plan_name(entry: &Value) -> Option<String> {

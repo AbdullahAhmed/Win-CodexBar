@@ -242,3 +242,24 @@ fn unpublished_zero_does_not_reach_the_usage_surface() {
 
     assert!(result.usage.primary.is_informational);
 }
+
+#[test]
+fn account_usage_marks_informational_windows_unavailable() {
+    let result = result_from_billing(
+        GrokBillingSnapshot {
+            used_percent: None,
+            used_percent_is_wire_published: false,
+            used_percent_is_implicit_zero: false,
+            resets_at: None,
+            window_minutes: Some(crate::core::WEEKLY_WINDOW_MINUTES),
+        },
+        "grok-cli",
+        None,
+        None,
+        Some("SuperGrok".into()),
+    );
+
+    let usage = account_usage_from_result(&result);
+    assert!(!usage.usage_available);
+    assert_eq!(usage.used_percent, None);
+}

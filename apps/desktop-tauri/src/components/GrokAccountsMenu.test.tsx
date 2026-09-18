@@ -32,6 +32,7 @@ describe("GrokAccountsMenu", () => {
     vi.resetAllMocks();
     mocks.grokAccountsList.mockResolvedValue([first, second]);
     mocks.grokAccountFetch.mockImplementation(async (id: string) => ({
+      usageAvailable: true,
       usedPercent: id === first.id ? 38 : 100,
       plan: "SuperGrok",
       windowMinutes: 10080,
@@ -51,5 +52,22 @@ describe("GrokAccountsMenu", () => {
     expect(bars).toHaveLength(2);
     expect((bars[0] as HTMLElement).style.width).toBe("38%");
     expect((bars[1] as HTMLElement).style.width).toBe("100%");
+  });
+
+  it("omits percentage and bar when usage is unavailable", async () => {
+    mocks.grokAccountFetch.mockResolvedValue({
+      usageAvailable: false,
+      usedPercent: null,
+      plan: "SuperGrok",
+      windowMinutes: 10080,
+      resetsAt: null,
+    });
+    const { container } = render(
+      <GrokAccountsMenu hideEmail={false} resetTimeRelative />,
+    );
+
+    await screen.findByText(first.email);
+    expect(screen.queryByText(/PanelUsedSuffix/)).toBeNull();
+    expect(container.querySelectorAll(".codex-menu-accounts__bar-fill")).toHaveLength(0);
   });
 });

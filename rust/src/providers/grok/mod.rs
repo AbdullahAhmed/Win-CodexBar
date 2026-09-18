@@ -21,6 +21,7 @@ use crate::core::{
     RateWindow, SourceMode, UsageSnapshot,
 };
 
+use self::accounts::{GrokAuthKind, ParsedGrokAuthFile};
 use self::billing::GrokBillingSnapshot;
 
 const BILLING_ENDPOINT: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
@@ -85,16 +86,7 @@ impl GrokProvider {
                 )
             };
         let result = self.fetch_with_auth(&credentials, kind).await?;
-        Ok(crate::providers::grok::accounts::GrokAccountUsage {
-            used_percent: Some(result.usage.primary.used_percent),
-            plan: result
-                .usage
-                .login_method
-                .clone()
-                .or(result.usage.primary_label.clone()),
-            window_minutes: result.usage.primary.window_minutes,
-            resets_at: result.usage.primary.resets_at,
-        })
+        Ok(account_usage_from_result(&result))
     }
 
     async fn fetch_with_auth(
@@ -386,12 +378,6 @@ impl Provider for GrokProvider {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GrokAuthKind {
-    Cli,
-    OAuth,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GrokAutoStep {
     AmbientOAuth,
     AmbientCli,
@@ -436,37 +422,16 @@ impl GrokCredentials {
     }
 
     fn parse_for_kind(text: &str, kind: GrokAuthKind) -> Result<Self, ProviderError> {
-        let root: Value = serde_json::from_str(text)
-            .map_err(|e| ProviderError::Parse(format!("Failed to decode Grok auth.json: {e}")))?;
-        let map = root
-            .as_object()
-            .ok_or_else(|| ProviderError::Parse("Invalid Grok auth.json".to_string()))?;
-        let selected = map.iter().find(|(scope, entry)| {
-            let has_key = entry
-                .get("key")
-                .and_then(Value::as_str)
-                .is_some_and(|value| !value.is_empty());
-            if !has_key {
-                return false;
-            }
-            let is_oauth = scope.starts_with("https://auth.x.ai::")
-                || entry
-                    .get("auth_mode")
-                    .and_then(Value::as_str)
-                    .is_some_and(|mode| mode.eq_ignore_ascii_case("oidc"));
-            match kind {
-                GrokAuthKind::Cli => !is_oauth,
-                GrokAuthKind::OAuth => is_oauth,
-            }
-        });
-        let (_, entry) = selected.ok_or(ProviderError::AuthRequired)?;
-        let access_token = entry
-            .get("key")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or(ProviderError::AuthRequired)?
-            .to_string();
+        let parsed = ParsedGrokAuthFile::parse(text)
+            .map_err(|error| ProviderError::Parse(error.to_string()))?;
+        let entry = parsed
+            .view()
+            .map_err(|error| ProviderError::Parse(error.to_string()))?
+            .select(kind)
+            .ok_or(ProviderError::AuthRequired)?;
+        let access_token = entry.key().ok_or(ProviderError::AuthRequired)?.to_owned();
         let expires_at = entry
+            .value()
             .get("expires_at")
             .and_then(Value::as_str)
             .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
@@ -476,9 +441,9 @@ impl GrokCredentials {
         }
         Ok(Self {
             access_token,
-            auth_mode: text_field(entry, "auth_mode"),
-            email: text_field(entry, "email"),
-            team_id: text_field(entry, "team_id"),
+            auth_mode: text_field(entry.value(), "auth_mode"),
+            email: text_field(entry.value(), "email"),
+            team_id: text_field(entry.value(), "team_id"),
             expires_at,
         })
     }
@@ -541,6 +506,25 @@ fn primary_label_for_cycle_minutes(minutes: u32) -> Option<&'static str> {
 fn result_from_cookie_billing(billing: GrokBillingSnapshot) -> ProviderFetchResult {
     result_from_billing(billing, "grok-browser", None, None, None)
 }
+
+fn account_usage_from_result(
+    result: &ProviderFetchResult,
+) -> crate::providers::grok::accounts::GrokAccountUsage {
+    let primary = &result.usage.primary;
+    let usage_available = !primary.is_informational;
+    crate::providers::grok::accounts::GrokAccountUsage {
+        usage_available,
+        used_percent: usage_available.then_some(primary.used_percent),
+        plan: result
+            .usage
+            .login_method
+            .clone()
+            .or(result.usage.primary_label.clone()),
+        window_minutes: primary.window_minutes,
+        resets_at: primary.resets_at,
+    }
+}
+
 fn result_from_billing(
     billing: GrokBillingSnapshot,
     source_label: &str,

@@ -1,71 +1,25 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { useState } from "react";
 import type { GrokAccount, GrokAccountUsage } from "../../../../../types/bridge";
 import type { LocaleKey } from "../../../../../i18n/keys";
 import {
-  grokAccountsList,
   grokAccountAdd,
   grokAccountCancelLogin,
   grokAccountSaveCurrent,
   grokAccountRemove,
   grokAccountSwitch,
-  grokAccountFetch,
 } from "../../../../../lib/tauri";
+import { useGrokAccounts } from "../../../../../hooks/useGrokAccounts";
 
 export function GrokAccountsSection({ t }: { t: (key: LocaleKey) => string }) {
-  const [accounts, setAccounts] = useState<GrokAccount[]>([]);
-  const [usage, setUsage] = useState<Record<string, GrokAccountUsage>>({});
-  const [busy, setBusy] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const mounted = useRef(false);
-  const load = useCallback(async () => {
-    const next = await grokAccountsList();
-    if (mounted.current) setAccounts(next);
-    const snapshots: Record<string, GrokAccountUsage> = {};
-    await Promise.all(
-      next.map(async (account) => {
-        try {
-          snapshots[account.id] = await grokAccountFetch(account.id);
-        } catch {
-          // Keep the account row even if that login's usage fetch fails.
-        }
-      }),
+  const { accounts, usage, busy, error, reportError, run } = useGrokAccounts();
+  const runOperation = (operation: () => Promise<void>, success?: LocaleKey) =>
+    void run(
+      operation,
+      success ? () => setMessage(t(success)) : undefined,
+      () => setLoggingIn(false),
     );
-    if (mounted.current) setUsage(snapshots);
-  }, []);
-  useEffect(() => {
-    mounted.current = true;
-    const reload = () => {
-      void load().catch((e) => {
-        if (mounted.current) setError(String(e));
-      });
-    };
-    reload();
-    const unlisten = listen("grok-accounts-updated", reload);
-    return () => {
-      mounted.current = false;
-      void unlisten.then((fn) => fn());
-    };
-  }, [load]);
-  const run = async (operation: () => Promise<void>, success?: LocaleKey) => {
-    setBusy(true);
-    setError(null);
-    setMessage(null);
-    try {
-      await operation();
-      await load();
-      if (mounted.current && success) setMessage(t(success));
-    } catch (e) {
-      if (mounted.current) setError(String(e));
-    } finally {
-      if (mounted.current) {
-        setBusy(false);
-        setLoggingIn(false);
-      }
-    }
-  };
   return (
     <section className="provider-detail-section codex-accounts">
       <h4>{t("GrokAccountsTitle")}</h4>
@@ -103,9 +57,9 @@ export function GrokAccountsSection({ t }: { t: (key: LocaleKey) => string }) {
                     className="credential-btn credential-btn--primary"
                     disabled={busy}
                     onClick={() =>
-                      void run(
+                      run(
                         () => grokAccountSwitch(account.id),
-                        "GrokAccountsSwitched",
+                        () => setMessage(t("GrokAccountsSwitched")),
                       )
                     }
                   >
@@ -116,7 +70,7 @@ export function GrokAccountsSection({ t }: { t: (key: LocaleKey) => string }) {
                   <button
                     className="credential-btn credential-btn--secondary"
                     disabled={busy}
-                    onClick={() => void run(grokAccountSaveCurrent)}
+                    onClick={() => runOperation(grokAccountSaveCurrent)}
                   >
                     {t("GrokAccountsSaveCurrent")}
                   </button>
@@ -125,7 +79,7 @@ export function GrokAccountsSection({ t }: { t: (key: LocaleKey) => string }) {
                   <button
                     className="credential-btn credential-btn--danger"
                     disabled={busy}
-                    onClick={() => void run(() => grokAccountRemove(account.id))}
+                    onClick={() => runOperation(() => grokAccountRemove(account.id))}
                   >
                     {t("CodexAccountsRemoveButton")}
                   </button>
@@ -140,7 +94,7 @@ export function GrokAccountsSection({ t }: { t: (key: LocaleKey) => string }) {
         disabled={busy}
         onClick={() => {
           setLoggingIn(true);
-          void run(grokAccountAdd, "GrokAccountsAdded");
+          runOperation(grokAccountAdd, "GrokAccountsAdded");
         }}
       >
         {t("CodexAccountsAddButton")}
@@ -149,7 +103,7 @@ export function GrokAccountsSection({ t }: { t: (key: LocaleKey) => string }) {
         <button
           className="credential-btn credential-btn--secondary"
           onClick={() =>
-            void grokAccountCancelLogin().catch((e) => setError(String(e)))
+            void grokAccountCancelLogin().catch(reportError)
           }
         >
           {t("GrokAccountsCancelLogin")}
@@ -162,6 +116,8 @@ export function GrokAccountsSection({ t }: { t: (key: LocaleKey) => string }) {
 function usageLabel(account: GrokAccount, snapshot?: GrokAccountUsage): string {
   const plan = snapshot?.plan || account.plan || "";
   const percent =
-    snapshot?.usedPercent != null ? `${Math.round(snapshot.usedPercent)}%` : null;
+    snapshot?.usageAvailable && snapshot.usedPercent != null
+      ? `${Math.round(snapshot.usedPercent)}%`
+      : null;
   return [plan, percent].filter(Boolean).join(" · ");
 }

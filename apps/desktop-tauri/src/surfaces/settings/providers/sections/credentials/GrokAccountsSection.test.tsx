@@ -41,6 +41,7 @@ describe("GrokAccountsSection", () => {
     events.listen.mockResolvedValue(() => {});
     mocks.grokAccountsList.mockResolvedValue([current, other]);
     mocks.grokAccountFetch.mockResolvedValue({
+      usageAvailable: true,
       usedPercent: 10,
       plan: "SuperGrok",
       windowMinutes: 10080,
