@@ -653,11 +653,6 @@ impl AntigravityProvider {
         }
     }
 
-    fn offline_or_unavailable() -> Result<ProviderFetchResult, ProviderError> {
-        Self::offline_usage_result()
-            .ok_or_else(|| ProviderError::NotInstalled(AGY_NOT_FOUND_MESSAGE.to_string()))
-    }
-
     /// Resolve the ordered fallback chain once per fetch.
     ///
     /// A successful local probe is terminal. A local probe failure is
@@ -670,6 +665,24 @@ impl AntigravityProvider {
         &self,
         local_result: Result<Option<ProviderFetchResult>, ProviderError>,
         cli_fallback: F,
+    ) -> Result<ProviderFetchResult, ProviderError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Option<ProviderFetchResult>, ProviderError>>,
+    {
+        self.resolve_runtime_fallback_with_offline(
+            local_result,
+            cli_fallback,
+            Self::offline_usage_result(),
+        )
+        .await
+    }
+
+    async fn resolve_runtime_fallback_with_offline<F, Fut>(
+        &self,
+        local_result: Result<Option<ProviderFetchResult>, ProviderError>,
+        cli_fallback: F,
+        offline: Option<ProviderFetchResult>,
     ) -> Result<ProviderFetchResult, ProviderError>
     where
         F: FnOnce() -> Fut,
@@ -708,13 +721,25 @@ impl AntigravityProvider {
         #[cfg(not(windows))]
         let _ = allow_managed_runtime;
 
-        if let Some(result) = cli_fallback().await? {
-            return Ok(result);
+        match cli_fallback().await {
+            Ok(Some(result)) => return Ok(result),
+            Ok(None) => {}
+            Err(error) => {
+                if !matches!(error, ProviderError::AuthRequired) {
+                    tracing::debug!(%error, "structured Antigravity CLI fallback failed");
+                }
+                // A failed CLI attempt is an inconclusive runtime probe. Let
+                // the same offline-history policy handle it rather than
+                // returning the earlier local-probe error directly.
+                failure = Some(error);
+            }
         }
 
         match failure {
-            Some(error) => Self::resolve_probe_failure(error, Self::offline_usage_result()),
-            None => Self::offline_or_unavailable(),
+            Some(error) => Self::resolve_probe_failure(error, offline),
+            None => {
+                offline.ok_or_else(|| ProviderError::NotInstalled(AGY_NOT_FOUND_MESSAGE.into()))
+            }
         }
     }
 

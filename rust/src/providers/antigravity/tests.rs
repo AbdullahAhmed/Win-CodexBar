@@ -661,17 +661,37 @@ async fn unauthenticated_local_and_unavailable_cli_paths_remain_auth_required() 
 #[tokio::test]
 async fn malformed_structured_cli_json_from_fallback_is_a_parse_error() {
     let result = AntigravityProvider::new()
-        .resolve_runtime_fallback(Err(ProviderError::AuthRequired), || async {
-            let error = quota_summary::parse_cli_usage_report(br#"{"status":"SUCCESS""#)
-                .expect_err("malformed JSON must fail parsing");
-            Err(error)
-        })
+        .resolve_runtime_fallback_with_offline(
+            Err(ProviderError::AuthRequired),
+            || async {
+                let error = quota_summary::parse_cli_usage_report(br#"{"status":"SUCCESS""#)
+                    .expect_err("malformed JSON must fail parsing");
+                Err(error)
+            },
+            None,
+        )
         .await;
 
-    assert!(
-        matches!(result, Err(ProviderError::Parse(message)) if message
-        .starts_with("Antigravity CLI usage report:"))
-    );
+    assert!(matches!(result, Err(ProviderError::Parse(_))));
+}
+
+#[tokio::test]
+async fn cli_fallback_error_prefers_offline_history() {
+    let result = AntigravityProvider::new()
+        .resolve_runtime_fallback_with_offline(
+            Err(ProviderError::AuthRequired),
+            || async {
+                Err(ProviderError::Parse(
+                    "Antigravity CLI usage report: malformed JSON".to_string(),
+                ))
+            },
+            Some(offline_result()),
+        )
+        .await
+        .expect("offline history should survive a failed CLI probe");
+
+    assert_eq!(result.source_label, "offline");
+    assert_eq!(result.usage.login_method.as_deref(), Some("offline"));
 }
 
 #[test]
