@@ -100,7 +100,7 @@ fn codex_pending_path_affects_current_window(
         return true;
     }
 
-    if let Some(metadata) = fs::metadata(path_key).ok() {
+    if let Ok(metadata) = fs::metadata(path_key) {
         #[allow(clippy::cast_possible_wrap, reason = "file sizes are clamped to i64")]
         let observed_size = metadata.len().min(i64::MAX as u64) as i64;
         if codex_logical_target_has_unconsumed_tail(observed_size, usage) {
