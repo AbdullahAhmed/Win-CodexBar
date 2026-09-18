@@ -283,9 +283,19 @@ impl ClaudeOAuthFetcher {
     /// without the user having to re-run `claude`.
     pub async fn fetch(&self) -> Result<ProviderFetchResult, ProviderError> {
         let _account_operation = super::accounts::CREDENTIAL_OPERATION.lock().await;
+        let account_manager = super::accounts::AccountManager::new().ok();
+        let saved_account_id = account_manager
+            .as_ref()
+            .and_then(|manager| manager.current_account_id().ok().flatten());
         let (credentials, source) = credentials_store::load_credentials()?;
-        let (credentials, refresh_outcome) =
-            self.ensure_fresh_credentials(credentials, source).await;
+        let (credentials, refresh_outcome) = self
+            .ensure_fresh_credentials(
+                credentials,
+                source,
+                account_manager.as_ref(),
+                saved_account_id.as_deref(),
+            )
+            .await;
         // Still-expired credentials with a terminal/gated refresh state get the
         // honest message instead of a generic "expired" error (or another
         // doomed API call).
@@ -343,31 +353,28 @@ impl ClaudeOAuthFetcher {
         &self,
         mut credentials: ClaudeOAuthCredentials,
         source: credentials_store::CredentialSource,
+        account_manager: Option<&super::accounts::AccountManager>,
+        saved_account_id: Option<&str>,
     ) -> (ClaudeOAuthCredentials, Option<ProviderError>) {
         // Prefer an in-memory refreshed token if it is fresher than what we just
         // read from disk (covers a prior persist that failed to write). Scoped
         // to this credential's own source so a refresh cached for one source
         // (e.g. the credentials file) never shadows another (e.g. an
         // environment-provided token).
-        if let Some(cached) = credentials_store::cached_refreshed_if_fresher(&source, &credentials)
+        let recovered_from_cache = if let Some(cached) =
+            credentials_store::cached_refreshed_if_fresher(&source, &credentials)
         {
             credentials = cached;
-        }
+            true
+        } else {
+            false
+        };
 
         if !credentials.is_expired() {
-            return (credentials, None);
-        }
-
-        // The credentials file is shared with the Claude Code CLI, which also
-        // refreshes it. Re-read right before hitting the network: if the CLI (or
-        // a concurrent poll) already refreshed the on-disk token, adopt it rather
-        // than rotating a second refresh token against the same account.
-        if let Ok((disk, disk_source)) = credentials_store::load_credentials() {
-            if !disk.is_expired() {
-                credentials_store::store_refreshed(&disk_source, &disk);
-                return (disk, None);
+            if recovered_from_cache {
+                self.persist_refreshed_state(&credentials, account_manager, saved_account_id);
             }
-            credentials = disk;
+            return (credentials, None);
         }
 
         let Some(refresh_token) = credentials.refresh_token.clone() else {
@@ -391,28 +398,11 @@ impl ClaudeOAuthFetcher {
             return (credentials, Some(error));
         }
 
-        let account_manager = super::accounts::AccountManager::new().ok();
-        let saved_account_id = account_manager
-            .as_ref()
-            .and_then(|manager| manager.current_account_id().ok().flatten());
-
         match refresh::refresh_access_token(&self.client, &refresh_token, &credentials).await {
             Ok(refreshed) => {
                 clear_refresh_backoff(&source);
                 credentials_store::store_refreshed(&source, &refreshed);
-                let persisted = credentials_store::persist_refreshed_credentials(&refreshed);
-                if let Err(err) = persisted {
-                    tracing::debug!("Claude OAuth token refreshed but could not persist: {err}");
-                } else if let (Some(manager), Some(account_id)) =
-                    (account_manager.as_ref(), saved_account_id.as_deref())
-                {
-                    let refreshed_oauth = Self::refreshed_oauth_value(&refreshed);
-                    if let Err(err) = manager.update_saved_oauth(account_id, &refreshed_oauth) {
-                        tracing::debug!(
-                            "Claude OAuth token refreshed but saved account store was not updated: {err}"
-                        );
-                    }
-                }
+                self.persist_refreshed_state(&refreshed, account_manager, saved_account_id);
                 tracing::debug!("Refreshed expired Claude OAuth token");
                 (refreshed, None)
             }
@@ -429,6 +419,30 @@ impl ClaudeOAuthFetcher {
                 record_refresh_backoff(&source, failure.kind, now, Some(refresh_token.as_str()));
                 (credentials, Some(error))
             }
+        }
+    }
+
+    /// Reconcile the saved account before the live credentials file. If either
+    /// write fails, the in-memory refreshed value remains newer than disk and
+    /// the next poll retries this same path without rotating the token again.
+    fn persist_refreshed_state(
+        &self,
+        refreshed: &ClaudeOAuthCredentials,
+        account_manager: Option<&super::accounts::AccountManager>,
+        saved_account_id: Option<&str>,
+    ) {
+        if let (Some(manager), Some(account_id)) = (account_manager, saved_account_id) {
+            let refreshed_oauth = Self::refreshed_oauth_value(refreshed);
+            if let Err(err) = manager.update_saved_oauth(account_id, &refreshed_oauth) {
+                tracing::debug!(
+                    "Claude OAuth token refreshed but saved account store was not updated: {err}"
+                );
+                return;
+            }
+        }
+
+        if let Err(err) = credentials_store::persist_refreshed_credentials(refreshed) {
+            tracing::debug!("Claude OAuth token refreshed but could not persist: {err}");
         }
     }
 

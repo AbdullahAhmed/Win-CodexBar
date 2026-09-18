@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::secure_file;
+use crate::{atomic_file, secure_file};
 
 pub use login::{begin_login, cancel_login, cleanup_abandoned_logins, login, require_cli_closed};
 
@@ -130,7 +130,7 @@ impl AccountManager {
                 &temp,
                 &serde_json::to_string(store).map_err(io::Error::other)?,
             )?;
-            std::fs::rename(&temp, &path)
+            atomic_file::replace_staged(&temp, &path)
         })();
         if result.is_err() {
             let _cleanup = std::fs::remove_file(temp);
@@ -174,10 +174,11 @@ impl AccountManager {
     }
 
     pub(super) fn current_account_id(&self) -> io::Result<Option<String>> {
-        let Some(current) = read_login(&self.config_dir, &self.config_file)? else {
+        let config = read_object(&self.config_file)?;
+        let Some(identity) = config.get("oauthAccount").filter(|value| !value.is_null()) else {
             return Ok(None);
         };
-        current.id().map(Some)
+        identity_id(identity).map(Some)
     }
 
     /// Update the already-saved account identified before a token refresh.
@@ -267,15 +268,20 @@ impl AccountManager {
                 return Err(e);
             }
         };
-        if let Err(e) = std::fs::rename(&staged_credentials, &credential_path) {
+        if let Err(e) = atomic_file::replace_staged(&staged_credentials, &credential_path) {
             let _cleanup = std::fs::remove_file(staged_credentials);
             let _cleanup = std::fs::remove_file(staged_config);
             return Err(e);
         }
-        if let Err(e) = std::fs::rename(&staged_config, &self.config_file) {
+        if let Err(e) = atomic_file::replace_staged(&staged_config, &self.config_file) {
             let _cleanup = std::fs::remove_file(staged_config);
-            let restored = stage_json(&credential_path, &old_credentials)
-                .and_then(|p| std::fs::rename(p, &credential_path));
+            let restored = stage_json(&credential_path, &old_credentials).and_then(|p| {
+                let result = atomic_file::replace_staged(&p, &credential_path);
+                if result.is_err() {
+                    let _cleanup = std::fs::remove_file(p);
+                }
+                result
+            });
             return Err(io::Error::other(if restored.is_ok() {
                 format!("Could not update Claude identity; the previous login was restored: {e}")
             } else {
