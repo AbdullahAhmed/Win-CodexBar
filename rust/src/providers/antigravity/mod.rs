@@ -21,6 +21,7 @@ use futures::{StreamExt, stream};
 use regex_lite::Regex;
 #[cfg(windows)]
 use std::ffi::OsString;
+use std::future::Future;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
@@ -449,7 +450,7 @@ impl AntigravityProvider {
         ProviderFetchResult::new(Self::with_cadence_labels(usage), source_label)
     }
 
-    async fn try_print_usage_fallback(&self) -> Option<ProviderFetchResult> {
+    async fn try_print_usage_fallback(&self) -> Result<Option<ProviderFetchResult>, ProviderError> {
         cli_fallback::try_fetch(Self::locate_agy_binary()).await
     }
 
@@ -652,20 +653,51 @@ impl AntigravityProvider {
         }
     }
 
-    fn offline_or_unavailable() -> Result<ProviderFetchResult, ProviderError> {
-        Self::offline_usage_result()
-            .ok_or_else(|| ProviderError::NotInstalled(AGY_NOT_FOUND_MESSAGE.to_string()))
+    /// Resolve the ordered fallback chain once per fetch.
+    ///
+    /// A successful local probe is terminal. A local probe failure is
+    /// inconclusive, including the typed `AuthRequired` produced by the
+    /// affected local API/CSRF path, so the structured CLI report may still
+    /// recover live usage. When no local runtime was found, a managed runtime
+    /// gets the first fallback attempt; its own `AuthRequired` remains
+    /// terminal and never starts another CLI process.
+    async fn resolve_runtime_fallback<F, Fut>(
+        &self,
+        local_result: Result<Option<ProviderFetchResult>, ProviderError>,
+        cli_fallback: F,
+    ) -> Result<ProviderFetchResult, ProviderError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Option<ProviderFetchResult>, ProviderError>>,
+    {
+        self.resolve_runtime_fallback_with_offline(
+            local_result,
+            cli_fallback,
+            Self::offline_usage_result(),
+        )
+        .await
     }
 
-    /// Resolve the ordered fallback chain once per fetch. The local probe may
-    /// be followed by the managed runtime and CLI paths, but each path owns a
-    /// single outcome and the CLI fallback is never repeated by an error arm.
-    async fn resolve_runtime_fallback(
+    async fn resolve_runtime_fallback_with_offline<F, Fut>(
         &self,
-        initial_error: Option<ProviderError>,
-        allow_managed_runtime: bool,
-    ) -> Result<ProviderFetchResult, ProviderError> {
-        let mut failure = initial_error;
+        local_result: Result<Option<ProviderFetchResult>, ProviderError>,
+        cli_fallback: F,
+        offline: Option<ProviderFetchResult>,
+    ) -> Result<ProviderFetchResult, ProviderError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Option<ProviderFetchResult>, ProviderError>>,
+    {
+        let (mut failure, allow_managed_runtime) = match local_result {
+            Ok(Some(result)) => return Ok(result),
+            Ok(None) => (None, true),
+            Err(error) => {
+                if !matches!(error, ProviderError::AuthRequired) {
+                    tracing::debug!(%error, "Antigravity local probe failed");
+                }
+                (Some(error), false)
+            }
+        };
 
         #[cfg(windows)]
         if allow_managed_runtime {
@@ -686,15 +718,28 @@ impl AntigravityProvider {
             }
         }
 
-        if !matches!(failure.as_ref(), Some(ProviderError::AuthRequired))
-            && let Some(result) = self.try_print_usage_fallback().await
-        {
-            return Ok(result);
+        #[cfg(not(windows))]
+        let _ = allow_managed_runtime;
+
+        match cli_fallback().await {
+            Ok(Some(result)) => return Ok(result),
+            Ok(None) => {}
+            Err(error) => {
+                if !matches!(error, ProviderError::AuthRequired) {
+                    tracing::debug!(%error, "structured Antigravity CLI fallback failed");
+                }
+                // A failed CLI attempt is an inconclusive runtime probe. Let
+                // the same offline-history policy handle it rather than
+                // returning the earlier local-probe error directly.
+                failure = Some(error);
+            }
         }
 
         match failure {
-            Some(error) => Self::resolve_probe_failure(error, Self::offline_usage_result()),
-            None => Self::offline_or_unavailable(),
+            Some(error) => Self::resolve_probe_failure(error, offline),
+            None => {
+                offline.ok_or_else(|| ProviderError::NotInstalled(AGY_NOT_FOUND_MESSAGE.into()))
+            }
         }
     }
 
@@ -847,18 +892,9 @@ impl Provider for AntigravityProvider {
 
         tracing::debug!("Fetching Antigravity usage via local probe");
 
-        match self.fetch_user_status().await {
-            Ok(Some(result)) => Ok(result),
-            Ok(None) => self.resolve_runtime_fallback(None, true).await,
-            Err(error) => {
-                // The local probe is inconclusive (e.g. PowerShell unavailable);
-                // preserve offline history before surfacing the probe error.
-                if !matches!(error, ProviderError::AuthRequired) {
-                    tracing::debug!(%error, "Antigravity local probe failed");
-                }
-                self.resolve_runtime_fallback(Some(error), false).await
-            }
-        }
+        let local_result = self.fetch_user_status().await;
+        self.resolve_runtime_fallback(local_result, || self.try_print_usage_fallback())
+            .await
     }
 
     fn available_sources(&self) -> Vec<SourceMode> {
