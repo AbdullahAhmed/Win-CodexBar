@@ -319,6 +319,7 @@ pub fn is_unpriced_codex_routing_model(model: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::CodexSessionLineage;
 
     fn entry(days: &[&str], parsed: Option<i64>, size: i64) -> CostUsageFileUsage {
         let mut day_map: HashMap<String, HashMap<String, Vec<i64>>> = HashMap::new();

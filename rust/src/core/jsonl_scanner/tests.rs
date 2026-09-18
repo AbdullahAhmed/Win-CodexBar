@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::CodexSessionLineage;
 use chrono::TimeZone;
 use std::io::Write;
 
@@ -1153,6 +1154,7 @@ fn catch_up_snapshot_preserves_established_codex_cost_and_tokens() {
             codex_last_token_timestamp: None,
             codex_session_id: None,
             codex_forked_from_id: None,
+            codex_lineage: CodexSessionLineage::Root,
             codex_fork_timestamp: None,
             codex_unresolved_fork_parent: false,
         },
@@ -1172,6 +1174,7 @@ fn catch_up_snapshot_preserves_established_codex_cost_and_tokens() {
             codex_last_token_timestamp: None,
             codex_session_id: None,
             codex_forked_from_id: None,
+            codex_lineage: CodexSessionLineage::Root,
             codex_fork_timestamp: None,
             codex_unresolved_fork_parent: false,
         },
@@ -1347,6 +1350,7 @@ fn save_cache_persists_small_codex_artifact() {
                 codex_last_token_timestamp: None,
                 codex_session_id: None,
                 codex_forked_from_id: None,
+                codex_lineage: CodexSessionLineage::Root,
                 codex_fork_timestamp: None,
                 codex_unresolved_fork_parent: false,
             },
@@ -1415,6 +1419,7 @@ fn save_cache_refuses_non_bounded_provider_oversize() {
             codex_last_token_timestamp: None,
             codex_session_id: None,
             codex_forked_from_id: None,
+            codex_lineage: CodexSessionLineage::Root,
             codex_fork_timestamp: None,
             codex_unresolved_fork_parent: false,
         },
@@ -1452,6 +1457,7 @@ fn save_cache_refusal_removes_preexisting_destination_artifact() {
             codex_last_token_timestamp: None,
             codex_session_id: None,
             codex_forked_from_id: None,
+            codex_lineage: CodexSessionLineage::Root,
             codex_fork_timestamp: None,
             codex_unresolved_fork_parent: false,
         },

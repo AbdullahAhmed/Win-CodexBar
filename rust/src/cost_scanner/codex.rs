@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::CodexSessionLineage;
 
 mod cache_days;
 mod logical_target;
@@ -664,6 +665,7 @@ impl CostScanner {
                 codex_last_token_timestamp: parse_result.last_token_timestamp,
                 codex_session_id,
                 codex_forked_from_id,
+                codex_lineage,
                 codex_fork_timestamp,
                 codex_unresolved_fork_parent: false,
             },
