@@ -100,26 +100,27 @@ fn codex_pending_path_affects_current_window(
         return true;
     }
 
-    if let Ok(metadata) = fs::metadata(path_key) {
-        #[allow(clippy::cast_possible_wrap, reason = "file sizes are clamped to i64")]
-        let observed_size = metadata.len().min(i64::MAX as u64) as i64;
-        if codex_logical_target_has_unconsumed_tail(observed_size, usage) {
-            return true;
-        }
-        let identity_matches = match (
-            usage.codex_file_identity.as_ref(),
-            JsonlScanner::codex_file_identity(Path::new(path_key), &metadata).as_ref(),
-        ) {
-            (Some(expected), Some(actual)) => expected == actual,
-            (Some(_), None) => false,
-            (None, _) => true,
-        };
-        if !identity_matches
-            || usage.mtime_unix_ms != system_time_to_unix_ms(metadata.modified().ok())
-            || usage.size != observed_size
-        {
-            return true;
-        }
+    let Ok(metadata) = fs::metadata(path_key) else {
+        return true;
+    };
+    #[allow(clippy::cast_possible_wrap, reason = "file sizes are clamped to i64")]
+    let observed_size = metadata.len().min(i64::MAX as u64) as i64;
+    if codex_logical_target_has_unconsumed_tail(observed_size, usage) {
+        return true;
+    }
+    let identity_matches = match (
+        usage.codex_file_identity.as_ref(),
+        JsonlScanner::codex_file_identity(Path::new(path_key), &metadata).as_ref(),
+    ) {
+        (Some(expected), Some(actual)) => expected == actual,
+        (Some(_), None) => false,
+        (None, _) => true,
+    };
+    if !identity_matches
+        || usage.mtime_unix_ms != system_time_to_unix_ms(metadata.modified().ok())
+        || usage.size != observed_size
+    {
+        return true;
     }
 
     false
@@ -253,9 +254,18 @@ mod tests {
 
     #[test]
     fn historical_pending_work_keeps_current_window_publishable() {
-        let old_path = r"C:\sessions\old.jsonl";
-        let current_path = r"C:\sessions\current.jsonl";
-        let cache = historical_pending_cache(old_path, current_path);
+        let root = tempfile::tempdir().unwrap();
+        let old_path = root.path().join("old.jsonl");
+        let current_path = root.path().join("current.jsonl");
+        std::fs::write(&old_path, vec![0_u8; 100]).unwrap();
+        std::fs::write(&current_path, vec![0_u8; 100]).unwrap();
+        let old_key = old_path.to_string_lossy().into_owned();
+        let current_key = current_path.to_string_lossy().into_owned();
+        let mut cache = historical_pending_cache(&old_key, &current_key);
+        let metadata = std::fs::metadata(&old_path).unwrap();
+        let old_usage = cache.files.get_mut(&old_key).unwrap();
+        old_usage.mtime_unix_ms = system_time_to_unix_ms(metadata.modified().ok());
+        old_usage.size = i64::try_from(metadata.len()).unwrap();
         let range = active_range();
 
         assert!(codex_current_window_is_established(&cache, &range));
@@ -263,6 +273,17 @@ mod tests {
         let report = codex_current_window_report(&cache, &range).unwrap();
         assert_eq!(report.input_tokens, 100);
         assert_eq!(report.sessions_count, 1);
+    }
+
+    #[test]
+    fn metadata_failure_blocks_historical_pending_publication() {
+        let old_path = r"C:\sessions\missing-old.jsonl";
+        let current_path = r"C:\sessions\current.jsonl";
+        let cache = historical_pending_cache(old_path, current_path);
+        let range = active_range();
+
+        assert!(!codex_current_window_is_established(&cache, &range));
+        assert!(codex_current_window_report(&cache, &range).is_none());
     }
 
     #[test]

@@ -31,11 +31,12 @@ pub(super) fn scan_codex_detailed_with_cache(
         CodexPendingScanDisposition::before_scan(&cache, scanner.options.is_app_driven()),
         CodexPendingScanDisposition::PreservePause
     ) {
-        return (
-            paused_codex_summary(&cache, start_date, today, &range),
-            stats,
-            cache,
-        );
+        let mut summary = paused_codex_summary(&cache, start_date, today, &range);
+        append_pi_compatible_costs(scanner, &mut summary, cancel);
+        summary.history_coverage_established =
+            summary.history_coverage_established && !is_cancelled(cancel);
+        summary.known_zero = summary.history_coverage_established && summary.sessions_count == 0;
+        return (summary, stats, cache);
     }
     if scanner.options.is_app_driven() || pending_scan.is_incompatible {
         cache.codex_scan_pause_reason = None;
@@ -73,16 +74,7 @@ pub(super) fn scan_codex_detailed_with_cache(
 
         // Pi-compatible sessions are outside the Codex JSONL cache.
         // Skip when tests inject sessions roots — avoid scanning the real home tree.
-        if scanner.sessions_dirs_override.is_none() {
-            let mut seen_pi = HashSet::new();
-            crate::pi_session_cost::scan_pi_compatible_into(
-                &mut summary,
-                crate::pi_session_cost::PiMappedProvider::Codex,
-                scanner.days,
-                cancel,
-                &mut seen_pi,
-            );
-        }
+        append_pi_compatible_costs(scanner, &mut summary, cancel);
         summary.history_coverage_established =
             cached_history_coverage_established && !is_cancelled(cancel);
         // Upstream 0.50.1 #2932: debounce cache hit with coverage
@@ -330,7 +322,6 @@ pub(super) fn scan_codex_detailed_with_cache(
         .then(|| codex_current_window_report(&cache, &range))
         .flatten();
     let published_current_window = current_window_report.is_some();
-    let using_cached_report = preserving_previous_report || published_current_window;
     summary = if let Some(report) = current_window_report {
         let mut summary = summary_from_cached_report(&report, start_date, today);
         summary.history_coverage_established = true;
@@ -348,19 +339,7 @@ pub(super) fn scan_codex_detailed_with_cache(
     // OMP / pi-compatible agent sessions (upstream #2269). Dedup by entry id.
     // Skip when tests inject sessions roots — avoid scanning the real home tree.
     // A16 --provider-native-only: skip pi/OMP mirrors when disabled.
-    if !using_cached_report
-        && scanner.sessions_dirs_override.is_none()
-        && scanner.options.include_pi_sessions
-    {
-        let mut seen_pi = HashSet::new();
-        crate::pi_session_cost::scan_pi_compatible_into(
-            &mut summary,
-            crate::pi_session_cost::PiMappedProvider::Codex,
-            scanner.days,
-            cancel,
-            &mut seen_pi,
-        );
-    }
+    append_pi_compatible_costs(scanner, &mut summary, cancel);
 
     // v0.56.1 #3279: only publish authoritative coverage after all
     // cancellable scan work, including Pi/OMP, has completed. Persistence
@@ -377,4 +356,23 @@ pub(super) fn scan_codex_detailed_with_cache(
         && (!cache.codex_scan_incomplete || published_current_window);
 
     (summary, stats, cache)
+}
+
+fn append_pi_compatible_costs(
+    scanner: &CostScanner,
+    summary: &mut CostSummary,
+    cancel: Option<&AtomicBool>,
+) {
+    if !scanner.options.include_pi_sessions || scanner.sessions_dirs_override.is_some() {
+        return;
+    }
+
+    let mut seen_pi = HashSet::new();
+    crate::pi_session_cost::scan_pi_compatible_into(
+        summary,
+        crate::pi_session_cost::PiMappedProvider::Codex,
+        scanner.days,
+        cancel,
+        &mut seen_pi,
+    );
 }
