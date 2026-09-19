@@ -57,7 +57,34 @@ impl CostUsagePricing {
             .and_then(|snapshot| {
                 claude_routed_pricing::resolve_with_snapshot(model, normalized, snapshot)
             })
-            .map(ClaudePricingResolution::ModelsDev)
+            .map(|pricing| {
+                ClaudePricingResolution::ModelsDev(Self::apply_bundled_openai_threshold(
+                    model, normalized, pricing,
+                ))
+            })
+    }
+
+    /// Claude Code may emit OpenAI models even though the transcript is being
+    /// scanned through the Claude cost path. Keep the catalog's rates, but use
+    /// the bundled Codex boundary when the model is a known long-context Codex
+    /// model. Unknown OpenAI rows retain the catalog-provided boundary.
+    fn apply_bundled_openai_threshold(
+        model: &str,
+        normalized: &str,
+        mut pricing: models_dev_pricing::DynamicModelPricing,
+    ) -> models_dev_pricing::DynamicModelPricing {
+        let Some((provider, lookup_model)) =
+            claude_routed_pricing::models_dev_target(model, normalized.to_string())
+        else {
+            return pricing;
+        };
+        if provider == "openai"
+            && let Some(threshold) =
+                super::codex_pricing::bundled_long_context_threshold(&lookup_model)
+        {
+            pricing.threshold_tokens = Some(threshold);
+        }
+        pricing
     }
 
     /// Calculate cost from a previously resolved Claude pricing source.
@@ -173,5 +200,66 @@ impl CostUsagePricing {
             return Some(pricing.input_cost_per_token);
         }
         claude_routed_pricing::input_cost_per_token(model, Self::normalize_claude_model(model))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn catalog_pricing(threshold_tokens: Option<u64>) -> models_dev_pricing::DynamicModelPricing {
+        models_dev_pricing::DynamicModelPricing {
+            input_cost_per_token: 2e-6,
+            output_cost_per_token: 4e-6,
+            cache_read_input_cost_per_token: Some(0.25e-6),
+            cache_write_input_cost_per_token: Some(3e-6),
+            threshold_tokens,
+            input_cost_per_token_above_threshold: Some(7e-6),
+            output_cost_per_token_above_threshold: Some(11e-6),
+            cache_read_input_cost_per_token_above_threshold: Some(0.5e-6),
+            cache_write_input_cost_per_token_above_threshold: Some(9e-6),
+        }
+    }
+
+    #[test]
+    fn openai_long_context_uses_the_bundled_codex_boundary_and_catalog_rates() {
+        let pricing = CostUsagePricing::apply_bundled_openai_threshold(
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            catalog_pricing(Some(200_000)),
+        );
+
+        assert_eq!(pricing.threshold_tokens, Some(272_000));
+        assert_eq!(pricing.input_cost_per_token, 2e-6);
+        assert_eq!(pricing.output_cost_per_token_above_threshold, Some(11e-6));
+    }
+
+    #[test]
+    fn aliases_and_explicit_openai_routes_share_the_bundled_boundary() {
+        for (model, normalized) in [("gpt-5.6", "gpt-5.6-sol"), ("openai/gpt-5.6", "gpt-5.6")] {
+            let pricing = CostUsagePricing::apply_bundled_openai_threshold(
+                model,
+                normalized,
+                catalog_pricing(Some(200_000)),
+            );
+            assert_eq!(pricing.threshold_tokens, Some(272_000), "{model}");
+        }
+    }
+
+    #[test]
+    fn non_openai_and_unknown_openai_models_keep_catalog_boundaries() {
+        let anthropic = CostUsagePricing::apply_bundled_openai_threshold(
+            "anthropic/threshold-fixture",
+            "anthropic/threshold-fixture",
+            catalog_pricing(Some(200_000)),
+        );
+        let unknown_openai = CostUsagePricing::apply_bundled_openai_threshold(
+            "openai/threshold-fixture",
+            "openai/threshold-fixture",
+            catalog_pricing(Some(200_000)),
+        );
+
+        assert_eq!(anthropic.threshold_tokens, Some(200_000));
+        assert_eq!(unknown_openai.threshold_tokens, Some(200_000));
     }
 }

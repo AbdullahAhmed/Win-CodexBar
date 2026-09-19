@@ -5,6 +5,18 @@ pub(super) const CODEX_LONG_CONTEXT_THRESHOLD: u64 = 272_000;
 const CODEX_ASTRA_CACHE_WRITE_RATE: f64 = 1.25e-5;
 const CODEX_ASTRA_LONG_CACHE_WRITE_RATE: f64 = 2.5e-5;
 
+/// Return the bundled long-context boundary for a known Codex model.
+///
+/// Claude Code can record OpenAI models in its transcript stream. The
+/// models.dev catalog supplies the rates for those rows, but the bundled
+/// Codex table is the source of truth for the OpenAI context boundary.
+pub(super) fn bundled_long_context_threshold(model: &str) -> Option<u64> {
+    let key = CostUsagePricing::normalize_codex_model(model);
+    CODEX_PRICING
+        .get(key.as_str())
+        .and_then(|pricing| pricing.long_context.map(|_| CODEX_LONG_CONTEXT_THRESHOLD))
+}
+
 pub(super) fn codex_cost_from_rates(
     input_tokens: u64,
     cached_input_tokens: u64,
