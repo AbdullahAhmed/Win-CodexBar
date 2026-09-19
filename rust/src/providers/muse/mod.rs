@@ -7,6 +7,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use futures::StreamExt;
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use serde_json::Value;
@@ -101,14 +102,29 @@ impl MuseProvider {
             ));
         }
 
-        let body = response.bytes().await.map_err(ProviderError::Network)?;
-        if body.len() > MAX_RESPONSE_BYTES {
-            return Err(ProviderError::Parse(
-                "Muse Code returned an oversized response.".to_string(),
-            ));
-        }
+        let body = read_bounded_body(response).await?;
         parse_response(&body)
     }
+}
+
+async fn read_bounded_body(response: reqwest::Response) -> Result<Vec<u8>, ProviderError> {
+    let mut stream = response.bytes_stream();
+    let mut body = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(ProviderError::Network)?;
+        append_bounded_body(&mut body, &chunk)?;
+    }
+    Ok(body)
+}
+
+fn append_bounded_body(body: &mut Vec<u8>, chunk: &[u8]) -> Result<(), ProviderError> {
+    if chunk.len() > MAX_RESPONSE_BYTES.saturating_sub(body.len()) {
+        return Err(ProviderError::Parse(
+            "Muse Code returned an oversized response.".to_string(),
+        ));
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
 }
 
 impl Default for MuseProvider {
@@ -358,14 +374,18 @@ fn optional_text(value: Option<&Value>, field: &str) -> Result<Option<String>, P
 }
 
 fn positive_safe_minutes(value: f64) -> Result<u32, ProviderError> {
-    if value <= 0.0 || value.fract() != 0.0 || value > u32::MAX as f64 {
+    if !value.is_finite() || value <= 0.0 {
+        return Err(parse_failure("window_duration_mins"));
+    }
+    let rounded = value.round();
+    if rounded <= 0.0 || rounded > u32::MAX as f64 {
         return Err(parse_failure("window_duration_mins"));
     }
     #[allow(
         clippy::cast_possible_truncation,
         reason = "value is bounded to u32 range"
     )]
-    let value = value as u32;
+    let value = rounded as u32;
     Ok(value)
 }
 
@@ -607,5 +627,19 @@ mod tests {
                 .to_string()
                 .contains("unavailable")
         );
+    }
+
+    #[test]
+    fn fractional_window_duration_rounds_safely() {
+        let mut payload = success_payload();
+        payload["subs_usage"]["window"]["window_duration_mins"] = serde_json::json!(300.6);
+        let result = parse_response(&serde_json::to_vec(&payload).unwrap()).unwrap();
+        assert_eq!(result.usage.primary.window_minutes, Some(301));
+    }
+
+    #[test]
+    fn streaming_response_cap_rejects_oversized_chunk_without_content_length() {
+        let mut body = vec![0_u8; MAX_RESPONSE_BYTES];
+        assert!(append_bounded_body(&mut body, &[0]).is_err());
     }
 }
