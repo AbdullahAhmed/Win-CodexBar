@@ -568,7 +568,7 @@ mod tests {
             result.usage.account_email.as_deref(),
             Some("muse@example.com")
         );
-        assert_eq!(result.usage.login_method.as_deref(), Some("Pro"));
+        assert_eq!(result.usage.login_method.as_deref(), Some("Muse login"));
         let details: Vec<_> = result.display_details().collect();
         assert_eq!(details.len(), 3);
         assert!(
