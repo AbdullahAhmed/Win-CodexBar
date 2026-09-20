@@ -138,7 +138,8 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
             showResetWhenExhausted: settings.showResetWhenExhausted,
             showPace: settings.showPace ?? true,
             showAsUsed: settings.showAsUsed,
-            compactMetrics: selectedProviderId === null,
+            compactOverview:
+              selectedProviderId === null && settings.overviewLayout !== "detailed",
             costSummaryDisplayStyle: settings.costSummaryDisplayStyle,
           }}
           accentColor={settings.providerAccentColors[p.providerId]}

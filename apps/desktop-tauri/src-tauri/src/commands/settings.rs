@@ -35,6 +35,7 @@ pub struct SettingsUpdate {
     pub reset_time_relative: Option<bool>,
     pub show_reset_when_exhausted: Option<bool>,
     pub menu_bar_display_mode: Option<String>,
+    pub overview_layout: Option<String>,
     pub hide_personal_info: Option<bool>,
     pub update_channel: Option<String>,
     pub auto_download_updates: Option<bool>,
@@ -125,6 +126,7 @@ impl SettingsUpdate {
             || self.show_as_used.is_some()
             || self.reset_time_relative.is_some()
             || self.menu_bar_display_mode.is_some()
+            || self.overview_layout.is_some()
             || self.provider_metrics.is_some()
             || self.codex_spark_usage_visible.is_some()
             || self.copilot_seat_credit_entitlement.is_some()
@@ -225,6 +227,13 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.menu_bar_display_mode.clone() {
             settings.menu_bar_display_mode = v;
+        }
+        if let Some(v) = self.overview_layout.as_deref()
+            && !v.trim().is_empty()
+        {
+            // Shared normalizer: trims/case-folds known values, falls back to
+            // "compact" for anything unknown (same tolerance as settings load).
+            settings.overview_layout = codexbar::settings::normalize_overview_layout(v);
         }
         if let Some(v) = self.window_scale_percent {
             settings.window_scale_percent = codexbar::settings::clamp_window_scale_percent(v);
