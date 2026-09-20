@@ -3,7 +3,6 @@ import type {
   CostSummaryDisplayStyle,
   DailyCostPoint,
   PaceSnapshot,
-  ProviderInventoryItem,
   ProviderChartData,
   ProviderLocalUsageSummary,
   ProviderUsageSnapshot,
@@ -20,6 +19,7 @@ import { formatEta } from "../lib/formatEta";
 import type { LocaleKey } from "../i18n/keys";
 import { paceCategory } from "../surfaces/tray/paceCategory";
 import { SimpleBarChart, StackedBarChart } from "./MiniBarChart";
+import { InventoryItemRow } from "./InventoryRows";
 import { getPaceBudget, type PaceBudget } from "../lib/paceBudget";
 import PaceDetailsChart from "./PaceDetailsChart";
 
@@ -558,6 +558,8 @@ export default function MenuCardDetails({
               key={item.id}
               item={item}
               resetTimeRelative={display.resetTimeRelative}
+              lineClassName="menu-card__cost-line"
+              expiryClassName="menu-card__cost-line--muted"
             />
           ))}
         </section>
@@ -736,28 +738,3 @@ export default function MenuCardDetails({
   );
 }
 
-function InventoryItemRow({
-  item,
-  resetTimeRelative,
-}: {
-  item: ProviderInventoryItem;
-  resetTimeRelative: boolean;
-}) {
-  const formattedExpiry = useFormattedResetTime(
-    item.nextExpiresAt,
-    null,
-    resetTimeRelative,
-    "expires",
-  );
-
-  return (
-    <div className="menu-card__cost-line">
-      <span>{item.title}: {item.availableCount} available</span>
-      {formattedExpiry && (
-        <span className="menu-card__cost-line--muted">
-          {formattedExpiry}
-        </span>
-      )}
-    </div>
-  );
-}
