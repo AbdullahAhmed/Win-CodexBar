@@ -261,6 +261,11 @@ export interface SettingsSnapshot {
   claudeAllowReadingClaudeCodeCredentials: boolean;
   /** Alibaba Token Plan region: cn | intl | cn-personal | intl-personal. */
   alibabaTokenPlanRegion: string;
+  /**
+   * Optional user-entered Copilot seat AI-credit allowance.
+   * Snapshot-side null and absent are equivalent.
+   */
+  copilotSeatCreditEntitlement?: number | null;
   /** Optional work-week length [2,6] for session-equivalent weekly forecast. */
   weeklyProgressWorkDays?: number | null;
   /** How cost is rendered on provider cards (#2976). */
@@ -341,6 +346,8 @@ export interface SettingsUpdate {
   promoteTrayIcon?: boolean;
   claudeDailyRoutinesUsageVisible?: boolean;
   alibabaTokenPlanRegion?: string;
+  /** Optional user-entered Copilot seat AI-credit allowance; null clears it. */
+  copilotSeatCreditEntitlement?: number | null;
   weeklyProgressWorkDays?: number | null;
   costSummaryDisplayStyle?: CostSummaryDisplayStyle;
   openCodexUsageLogsEnabled?: boolean;
@@ -626,6 +633,8 @@ export interface ProviderUsageSnapshot {
     id: string;
     title: string;
     window: RateWindowSnapshot;
+    /** Provider-declared fallback lane; only fills in without a core quota window. */
+    fallbackLane?: boolean;
   }>;
   /** Display-only discrete provider inventory; never used as quota math. */
   inventory?: ProviderInventoryItem[];
@@ -904,6 +913,8 @@ export interface ProviderDetail {
     id: string;
     title: string;
     window: RateWindowSnapshot;
+    /** Provider-declared fallback lane; only fills in without a core quota window. */
+    fallbackLane?: boolean;
   }>;
   /** Display-only discrete provider inventory; never used as quota math. */
   inventory?: ProviderInventoryItem[];

@@ -954,6 +954,39 @@ impl Settings {
         self.provider_config_mut(id).workspace_id = Some(value.into());
     }
 
+    /// Optional user-entered allowance for Copilot seat AI credits.
+    ///
+    /// GitHub reports the absolute `credits_used` counter but does not expose
+    /// a documented included-credit ceiling, so callers must keep an absent
+    /// or non-positive value as unknown rather than inventing a denominator.
+    ///
+    /// This setter is the single owner of the positive-finite invariant:
+    /// invalid values are rejected instead of silently dropped, while the
+    /// getter keeps defensively filtering values persisted by older builds.
+    pub fn seat_credit_entitlement(&self, id: ProviderId) -> Option<f64> {
+        self.provider_configs
+            .get(&id)
+            .and_then(|config| config.seat_credit_entitlement)
+            .filter(|value| value.is_finite() && *value > 0.0)
+    }
+
+    pub fn set_seat_credit_entitlement(
+        &mut self,
+        id: ProviderId,
+        value: Option<f64>,
+    ) -> Result<(), String> {
+        if let Some(value) = value
+            && (!value.is_finite() || value <= 0.0)
+        {
+            return Err(
+                "Copilot seat AI-credit allowance must be a finite number greater than zero"
+                    .to_string(),
+            );
+        }
+        self.provider_config_mut(id).seat_credit_entitlement = value;
+        Ok(())
+    }
+
     /// Wayfinder gateway URL, defaulting to the local loopback gateway.
     pub fn gateway_url(&self, id: ProviderId) -> &str {
         self.provider_configs
