@@ -218,6 +218,33 @@ impl JsonlScanner {
             || cached.mtime_unix_ms == codex_source_mtime_unix_ms(metadata.modified().ok())
     }
 
+    /// Whether the cached prefix needs source-row pricing recovery.
+    ///
+    /// A normal append keeps the native parser's model attribution. Recovery
+    /// is reserved for a cached prefix whose pricing evidence no longer agrees
+    /// with the current source; only that path leaves appended rows
+    /// intentionally unattributed until their pricing is validated.
+    pub(crate) fn codex_source_row_cache_needs_recovery(
+        cached: &CodexSourceRowCache,
+        source: &[CodexSourceUsageRow],
+    ) -> bool {
+        let source_prefix: Vec<_> = source
+            .iter()
+            .filter(|row| row.source_end_offset > 0 && row.source_end_offset <= cached.size)
+            .collect();
+        source_prefix.len() != cached.rows.len()
+            || cached
+                .rows
+                .iter()
+                .zip(source_prefix)
+                .any(|(cached_row, source_row)| {
+                    cached_row.source_end_offset != source_row.source_end_offset
+                        || CodexSourceRowKey::from(cached_row)
+                            != CodexSourceRowKey::from(source_row)
+                        || cached_row.pricing != source_row.pricing
+                })
+    }
+
     fn codex_source_prefix_hash(file_path: &Path, size: u64) -> Option<u64> {
         let file = File::open(file_path).ok()?;
         let mut reader = file.take(size);

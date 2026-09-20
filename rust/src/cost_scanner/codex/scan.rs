@@ -206,15 +206,19 @@ pub(super) fn scan_codex_detailed_with_cache(
                         cached,
                     )
             });
-            let rows = recoverable_cache.map_or(source_rows.clone(), |cached| {
-                JsonlScanner::recover_codex_source_rows(&cached.rows, &source_rows, cached.size)
+            let requires_recovery = recoverable_cache.is_some_and(|cached| {
+                JsonlScanner::codex_source_row_cache_needs_recovery(cached, &source_rows)
             });
+            let rows = if requires_recovery {
+                let cached = recoverable_cache.expect("recovery cache checked above");
+                JsonlScanner::recover_codex_source_rows(&cached.rows, &source_rows, cached.size)
+            } else {
+                source_rows.clone()
+            };
             if let Some(source_cache) =
                 JsonlScanner::codex_source_row_cache(&candidate.path, &metadata, rows)
             {
-                if recoverable_cache.is_some()
-                    && let Some(usage) = cache.files.get_mut(&key)
-                {
+                if requires_recovery && let Some(usage) = cache.files.get_mut(&key) {
                     // Rebuild from recovered rows even when a new row is
                     // intentionally unresolved. Leaving the normal parser's
                     // model-priced days in place would silently price an
