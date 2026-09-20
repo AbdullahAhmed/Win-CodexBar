@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::core::{
-    CostSnapshot, ProviderAccountData, ProviderDisplayDetail, ProviderInventoryItem,
-    RateWindow, TokenAccount, TokenAccountSupport, UsageSnapshot,
+    CostSnapshot, ProviderAccountData, ProviderDisplayDetail, ProviderInventoryItem, RateWindow,
+    TokenAccount, TokenAccountSupport, UsageSnapshot,
 };
 use crate::providers::claude::claude_swap::ClaudeSwapAccount;
 use crate::status::{ProviderStatus as StatusInfo, StatusLevel};

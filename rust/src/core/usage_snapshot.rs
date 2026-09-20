@@ -819,7 +819,6 @@ impl ProviderFetchResult {
         self
     }
 
-
     /// Attach one transient provider-specific detail row without persisting it.
     pub fn with_display_detail(mut self, detail: ProviderDisplayDetail) -> Self {
         if detail.is_display_safe() && !self.display_details.iter().any(|row| row.id == detail.id) {
