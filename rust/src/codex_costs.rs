@@ -32,13 +32,13 @@ pub(crate) fn codex_scan_dates(range: &CostUsageDayRange) -> Vec<NaiveDate> {
 
 pub(crate) fn add_codex_records_to_summary(
     summary: &mut CostSummary,
-    records: &[CodexUsageRecord],
+    records: &[(CodexUsageRecord, i64)],
     range: &CostUsageDayRange,
 ) -> (f64, bool) {
     let mut total_cost = 0.0;
     let mut has_tokens = false;
 
-    for record in records.iter().filter(|record| {
+    for (record, _) in records.iter().filter(|(record, _)| {
         CostUsageDayRange::is_in_range(&record.day_key, &range.since_key, &range.until_key)
     }) {
         let tokens = CodexTokenCounts::from_values(record.input, record.cached, record.output)
@@ -61,9 +61,9 @@ pub(crate) fn add_codex_records_to_summary(
 /// Merge billable records into a day→model→`[input,cached,output]` map.
 pub(crate) fn merge_codex_records_into_days(
     days: &mut std::collections::HashMap<String, std::collections::HashMap<String, Vec<i64>>>,
-    records: &[CodexUsageRecord],
+    records: &[(CodexUsageRecord, i64)],
 ) {
-    for record in records {
+    for (record, _) in records {
         if !CostUsagePricing::counts_toward_codex_subscription(&record.model) {
             continue;
         }
@@ -134,7 +134,14 @@ pub(crate) fn scan_codex_file_cost_for_range(path: &Path, range: &CostUsageDayRa
         Err(_) => return 0.0,
     };
 
-    codex_records_cost(&parse_result.records, range)
+    codex_records_cost(
+        &parse_result
+            .records
+            .iter()
+            .map(|(record, _)| record.clone())
+            .collect::<Vec<_>>(),
+        range,
+    )
 }
 
 #[cfg(test)]
@@ -494,10 +501,10 @@ mod tests {
 
         let mut known_summary = CostSummary::default();
         let (known_cost, known_has_tokens) =
-            add_codex_records_to_summary(&mut known_summary, &[make_record(Some(7))], &range);
+            add_codex_records_to_summary(&mut known_summary, &[(make_record(Some(7)), 0)], &range);
         let mut unknown_summary = CostSummary::default();
         let (unknown_cost, unknown_has_tokens) =
-            add_codex_records_to_summary(&mut unknown_summary, &[make_record(None)], &range);
+            add_codex_records_to_summary(&mut unknown_summary, &[(make_record(None), 0)], &range);
 
         assert!(known_has_tokens && unknown_has_tokens);
         assert_eq!(known_summary.output_tokens, 20);
@@ -522,9 +529,9 @@ mod tests {
             reasoning,
         };
         let records = vec![
-            make_record(Some(7)),
-            make_record(None),
-            make_record(Some(3)),
+            (make_record(Some(7)), 0),
+            (make_record(None), 0),
+            (make_record(Some(3)), 0),
         ];
         let mut summary = CostSummary::default();
 
@@ -574,30 +581,39 @@ mod tests {
         let target = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
         let range = CostUsageDayRange::new(target, target);
         let records = vec![
-            CodexUsageRecord {
-                day_key: "2026-05-31".to_string(),
-                model: "gpt-5.6-sol".to_string(),
-                input: 200_000,
-                cached: 0,
-                output: 0,
-                reasoning: None,
-            },
-            CodexUsageRecord {
-                day_key: "2026-05-31".to_string(),
-                model: "gpt-5.6-sol".to_string(),
-                input: 200_000,
-                cached: 0,
-                output: 0,
-                reasoning: None,
-            },
-            CodexUsageRecord {
-                day_key: "2026-05-30".to_string(),
-                model: "gpt-5.6-sol".to_string(),
-                input: 200_000,
-                cached: 0,
-                output: 0,
-                reasoning: None,
-            },
+            (
+                CodexUsageRecord {
+                    day_key: "2026-05-31".to_string(),
+                    model: "gpt-5.6-sol".to_string(),
+                    input: 200_000,
+                    cached: 0,
+                    output: 0,
+                    reasoning: None,
+                },
+                0,
+            ),
+            (
+                CodexUsageRecord {
+                    day_key: "2026-05-31".to_string(),
+                    model: "gpt-5.6-sol".to_string(),
+                    input: 200_000,
+                    cached: 0,
+                    output: 0,
+                    reasoning: None,
+                },
+                0,
+            ),
+            (
+                CodexUsageRecord {
+                    day_key: "2026-05-30".to_string(),
+                    model: "gpt-5.6-sol".to_string(),
+                    input: 200_000,
+                    cached: 0,
+                    output: 0,
+                    reasoning: None,
+                },
+                0,
+            ),
         ];
         let mut summary = CostSummary::default();
 
@@ -637,22 +653,28 @@ mod tests {
         let target = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
         let range = CostUsageDayRange::new(target, target);
         let records = vec![
-            CodexUsageRecord {
-                day_key: "2026-08-19".to_string(),
-                model: "gpt-5.6-sol".to_string(),
-                input: 100,
-                cached: 0,
-                output: 5,
-                reasoning: None,
-            },
-            CodexUsageRecord {
-                day_key: "2026-08-19".to_string(),
-                model: "deepseek/deepseek-chat".to_string(),
-                input: 1_000_000,
-                cached: 0,
-                output: 1_000_000,
-                reasoning: None,
-            },
+            (
+                CodexUsageRecord {
+                    day_key: "2026-08-19".to_string(),
+                    model: "gpt-5.6-sol".to_string(),
+                    input: 100,
+                    cached: 0,
+                    output: 5,
+                    reasoning: None,
+                },
+                0,
+            ),
+            (
+                CodexUsageRecord {
+                    day_key: "2026-08-19".to_string(),
+                    model: "deepseek/deepseek-chat".to_string(),
+                    input: 1_000_000,
+                    cached: 0,
+                    output: 1_000_000,
+                    reasoning: None,
+                },
+                0,
+            ),
         ];
         let mut summary = CostSummary::default();
         let (cost, has_tokens) = add_codex_records_to_summary(&mut summary, &records, &range);
@@ -668,14 +690,17 @@ mod tests {
 
     #[test]
     fn routed_models_are_not_persisted_in_codex_day_token_cache() {
-        let records = vec![CodexUsageRecord {
-            day_key: "2026-08-19".to_string(),
-            model: "opencode/gpt-5".to_string(),
-            input: 10,
-            cached: 0,
-            output: 1,
-            reasoning: None,
-        }];
+        let records = vec![(
+            CodexUsageRecord {
+                day_key: "2026-08-19".to_string(),
+                model: "opencode/gpt-5".to_string(),
+                input: 10,
+                cached: 0,
+                output: 1,
+                reasoning: None,
+            },
+            0,
+        )];
         let mut days = std::collections::HashMap::new();
         merge_codex_records_into_days(&mut days, &records);
         assert!(days.is_empty());
@@ -685,14 +710,17 @@ mod tests {
     fn model_less_codex_usage_is_visible_but_unpriced() {
         let target = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
         let range = CostUsageDayRange::new(target, target);
-        let records = vec![CodexUsageRecord {
-            day_key: "2026-05-31".to_string(),
-            model: CostUsagePricing::CODEX_UNATTRIBUTED_MODEL.to_string(),
-            input: 55_000_000,
-            cached: 0,
-            output: 0,
-            reasoning: None,
-        }];
+        let records = vec![(
+            CodexUsageRecord {
+                day_key: "2026-05-31".to_string(),
+                model: CostUsagePricing::CODEX_UNATTRIBUTED_MODEL.to_string(),
+                input: 55_000_000,
+                cached: 0,
+                output: 0,
+                reasoning: None,
+            },
+            0,
+        )];
         let mut summary = CostSummary::default();
 
         let (cost, has_tokens) = add_codex_records_to_summary(&mut summary, &records, &range);
@@ -714,14 +742,17 @@ mod tests {
     fn records_unknown_codex_model_while_using_fallback_cost() {
         let target = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
         let range = CostUsageDayRange::new(target, target);
-        let records = vec![CodexUsageRecord {
-            day_key: "2026-05-31".to_string(),
-            model: "gpt-mystery".to_string(),
-            input: 1_000_000,
-            cached: 0,
-            output: 1_000_000,
-            reasoning: None,
-        }];
+        let records = vec![(
+            CodexUsageRecord {
+                day_key: "2026-05-31".to_string(),
+                model: "gpt-mystery".to_string(),
+                input: 1_000_000,
+                cached: 0,
+                output: 1_000_000,
+                reasoning: None,
+            },
+            0,
+        )];
         let mut summary = CostSummary::default();
 
         let (cost, has_tokens) = add_codex_records_to_summary(&mut summary, &records, &range);
