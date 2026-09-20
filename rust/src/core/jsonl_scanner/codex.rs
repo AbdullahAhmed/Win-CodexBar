@@ -2,6 +2,7 @@ use super::*;
 
 mod helpers;
 mod parser;
+pub(crate) mod source_rows;
 
 use helpers::{
     BoundedJsonlLine, CODEX_JSONL_MAX_LINE_BYTES, nonempty_json_string, parse_rfc3339_timestamp,
@@ -55,213 +56,6 @@ use helpers::{
 };
 
 impl JsonlScanner {
-    /// Build source-row evidence from the aggregate records produced by the
-    /// native Windows parser.  Rows start with the source model as their
-    /// pricing evidence; recovery may later replace that evidence with a
-    /// retained cached value or clear it when the match is ambiguous.
-    pub(crate) fn codex_source_rows_from_records(
-        records: &[CodexUsageRecord],
-    ) -> Vec<CodexSourceUsageRow> {
-        records
-            .iter()
-            .map(|record| CodexSourceUsageRow {
-                day_key: record.day_key.clone(),
-                model: record.model.clone(),
-                input: record.input.max(0),
-                cached: record.cached.max(0).min(record.input.max(0)),
-                output: record.output.max(0),
-                reasoning: record.reasoning.map(|value| value.max(0)),
-                source_end_offset: 0,
-                pricing: CodexSourcePricingEvidence {
-                    pricing_model: Some(record.model.clone()),
-                    pricing_mode: Some(if record.model.ends_with("-priority") {
-                        "priority".to_string()
-                    } else {
-                        "standard".to_string()
-                    }),
-                },
-            })
-            .collect()
-    }
-
-    /// Re-read the bounded reporting partition to obtain request-row order.
-    /// The normal scanner still owns aggregate parsing and its byte budget;
-    /// this path is used only after a complete file pass has established that
-    /// source evidence is safe to retain.
-    pub(crate) fn read_codex_source_rows(
-        file_path: &Path,
-        range: &CostUsageDayRange,
-    ) -> std::io::Result<Vec<CodexSourceUsageRow>> {
-        let source_range = CostUsageDayRange {
-            since_key: range.scan_since_key.clone(),
-            until_key: range.scan_until_key.clone(),
-            scan_since_key: range.scan_since_key.clone(),
-            scan_until_key: range.scan_until_key.clone(),
-        };
-        let parsed = Self::parse_codex_file(file_path, &source_range, 0, None, None)?;
-        if parsed.source_end_offsets.len() != parsed.records.len() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Codex source row offsets do not match parsed records",
-            ));
-        }
-        let mut rows = Self::codex_source_rows_from_records(&parsed.records);
-        for (row, offset) in rows.iter_mut().zip(parsed.source_end_offsets) {
-            row.source_end_offset = offset;
-        }
-        Ok(rows)
-    }
-
-    /// Recover cached per-request pricing only when the source row match is
-    /// unique or every matching cached row carries the same evidence.  Native
-    /// JSONL proves the request sequence, but it cannot choose between
-    /// conflicting prices for repeated identical requests.
-    pub(crate) fn recover_codex_source_rows(
-        cached: &[CodexSourceUsageRow],
-        source: &[CodexSourceUsageRow],
-        cached_size: i64,
-    ) -> Vec<CodexSourceUsageRow> {
-        let mut candidates = HashMap::new();
-        let mut consensus = HashMap::new();
-        for row in cached {
-            if row.source_end_offset <= 0 || row.source_end_offset > cached_size {
-                continue;
-            }
-            candidates.insert(row.source_end_offset, row);
-            let key = CodexSourceRowKey::from(row);
-            match consensus.entry(key) {
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(Ok(row.pricing.clone()));
-                }
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    if entry
-                        .get()
-                        .as_ref()
-                        .is_ok_and(|pricing| pricing != &row.pricing)
-                    {
-                        drop(entry.insert(Err(())));
-                    }
-                }
-            }
-        }
-
-        source
-            .iter()
-            .map(|row| {
-                let mut recovered = row.clone();
-                if row.source_end_offset <= 0 || row.source_end_offset > cached_size {
-                    recovered.pricing = CodexSourcePricingEvidence::default();
-                    return recovered;
-                }
-                let Some(candidate) = candidates.get(&row.source_end_offset) else {
-                    recovered.pricing = CodexSourcePricingEvidence::default();
-                    return recovered;
-                };
-                if CodexSourceRowKey::from(*candidate) != CodexSourceRowKey::from(row) {
-                    recovered.pricing = CodexSourcePricingEvidence::default();
-                    return recovered;
-                }
-                recovered.pricing = consensus
-                    .get(&CodexSourceRowKey::from(row))
-                    .and_then(|pricing| pricing.as_ref().ok())
-                    .cloned()
-                    .unwrap_or_default();
-                recovered
-            })
-            .collect()
-    }
-
-    /// Construct a cache entry for source rows after a complete read.
-    pub(crate) fn codex_source_row_cache(
-        file_path: &Path,
-        metadata: &fs::Metadata,
-        rows: Vec<CodexSourceUsageRow>,
-    ) -> Option<CodexSourceRowCache> {
-        Some(CodexSourceRowCache {
-            file_identity: Self::codex_file_identity(file_path, metadata),
-            size: i64::try_from(metadata.len()).ok()?,
-            mtime_unix_ms: codex_source_mtime_unix_ms(metadata.modified().ok()),
-            prefix_hash: Self::codex_source_prefix_hash(file_path, metadata.len())?,
-            rows,
-        })
-    }
-
-    /// Verify the retained source prefix before using cached request pricing.
-    /// A same-size rewrite is rejected when its modification time changes;
-    /// append-only growth is accepted only when the indexed prefix is intact.
-    pub(crate) fn codex_source_row_cache_matches(
-        file_path: &Path,
-        metadata: &fs::Metadata,
-        cached: &CodexSourceRowCache,
-    ) -> bool {
-        let Ok(size) = i64::try_from(metadata.len()) else {
-            return false;
-        };
-        if size < cached.size
-            || cached.size < 0
-            || cached.file_identity.is_none()
-            || cached.file_identity != Self::codex_file_identity(file_path, metadata)
-            || cached
-                .rows
-                .iter()
-                .any(|row| row.source_end_offset <= 0 || row.source_end_offset > cached.size)
-            || cached.prefix_hash
-                != Self::codex_source_prefix_hash(
-                    file_path,
-                    u64::try_from(cached.size.max(0)).unwrap_or(0),
-                )
-                .unwrap_or(0)
-        {
-            return false;
-        }
-        size > cached.size
-            || cached.mtime_unix_ms == codex_source_mtime_unix_ms(metadata.modified().ok())
-    }
-
-    /// Whether the cached prefix needs source-row pricing recovery.
-    ///
-    /// A normal append keeps the native parser's model attribution. Recovery
-    /// is reserved for a cached prefix whose pricing evidence no longer agrees
-    /// with the current source; only that path leaves appended rows
-    /// intentionally unattributed until their pricing is validated.
-    pub(crate) fn codex_source_row_cache_needs_recovery(
-        cached: &CodexSourceRowCache,
-        source: &[CodexSourceUsageRow],
-    ) -> bool {
-        let source_prefix: Vec<_> = source
-            .iter()
-            .filter(|row| row.source_end_offset > 0 && row.source_end_offset <= cached.size)
-            .collect();
-        source_prefix.len() != cached.rows.len()
-            || cached
-                .rows
-                .iter()
-                .zip(source_prefix)
-                .any(|(cached_row, source_row)| {
-                    cached_row.source_end_offset != source_row.source_end_offset
-                        || CodexSourceRowKey::from(cached_row)
-                            != CodexSourceRowKey::from(source_row)
-                        || cached_row.pricing != source_row.pricing
-                })
-    }
-
-    fn codex_source_prefix_hash(file_path: &Path, size: u64) -> Option<u64> {
-        let file = File::open(file_path).ok()?;
-        let mut reader = file.take(size);
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        let mut buffer = [0_u8; 64 * 1024];
-        let mut remaining = size;
-        while remaining > 0 {
-            let read = reader.read(&mut buffer).ok()?;
-            if read == 0 {
-                return None;
-            }
-            hasher.write(&buffer[..read]);
-            remaining = remaining.saturating_sub(read as u64);
-        }
-        Some(hasher.finish())
-    }
-
     /// Get default Codex sessions root directory
     pub fn default_codex_sessions_root() -> Option<PathBuf> {
         // Check CODEX_HOME environment variable
@@ -789,7 +583,6 @@ impl JsonlScanner {
         let bytes_read = parsed_bytes.saturating_sub(safe_start_offset).max(0);
         Ok(CodexParseResult {
             records: parser.records,
-            source_end_offsets: parser.source_end_offsets,
             parsed_bytes,
             scan_target_size: if is_complete {
                 effective_target_size
@@ -838,35 +631,6 @@ impl JsonlScanner {
         }
         let mut prev_byte = [0u8; 1];
         probe.read_exact(&mut prev_byte).is_ok() && prev_byte[0] == b'\n'
-    }
-}
-
-fn codex_source_mtime_unix_ms(time: Option<std::time::SystemTime>) -> i64 {
-    time.and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
-        .and_then(|value| i64::try_from(value.as_millis()).ok())
-        .unwrap_or(0)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct CodexSourceRowKey {
-    day_key: String,
-    model: String,
-    input: i64,
-    cached: i64,
-    output: i64,
-    reasoning: Option<i64>,
-}
-
-impl From<&CodexSourceUsageRow> for CodexSourceRowKey {
-    fn from(row: &CodexSourceUsageRow) -> Self {
-        Self {
-            day_key: row.day_key.clone(),
-            model: row.model.clone(),
-            input: row.input,
-            cached: row.cached,
-            output: row.output,
-            reasoning: row.reasoning,
-        }
     }
 }
 

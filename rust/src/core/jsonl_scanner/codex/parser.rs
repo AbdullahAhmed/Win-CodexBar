@@ -12,8 +12,7 @@ pub(super) struct CodexParserState {
     totals_watermark: Option<CodexTotals>,
     /// Latched once any cumulative component drops below the watermark.
     saw_interleaved_totals: bool,
-    pub(super) records: Vec<CodexUsageRecord>,
-    pub(super) source_end_offsets: Vec<i64>,
+    pub(super) records: Vec<(CodexUsageRecord, i64)>,
     pub(super) previous_token_timestamp: Option<String>,
     previous_token_timestamp_parsed: Option<DateTime<chrono::FixedOffset>>,
     pub(super) token_timestamps_monotonic: Option<bool>,
@@ -59,7 +58,6 @@ impl CodexParserState {
             totals_watermark: initial_totals,
             saw_interleaved_totals: false,
             records: Vec::new(),
-            source_end_offsets: Vec::new(),
             previous_token_timestamp,
             previous_token_timestamp_parsed,
             // A parser always validates a fresh prefix.  `None` is only an
@@ -115,7 +113,11 @@ impl CodexParserState {
                 .filter(|day_key| {
                     CostUsageDayRange::is_in_range(day_key, &range.since_key, &range.until_key)
                 })
-                .or_else(|| self.records.last().map(|record| record.day_key.clone()));
+                .or_else(|| {
+                    self.records
+                        .last()
+                        .map(|(record, _)| record.day_key.clone())
+                });
             let Some(day_key) = day_key else {
                 return;
             };
@@ -322,15 +324,17 @@ impl CodexParserState {
         if !CostUsageDayRange::is_in_range(&day_key, &range.since_key, &range.until_key) {
             return;
         }
-        self.records.push(CodexUsageRecord {
-            day_key,
-            model: CostUsagePricing::normalize_codex_model(model),
-            input,
-            cached: cached.min(input),
-            output,
-            reasoning: clamp_reasoning(reasoning, output),
-        });
-        self.source_end_offsets.push(source_end_offset);
+        self.records.push((
+            CodexUsageRecord {
+                day_key,
+                model: CostUsagePricing::normalize_codex_model(model),
+                input,
+                cached: cached.min(input),
+                output,
+                reasoning: clamp_reasoning(reasoning, output),
+            },
+            source_end_offset,
+        ));
     }
 
     fn resolve_token_model(&self, info: Option<&Value>, payload: &Value, obj: &Value) -> String {

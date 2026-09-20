@@ -18,7 +18,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -274,7 +274,9 @@ pub struct CodexSourceUsageRow {
 /// Source identity and rows retained for a cached Codex file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexSourceRowCache {
-    pub file_identity: Option<String>,
+    /// Platform file identity of the source at cache time. A cache entry is
+    /// only built when identity succeeds, so the field is always usable.
+    pub file_identity: String,
     pub size: i64,
     pub mtime_unix_ms: i64,
     pub prefix_hash: u64,
@@ -403,10 +405,9 @@ pub struct CachedCostReport {
 /// Result of parsing a Codex file
 #[derive(Debug)]
 pub struct CodexParseResult {
-    /// Individual token-count deltas used for per-request pricing.
-    pub records: Vec<CodexUsageRecord>,
-    /// Source line end offsets aligned with `records`.
-    pub source_end_offsets: Vec<i64>,
+    /// Individual token-count deltas used for per-request pricing, paired
+    /// with the end offset of the source JSONL line that produced each.
+    pub records: Vec<(CodexUsageRecord, i64)>,
     /// Bytes parsed
     pub parsed_bytes: i64,
     /// Stable logical target reached by this parse. This may be behind the
@@ -478,7 +479,10 @@ impl CostUsageDayRange {
 
 /// JSONL Scanner for cost/usage logs
 pub struct JsonlScanner;
-mod codex;
+pub(crate) mod codex;
+pub(crate) use codex::source_rows::{
+    read_source_rows, recover_rows, row_cache, row_cache_matches, row_cache_needs_recovery,
+};
 
 impl JsonlScanner {
     /// Whether a cached scan should be reused under `options` (issue #2089).
