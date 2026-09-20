@@ -584,8 +584,6 @@ export default function MenuCardDetails({
         </section>
       )}
 
-      {wayfinderUsage && <WayfinderUsageBlock usage={wayfinderUsage} />}
-
       {wayfinderUsage && !compactOverview && <WayfinderUsageBlock usage={wayfinderUsage} />}
 
       {!compactOverview && hasMetrics && hasCost && <div className="menu-card__divider" />}
