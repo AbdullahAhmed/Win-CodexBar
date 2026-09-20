@@ -569,7 +569,7 @@ mod tests {
             Some("muse@example.com")
         );
         assert_eq!(result.usage.login_method.as_deref(), Some("Muse login"));
-        let details: Vec<_> = result.display_details().collect();
+        let details: Vec<_> = result.display_details().iter().collect();
         assert_eq!(details.len(), 3);
         assert!(
             details
