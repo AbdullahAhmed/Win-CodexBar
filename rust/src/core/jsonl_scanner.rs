@@ -18,7 +18,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
-use std::io::{BufReader, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -231,10 +231,54 @@ pub struct CostUsageCache {
     /// refresh clears it before starting the next pass.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_scan_pause_reason: Option<CodexScanPauseReason>,
+    /// Cached request rows retained as source evidence for Codex recovery.
+    ///
+    /// This is separate from `files` because the Windows cache currently
+    /// persists aggregate day/model totals rather than the native request-row
+    /// representation used by upstream.  The map is optional on disk so old
+    /// caches remain valid and can be upgraded lazily.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub codex_source_rows: HashMap<String, CodexSourceRowCache>,
     /// Content stamp of the decoded on-disk baseline. This is process-local
     /// and omitted from JSON so a stale reader cannot replace a newer cache.
     #[serde(skip)]
     pub(crate) loaded_stamp: Option<Option<CacheStamp>>,
+}
+
+/// Pricing evidence attached to one cached Codex request row.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexSourcePricingEvidence {
+    pub pricing_model: Option<String>,
+    pub pricing_mode: Option<String>,
+}
+
+/// A request row recovered from a complete Codex JSONL source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexSourceUsageRow {
+    pub day_key: String,
+    pub model: String,
+    pub input: i64,
+    pub cached: i64,
+    pub output: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<i64>,
+    /// End offset of the source JSONL line that produced this row.
+    /// Zero means the row came from a legacy cache and cannot be replayed
+    /// safely across an append boundary.
+    #[serde(default)]
+    pub source_end_offset: i64,
+    #[serde(default)]
+    pub pricing: CodexSourcePricingEvidence,
+}
+
+/// Source identity and rows retained for a cached Codex file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexSourceRowCache {
+    pub file_identity: Option<String>,
+    pub size: i64,
+    pub mtime_unix_ms: i64,
+    pub prefix_hash: u64,
+    pub rows: Vec<CodexSourceUsageRow>,
 }
 
 /// Per-file usage tracking
@@ -361,6 +405,8 @@ pub struct CachedCostReport {
 pub struct CodexParseResult {
     /// Individual token-count deltas used for per-request pricing.
     pub records: Vec<CodexUsageRecord>,
+    /// Source line end offsets aligned with `records`.
+    pub source_end_offsets: Vec<i64>,
     /// Bytes parsed
     pub parsed_bytes: i64,
     /// Stable logical target reached by this parse. This may be behind the

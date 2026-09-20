@@ -13,6 +13,7 @@ pub(super) struct CodexParserState {
     /// Latched once any cumulative component drops below the watermark.
     saw_interleaved_totals: bool,
     pub(super) records: Vec<CodexUsageRecord>,
+    pub(super) source_end_offsets: Vec<i64>,
     pub(super) previous_token_timestamp: Option<String>,
     previous_token_timestamp_parsed: Option<DateTime<chrono::FixedOffset>>,
     pub(super) token_timestamps_monotonic: Option<bool>,
@@ -58,6 +59,7 @@ impl CodexParserState {
             totals_watermark: initial_totals,
             saw_interleaved_totals: false,
             records: Vec::new(),
+            source_end_offsets: Vec::new(),
             previous_token_timestamp,
             previous_token_timestamp_parsed,
             // A parser always validates a fresh prefix.  `None` is only an
@@ -70,6 +72,15 @@ impl CodexParserState {
     }
 
     pub(super) fn process_line(&mut self, line: &str, range: &CostUsageDayRange) {
+        self.process_line_with_source_offset(line, range, 0);
+    }
+
+    pub(super) fn process_line_with_source_offset(
+        &mut self,
+        line: &str,
+        range: &CostUsageDayRange,
+        source_end_offset: i64,
+    ) {
         let event_candidate = is_candidate_codex_line(line);
         let bare_candidate = !event_candidate && line.contains("\"usage\"");
         if !event_candidate && !bare_candidate {
@@ -77,7 +88,7 @@ impl CodexParserState {
         }
 
         if event_candidate && let Some(event) = parse_codex_fast_event(line) {
-            self.process_fast_event(event, range);
+            self.process_fast_event(event, range, source_end_offset);
             return;
         }
 
@@ -124,6 +135,7 @@ impl CodexParserState {
                     totals.cached,
                     totals.output,
                     totals.reasoning,
+                    source_end_offset,
                 );
             }
             return;
@@ -154,11 +166,16 @@ impl CodexParserState {
         }
 
         if is_token_count {
-            self.record_token_count(&obj, day_key, range);
+            self.record_token_count(&obj, day_key, range, source_end_offset);
         }
     }
 
-    fn process_fast_event(&mut self, event: CodexFastEvent<'_>, range: &CostUsageDayRange) {
+    fn process_fast_event(
+        &mut self,
+        event: CodexFastEvent<'_>,
+        range: &CostUsageDayRange,
+        source_end_offset: i64,
+    ) {
         match event {
             CodexFastEvent::TurnContext { model } => {
                 // Explicit blank model evidence clears stale turn context.
@@ -176,7 +193,7 @@ impl CodexParserState {
                 if !CostUsageDayRange::is_in_range(&day_key, &range.since_key, &range.until_key) {
                     return;
                 }
-                self.record_fast_token_count(payload, day_key, range);
+                self.record_fast_token_count(payload, day_key, range, source_end_offset);
             }
         }
     }
@@ -212,7 +229,13 @@ impl CodexParserState {
             .map(str::to_string);
     }
 
-    fn record_token_count(&mut self, obj: &Value, day_key: String, range: &CostUsageDayRange) {
+    fn record_token_count(
+        &mut self,
+        obj: &Value,
+        day_key: String,
+        range: &CostUsageDayRange,
+        source_end_offset: i64,
+    ) {
         let Some(payload) = token_count_payload(obj) else {
             return;
         };
@@ -234,6 +257,7 @@ impl CodexParserState {
             delta_cached,
             delta_output,
             reasoning,
+            source_end_offset,
         );
     }
 
@@ -242,6 +266,7 @@ impl CodexParserState {
         payload: CodexFastPayload<'_>,
         day_key: String,
         range: &CostUsageDayRange,
+        source_end_offset: i64,
     ) {
         let Some((delta_input, delta_cached, delta_output, reasoning)) =
             self.fast_token_deltas(&payload)
@@ -275,6 +300,7 @@ impl CodexParserState {
             delta_cached,
             delta_output,
             reasoning,
+            source_end_offset,
         );
     }
 
@@ -291,6 +317,7 @@ impl CodexParserState {
         cached: i64,
         output: i64,
         reasoning: Option<i64>,
+        source_end_offset: i64,
     ) {
         if !CostUsageDayRange::is_in_range(&day_key, &range.since_key, &range.until_key) {
             return;
@@ -303,6 +330,7 @@ impl CodexParserState {
             output,
             reasoning: clamp_reasoning(reasoning, output),
         });
+        self.source_end_offsets.push(source_end_offset);
     }
 
     fn resolve_token_model(&self, info: Option<&Value>, payload: &Value, obj: &Value) -> String {

@@ -1,3 +1,4 @@
+use super::cache_days::days_from_codex_source_rows;
 use super::*;
 
 pub(super) fn scan_codex_detailed_with_cache(
@@ -169,6 +170,7 @@ pub(super) fn scan_codex_detailed_with_cache(
             .codex_bytes_read
             .saturating_add(u64::try_from(outcome.bytes_read.max(0)).unwrap_or(u64::MAX));
         let key = candidate.path.to_string_lossy().to_string();
+        let cached_source_rows = cache.codex_source_rows.get(&key).cloned();
         pending_next.retain(|pending| pending != &key);
         let observed_size = fs::metadata(&candidate.path)
             .ok()
@@ -188,6 +190,39 @@ pub(super) fn scan_codex_detailed_with_cache(
         if !outcome.is_complete || has_unconsumed_tail {
             incomplete_processed.push(key);
             stats.files_deferred = stats.files_deferred.saturating_add(1);
+        } else if cache.files.get(&key).is_some_and(|usage| {
+            usage.codex_forked_from_id.is_none()
+                && !usage.codex_lineage.uses_parent_baseline()
+                && !usage.codex_unresolved_fork_parent
+        }) && let Ok(metadata) = fs::metadata(&candidate.path)
+            && let Ok(source_rows) =
+                JsonlScanner::read_codex_source_rows(&candidate.path, scan_range)
+        {
+            let recoverable_cache = cached_source_rows.as_ref().filter(|cached| {
+                !cached.rows.is_empty()
+                    && JsonlScanner::codex_source_row_cache_matches(
+                        &candidate.path,
+                        &metadata,
+                        cached,
+                    )
+            });
+            let rows = recoverable_cache.map_or(source_rows.clone(), |cached| {
+                JsonlScanner::recover_codex_source_rows(&cached.rows, &source_rows, cached.size)
+            });
+            if let Some(source_cache) =
+                JsonlScanner::codex_source_row_cache(&candidate.path, &metadata, rows)
+            {
+                if recoverable_cache.is_some()
+                    && let Some(usage) = cache.files.get_mut(&key)
+                {
+                    // Rebuild from recovered rows even when a new row is
+                    // intentionally unresolved. Leaving the normal parser's
+                    // model-priced days in place would silently price an
+                    // appended row that has no validated historical evidence.
+                    usage.days = days_from_codex_source_rows(&source_cache.rows);
+                }
+                cache.codex_source_rows.insert(key, source_cache);
+            }
         }
     }
     pending_next.extend(incomplete_processed);
