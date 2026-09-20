@@ -70,19 +70,23 @@ pub fn render_json_result(
         );
     }
 
-    let details: Vec<_> = result.display_details().collect();
-    if !details.is_empty() {
+    if !result.display_details().is_empty() {
         json_result["details"] = serde_json::Value::Array(
-            details
+            result
+                .display_details()
                 .iter()
                 .map(|detail| {
                     serde_json::json!({
+                        "id": detail.id(),
                         "title": detail.title(),
                         "value": detail.value(),
                         "secondaryValue": detail.secondary_value(),
-                        "progress": detail
-                            .progress()
-                            .map(|p| serde_json::json!({ "used": p.used(), "total": p.total() })),
+                        "progress": detail.progress().map(|progress| {
+                            serde_json::json!({
+                                "used": progress.used(),
+                                "total": progress.total(),
+                            })
+                        }),
                     })
                 })
                 .collect(),
@@ -293,10 +297,7 @@ fn append_inventory_lines(lines: &mut Vec<String>, inventory: &[ProviderInventor
     }
 }
 
-fn append_display_detail_lines<'a>(
-    lines: &mut Vec<String>,
-    details: impl IntoIterator<Item = &'a ProviderDisplayDetail>,
-) {
+fn append_display_detail_lines(lines: &mut Vec<String>, details: &[ProviderDisplayDetail]) {
     for detail in details {
         let secondary = detail
             .secondary_value()
