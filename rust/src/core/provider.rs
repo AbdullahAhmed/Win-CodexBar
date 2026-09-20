@@ -1341,6 +1341,32 @@ mod tests {
         assert_eq!(brand_color(ProviderId::Muse), "#0668E1");
     }
 
+    // The "muse *" alias family spans two providers: bare `muse` / `muse code`
+    // are the Muse Code CLI, while `muse spark` belongs to Meta (Meta Muse
+    // Spark). Pin the boundary so a future alias edit cannot silently re-route
+    // either side (review finding: latent UX/triage trap).
+    #[test]
+    fn muse_alias_family_boundary() {
+        assert_eq!(ProviderId::from_cli_name("muse code"), Some(ProviderId::Muse));
+        assert_eq!(ProviderId::from_cli_name("muse"), Some(ProviderId::Muse));
+        assert_eq!(
+            ProviderId::from_cli_name("muse spark"),
+            Some(ProviderId::Meta)
+        );
+        assert_eq!(
+            ProviderId::from_cli_name("muse-spark"),
+            Some(ProviderId::Meta)
+        );
+        assert_eq!(
+            ProviderId::from_cli_name("musespark"),
+            Some(ProviderId::Meta)
+        );
+        assert_eq!(
+            ProviderId::from_cli_name("meta muse spark"),
+            Some(ProviderId::Meta)
+        );
+    }
+
     #[test]
     fn test_provider_id_xai() {
         assert_eq!(ProviderId::Xai.cli_name(), "xai");
