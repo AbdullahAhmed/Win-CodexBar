@@ -3,7 +3,7 @@
 //! Fetch plumbing lives in super::fetch_helpers; this module owns how a
 //! fetched ProviderFetchResult becomes terminal text or JSON output.
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 
 use super::UsageOutput;
 use crate::core::{

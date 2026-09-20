@@ -159,13 +159,14 @@ impl Provider for MuseProvider {
 }
 
 fn resolve_device_token() -> Result<String, ProviderError> {
-    let environment: HashMap<String, String> = [
-        MUSE_DEVICE_TOKEN_ENV,
-        MUSE_AUTH_PATH_ENV,
-    ]
-    .into_iter()
-    .filter_map(|key| std::env::var(key).ok().map(|value| (key.to_string(), value)))
-    .collect();
+    let environment: HashMap<String, String> = [MUSE_DEVICE_TOKEN_ENV, MUSE_AUTH_PATH_ENV]
+        .into_iter()
+        .filter_map(|key| {
+            std::env::var(key)
+                .ok()
+                .map(|value| (key.to_string(), value))
+        })
+        .collect();
     let home = dirs::home_dir().ok_or_else(missing_credentials)?;
     resolve_device_token_from(&environment, &home)
 }
@@ -293,13 +294,13 @@ fn parse_response(body: &[u8]) -> Result<ProviderFetchResult, ProviderError> {
             .get("used_percent")
             .ok_or_else(|| parse_failure("used_percent"))?,
         "used_percent",
-    )?);
+    )?;
     let weekly_percent = number(
         weekly
             .get("used_percent")
             .ok_or_else(|| parse_failure("weekly.used_percent"))?,
         "weekly.used_percent",
-    )?);
+    )?;
     let primary_reset = parse_reset(window.get("resets_at"))?;
     let weekly_reset = parse_reset(weekly.get("resets_at"))?;
     let plan = optional_text(root.get("subs_tier_name"), "subs_tier_name")?;
@@ -390,7 +391,17 @@ fn positive_safe_minutes(value: f64) -> Result<u32, ProviderError> {
     if !value.is_finite() || value <= 0.0 {
         return Err(parse_failure("window_duration_mins"));
     }
-    u32::try_from(value.round()).map_err(|_| parse_failure("window_duration_mins"))
+    // f64 has no TryFrom<u32> conversion; round first, then bound-check the
+    // integer result instead of the pre-merge manual u32::MAX float guard.
+    let rounded = value.round();
+    if rounded <= 0.0 || rounded >= u32::MAX as f64 {
+        return Err(parse_failure("window_duration_mins"));
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "rounded is bounded below u32::MAX by the check above"
+    )]
+    Ok(rounded as u32)
 }
 
 fn parse_reset(value: Option<&Value>) -> Result<Option<DateTime<Utc>>, ProviderError> {

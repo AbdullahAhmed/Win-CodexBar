@@ -1347,7 +1347,10 @@ mod tests {
     // either side (review finding: latent UX/triage trap).
     #[test]
     fn muse_alias_family_boundary() {
-        assert_eq!(ProviderId::from_cli_name("muse code"), Some(ProviderId::Muse));
+        assert_eq!(
+            ProviderId::from_cli_name("muse code"),
+            Some(ProviderId::Muse)
+        );
         assert_eq!(ProviderId::from_cli_name("muse"), Some(ProviderId::Muse));
         assert_eq!(
             ProviderId::from_cli_name("muse spark"),
