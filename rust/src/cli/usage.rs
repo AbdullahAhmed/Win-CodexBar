@@ -785,6 +785,16 @@ fn append_cost_line(lines: &mut Vec<String>, cost: Option<&CostSnapshot>) {
         return;
     };
 
+    // Provider-supplied Activity history is a completed reporting window,
+    // rather than the ordinary current-cost meter. Providers mark such
+    // snapshots `always_visible`; keep their source period and known zero
+    // visible in text output without adding a second generic cost line. The
+    // daily points remain available in the JSON cost payload.
+    if cost.limit.is_none() && cost.always_visible {
+        lines.push(format!("  {}: {}", cost.period, cost.format_used()));
+        return;
+    }
+
     if let Some(limit) = cost.format_limit() {
         lines.push(format!(
             "  Cost:    {} / {} ({})",
