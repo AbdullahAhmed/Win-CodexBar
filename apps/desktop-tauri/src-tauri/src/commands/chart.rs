@@ -8,14 +8,11 @@
 use crate::commands::bridge::RateWindowSnapshot;
 use crate::state::AppState;
 use chrono::{DateTime, Utc};
-use codexbar::core::{JsonlScanner, OpenAIDashboardCacheStore, ProviderId, RateWindow};
+use codexbar::core::{OpenAIDashboardCacheStore, RateWindow};
 use codexbar::cost_scanner::{
     CostScanner, CostSummary, get_daily_cost_history, get_daily_token_history,
 };
 use codexbar::locale::{self, LocaleKey};
-use codexbar::providers::claude::quota_history::{
-    ClaudeQuotaHistoryOptions, aggregate_claude_quota_windows,
-};
 use codexbar::providers::muse::local_usage as muse_local_usage;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -99,7 +96,6 @@ pub struct QuotaWindowHistoryBridge {
     pub account_scope: Option<String>,
     pub windows: Vec<QuotaWindowHistoryPoint>,
     pub history_coverage_established: bool,
-    pub reset_observations_persisted: bool,
 }
 
 /// Full chart data bundle for one provider.
@@ -174,7 +170,42 @@ fn build_provider_chart_data_with_cancel(
     cancel: Option<Arc<AtomicBool>>,
     weekly_window: Option<RateWindowSnapshot>,
 ) -> ProviderChartData {
-    let (cost_history, tokens_history, tokens_incomplete, local_usage) = if provider_id == "muse" {
+    let live_window = weekly_window.as_ref().map(rate_window_from_snapshot);
+    let provider_snapshot = codexbar::providers::chart::build_chart_snapshot(
+        &provider_id,
+        account_email.as_deref(),
+        live_window.as_ref(),
+        cancel.as_deref(),
+    );
+    let (cost_history, tokens_history, tokens_incomplete, local_usage) = if let Some(snapshot) =
+        provider_snapshot
+            .as_ref()
+            .filter(|_| provider_id == "claude")
+    {
+        let cost_history = snapshot
+            .daily_cost
+            .iter()
+            .cloned()
+            .map(|(date, value)| DailyCostPoint { date, value })
+            .collect();
+        let tokens_history = snapshot
+            .daily_tokens
+            .iter()
+            .cloned()
+            .map(|(date, tokens)| DailyTokenPoint { date, tokens })
+            .collect();
+        let local_usage = snapshot
+            .local_summary
+            .as_ref()
+            .and_then(|summary| local_usage_summary_from_cost_summary(&provider_id, summary));
+        store_local_usage_summary(&provider_id, local_usage.clone());
+        (
+            cost_history,
+            tokens_history,
+            snapshot.tokens_incomplete,
+            local_usage,
+        )
+    } else if provider_id == "muse" {
         if cancel
             .as_ref()
             .is_some_and(|flag| flag.load(Ordering::Relaxed))
@@ -224,12 +255,10 @@ fn build_provider_chart_data_with_cancel(
     let (credits_history, usage_breakdown) =
         load_openai_dashboard_chart_data(&provider_id, account_email.as_deref());
 
-    let quota_window_history = build_quota_window_history(
-        &provider_id,
-        account_email.as_deref(),
-        weekly_window.as_ref(),
-        cancel.as_deref(),
-    );
+    let quota_window_history = provider_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.quota_window_history.as_ref())
+        .map(map_quota_window_history);
 
     ProviderChartData {
         provider_id,
@@ -277,120 +306,60 @@ fn current_history_context(
     Some((weekly_window, snapshot.account_email.clone()))
 }
 
-fn build_quota_window_history(
-    provider_id: &str,
-    account_email: Option<&str>,
-    weekly_window: Option<&RateWindowSnapshot>,
-    cancel: Option<&AtomicBool>,
-) -> Option<QuotaWindowHistoryBridge> {
-    if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-        return None;
-    }
-    let weekly_window = weekly_window?;
-    let live_window = rate_window_from_snapshot(weekly_window)?;
-    let now = Utc::now();
-
-    match provider_id {
-        "codex" => {
-            let cache = JsonlScanner::load_cache(ProviderId::Codex, None);
-            let windows = codexbar::codex_costs::codex_quota_windows_from_cache(
-                &cache,
-                Some(&live_window),
-                &[],
-                now,
-                4,
-            );
-            if windows.is_empty() {
-                return None;
-            }
-            let history_coverage_established = !cache.codex_scan_incomplete
-                && cache.codex_pending_paths.is_empty()
-                && cache.scan_since_key.is_some()
-                && cache.scan_until_key.is_some();
-            Some(QuotaWindowHistoryBridge {
-                provider_id: provider_id.to_string(),
-                account_scope: account_email
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned),
-                windows: windows
-                    .into_iter()
-                    .map(|window| QuotaWindowHistoryPoint {
-                        offset: window.offset,
-                        start: window.start.to_rfc3339(),
-                        end: window.end.to_rfc3339(),
-                        total_tokens: window.total_tokens,
-                        total_cost_usd: window.total_cost_usd,
-                        tokens_are_complete: window.tokens_are_complete,
-                        cost_is_complete: window.cost_is_complete,
-                        entry_count: window.entry_count,
-                        boundaries_are_estimated: window.boundaries_are_estimated,
-                    })
-                    .collect(),
-                history_coverage_established,
-                reset_observations_persisted: false,
+fn map_quota_window_history(
+    history: &codexbar::providers::chart::QuotaWindowHistorySnapshot,
+) -> QuotaWindowHistoryBridge {
+    QuotaWindowHistoryBridge {
+        provider_id: history.provider_id.clone(),
+        account_scope: history.account_scope.clone(),
+        windows: history
+            .windows
+            .iter()
+            .map(|window| QuotaWindowHistoryPoint {
+                offset: window.offset,
+                start: window.start.to_rfc3339(),
+                end: window.end.to_rfc3339(),
+                total_tokens: window.total_tokens,
+                total_cost_usd: window.total_cost_usd,
+                tokens_are_complete: window.tokens_are_complete,
+                cost_is_complete: window.cost_is_complete,
+                entry_count: window.entry_count,
+                boundaries_are_estimated: window.boundaries_are_estimated,
             })
-        }
-        "claude" => {
-            let account_scope = account_email
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)?;
-            let scan = CostScanner::new(35).scan_claude_quota_history_with_cancel(cancel);
-            let report = aggregate_claude_quota_windows(
-                account_scope.clone(),
-                &scan.records,
-                ClaudeQuotaHistoryOptions {
-                    live_reset_at: live_window.resets_at,
-                    window_minutes: live_window.window_minutes,
-                    observations: &[],
-                    now,
-                    max_windows: 4,
-                    history_coverage_established: scan.history_coverage_established,
-                },
-            );
-            if report.windows.is_empty() {
-                return None;
-            }
-            Some(QuotaWindowHistoryBridge {
-                provider_id: provider_id.to_string(),
-                account_scope: Some(report.account_scope),
-                windows: report
-                    .windows
-                    .into_iter()
-                    .enumerate()
-                    .map(|(offset, window)| QuotaWindowHistoryPoint {
-                        offset,
-                        start: window.start.to_rfc3339(),
-                        end: window.end.to_rfc3339(),
-                        total_tokens: window.total_tokens,
-                        total_cost_usd: window.total_cost_usd,
-                        tokens_are_complete: window.tokens_are_complete,
-                        cost_is_complete: window.cost_is_complete,
-                        entry_count: usize::try_from(window.entry_count).unwrap_or(usize::MAX),
-                        boundaries_are_estimated: window.boundaries_are_estimated,
-                    })
-                    .collect(),
-                history_coverage_established: report.history_coverage_established,
-                reset_observations_persisted: false,
-            })
-        }
-        _ => None,
+            .collect(),
+        history_coverage_established: history.history_coverage_established,
     }
 }
 
-fn rate_window_from_snapshot(snapshot: &RateWindowSnapshot) -> Option<RateWindow> {
+fn local_usage_summary_from_cost_summary(
+    provider_id: &str,
+    summary: &CostSummary,
+) -> Option<ProviderLocalUsageSummary> {
+    let total_tokens = total_tokens(summary);
+    let has_usage = summary.sessions_count > 0 || summary.total_cost_usd > 0.0 || total_tokens > 0;
+    has_usage.then(|| ProviderLocalUsageSummary {
+        today_cost: None,
+        thirty_day_cost: non_zero_f64(summary.total_cost_usd),
+        thirty_day_tokens: non_zero_u64(total_tokens),
+        latest_tokens: None,
+        top_model: top_model(summary),
+        estimate_note: localized_estimate_note(provider_id, locale::current_language()),
+        token_cost_updated_at_ms: current_unix_ms(),
+    })
+}
+
+fn rate_window_from_snapshot(snapshot: &RateWindowSnapshot) -> RateWindow {
     let resets_at = snapshot
         .resets_at
         .as_deref()
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&Utc));
-    Some(RateWindow::with_details(
+    RateWindow::with_details(
         snapshot.used_percent,
         snapshot.window_minutes,
         resets_at,
         snapshot.reset_description.clone(),
-    ))
+    )
 }
 
 fn active_chart_scans() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {

@@ -1640,7 +1640,6 @@ fn chart_data_serde_roundtrip_preserves_fields() {
                 boundaries_are_estimated: true,
             }],
             history_coverage_established: false,
-            reset_observations_persisted: false,
         }),
     };
 
@@ -1674,7 +1673,6 @@ fn chart_data_serde_roundtrip_preserves_fields() {
     assert!(history.windows[0].boundaries_are_estimated);
     assert!(!history.windows[0].cost_is_complete);
     assert!(!history.history_coverage_established);
-    assert!(!history.reset_observations_persisted);
 
     let mut legacy = serde_json::to_value(&original).expect("serialize legacy fixture");
     legacy

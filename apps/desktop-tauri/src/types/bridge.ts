@@ -844,7 +844,6 @@ export interface QuotaWindowHistoryBridge {
   accountScope: string | null;
   windows: QuotaWindowHistoryPoint[];
   historyCoverageEstablished: boolean;
-  resetObservationsPersisted: boolean;
 }
 
 export interface ProviderChartData {

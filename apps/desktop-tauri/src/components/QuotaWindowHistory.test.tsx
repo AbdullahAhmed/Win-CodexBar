@@ -7,7 +7,6 @@ const history: QuotaWindowHistoryBridge = {
   providerId: "claude",
   accountScope: "account@example.com",
   historyCoverageEstablished: true,
-  resetObservationsPersisted: false,
   windows: [
     {
       offset: 0,
