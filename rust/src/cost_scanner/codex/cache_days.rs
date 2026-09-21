@@ -78,6 +78,7 @@ pub(super) fn days_from_codex_source_rows(
         };
         let record = CodexUsageRecord {
             day_key: row.day_key.clone(),
+            timestamp: row.timestamp,
             model,
             input: row.input,
             cached: row.cached,

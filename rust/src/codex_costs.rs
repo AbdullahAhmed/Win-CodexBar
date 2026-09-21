@@ -4,9 +4,11 @@
 //! local-scan aggregation and pricing logic.
 
 mod host_costs;
+mod quota_windows;
 mod summary_contract;
 
 pub(crate) use host_costs::{CodexHostCostsArgs, HostOutputFormat, run_codex_host_costs};
+pub use quota_windows::{CodexQuotaWindow, codex_quota_windows_from_cache};
 pub(crate) use summary_contract::{
     CodexCostSummary, CodexHostCostReport, CodexHostCostWindow, CodexHostOutcome,
     MAX_REMOTE_CODEX_COST_BYTES, REMOTE_CODEX_COST_INVALID, REMOTE_CODEX_COST_UNAVAILABLE,
@@ -573,6 +575,7 @@ mod tests {
         let range = CostUsageDayRange::new(target, target);
         let make_record = |reasoning| CodexUsageRecord {
             day_key: "2026-05-31".to_string(),
+            timestamp: None,
             model: "gpt-5.6-sol".to_string(),
             input: 100,
             cached: 0,
@@ -603,6 +606,7 @@ mod tests {
         let range = CostUsageDayRange::new(target, target);
         let make_record = |reasoning| CodexUsageRecord {
             day_key: "2026-05-31".to_string(),
+            timestamp: None,
             model: "gpt-5.6-sol".to_string(),
             input: 1,
             cached: 0,
@@ -665,6 +669,7 @@ mod tests {
             (
                 CodexUsageRecord {
                     day_key: "2026-05-31".to_string(),
+                    timestamp: None,
                     model: "gpt-5.6-sol".to_string(),
                     input: 200_000,
                     cached: 0,
@@ -676,6 +681,7 @@ mod tests {
             (
                 CodexUsageRecord {
                     day_key: "2026-05-31".to_string(),
+                    timestamp: None,
                     model: "gpt-5.6-sol".to_string(),
                     input: 200_000,
                     cached: 0,
@@ -687,6 +693,7 @@ mod tests {
             (
                 CodexUsageRecord {
                     day_key: "2026-05-30".to_string(),
+                    timestamp: None,
                     model: "gpt-5.6-sol".to_string(),
                     input: 200_000,
                     cached: 0,
@@ -737,6 +744,7 @@ mod tests {
             (
                 CodexUsageRecord {
                     day_key: "2026-08-19".to_string(),
+                    timestamp: None,
                     model: "gpt-5.6-sol".to_string(),
                     input: 100,
                     cached: 0,
@@ -748,6 +756,7 @@ mod tests {
             (
                 CodexUsageRecord {
                     day_key: "2026-08-19".to_string(),
+                    timestamp: None,
                     model: "deepseek/deepseek-chat".to_string(),
                     input: 1_000_000,
                     cached: 0,
@@ -774,6 +783,7 @@ mod tests {
         let records = vec![(
             CodexUsageRecord {
                 day_key: "2026-08-19".to_string(),
+                timestamp: None,
                 model: "opencode/gpt-5".to_string(),
                 input: 10,
                 cached: 0,
@@ -794,6 +804,7 @@ mod tests {
         let records = vec![(
             CodexUsageRecord {
                 day_key: "2026-05-31".to_string(),
+                timestamp: None,
                 model: CostUsagePricing::CODEX_UNATTRIBUTED_MODEL.to_string(),
                 input: 55_000_000,
                 cached: 0,
@@ -826,6 +837,7 @@ mod tests {
         let records = vec![(
             CodexUsageRecord {
                 day_key: "2026-05-31".to_string(),
+                timestamp: None,
                 model: "gpt-mystery".to_string(),
                 input: 1_000_000,
                 cached: 0,

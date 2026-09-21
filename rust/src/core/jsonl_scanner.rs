@@ -256,6 +256,10 @@ pub struct CodexSourcePricingEvidence {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexSourceUsageRow {
     pub day_key: String,
+    /// Exact event time when the source exposed one. Legacy rows omit it and
+    /// remain valid for daily history but cannot be split at a quota reset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<DateTime<Utc>>,
     pub model: String,
     pub input: i64,
     pub cached: i64,
@@ -436,6 +440,7 @@ pub struct CodexParseResult {
 #[derive(Debug, Clone)]
 pub struct CodexUsageRecord {
     pub day_key: String,
+    pub timestamp: Option<DateTime<Utc>>,
     pub model: String,
     pub input: i64,
     pub cached: i64,

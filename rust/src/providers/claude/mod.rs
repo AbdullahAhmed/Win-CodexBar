@@ -5,6 +5,7 @@ mod admin_api;
 pub mod claude_swap;
 mod cli_reset;
 mod oauth;
+pub mod quota_history;
 mod scoped_weekly;
 mod web_api;
 
