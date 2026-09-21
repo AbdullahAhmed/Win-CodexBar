@@ -33,7 +33,7 @@ pub use crate::cli::serve::collection::{
 };
 #[cfg(test)]
 use crate::core::ProviderFetchResult;
-use crate::core::{RateWindow, UsagePace, UsageSnapshot};
+use crate::core::{CostSnapshot, RateWindow, UsagePace, UsageSnapshot};
 
 /// How much account identity a snapshot exposes. Upstream 0.48.0 exposes two
 /// CLI modes (`redacted` default, `full` opt-in); upstream's internal `none`
@@ -124,6 +124,30 @@ pub struct CostPayload {
     pub today_usd: Option<f64>,
     #[serde(rename = "last30DaysUSD")]
     pub last_30_days_usd: Option<f64>,
+}
+
+/// Project a provider-owned 30-day history into the dashboard cost shape.
+///
+/// Provider activity can use completed UTC buckets, so it must not be
+/// relabeled as the host's local Today value. `always_visible` is the core
+/// marker used by provider-owned history (currently OpenRouter activity),
+/// while ordinary billing/balance snapshots remain out of this fallback.
+fn reported_cost_payload(cost: Option<&CostSnapshot>) -> Option<CostPayload> {
+    let cost = cost?;
+    if !cost.always_visible
+        || cost.currency_code != "USD"
+        || cost.period != "Last 30 days (UTC)"
+        || !cost.used.is_finite()
+    {
+        return None;
+    }
+
+    Some(CostPayload {
+        today_usd: None,
+        // Preserve a reported zero as known data instead of treating it as
+        // missing and falling through to a different source.
+        last_30_days_usd: Some(cost.used),
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -251,11 +275,16 @@ fn build_provider(
     sort_key: u32,
     claude: Option<&ClaudeAccountsInput>,
 ) -> SnapshotProvider {
-    let cost = costs.get(&envelope.id).and_then(|raw| {
-        (raw.today_usd.is_some() || raw.last_30_days_usd.is_some()).then_some(CostPayload {
-            today_usd: raw.today_usd,
-            last_30_days_usd: raw.last_30_days_usd,
-        })
+    let local_cost = costs.get(&envelope.id).map(|raw| CostPayload {
+        today_usd: raw.today_usd,
+        last_30_days_usd: raw.last_30_days_usd,
+    });
+    let cost = local_cost.or_else(|| {
+        envelope
+            .fetch
+            .as_ref()
+            .ok()
+            .and_then(|result| reported_cost_payload(result.cost.as_ref()))
     });
 
     let (source, identity, windows, updated_at, error) = match &envelope.fetch {
