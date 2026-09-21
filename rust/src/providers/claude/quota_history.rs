@@ -26,6 +26,19 @@ pub enum ClaudeQuotaDedupKey {
 
 /// One final Claude request row. Token and cost completeness are independent:
 /// a known token subtotal may coexist with an unknown cost, and vice versa.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub enum ClaudeHistoryAttribution {
+    Account(String),
+    #[default]
+    Unavailable,
+}
+
+impl ClaudeHistoryAttribution {
+    pub fn matches_account(&self, account_scope: &str) -> bool {
+        matches!(self, Self::Account(scope) if scope == account_scope)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClaudeQuotaHistoryRecord {
     pub timestamp: DateTime<Utc>,
@@ -35,6 +48,8 @@ pub struct ClaudeQuotaHistoryRecord {
     pub cost_is_complete: bool,
     #[serde(default)]
     pub dedup_key: Option<ClaudeQuotaDedupKey>,
+    #[serde(default)]
+    pub attribution: ClaudeHistoryAttribution,
 }
 
 impl ClaudeQuotaHistoryRecord {
@@ -155,9 +170,31 @@ pub fn aggregate_claude_quota_windows(
     };
 
     let evidence = ResetEvidence::new(&account_scope, observations, now);
+    if evidence.is_cancelled(live_reset_at) {
+        return ClaudeQuotaHistoryReport {
+            account_scope,
+            windows: Vec::new(),
+            history_coverage_established,
+        };
+    }
     let current_end = current_window_end(live_reset_at, now, duration);
     let boundaries = quota_boundaries(current_end, duration, &evidence, count);
-    let deduped = deduplicate_claude_records(records.to_vec());
+    let attributed_records = records
+        .iter()
+        .filter(|record| record.attribution.matches_account(&account_scope))
+        .cloned()
+        .collect::<Vec<_>>();
+    // A current account identity does not prove ownership of historical
+    // transcript rows. Keep the account-scoped surface absent until a source
+    // supplies explicit attribution for at least one row.
+    if attributed_records.is_empty() {
+        return ClaudeQuotaHistoryReport {
+            account_scope,
+            windows: Vec::new(),
+            history_coverage_established,
+        };
+    }
+    let deduped = deduplicate_claude_records(attributed_records);
 
     let mut windows = Vec::with_capacity(count);
     for pair in boundaries.windows(2).rev().take(count) {
@@ -413,6 +450,7 @@ mod tests {
             tokens_are_complete,
             cost_is_complete,
             dedup_key: key,
+            attribution: ClaudeHistoryAttribution::Account("account-a".into()),
         }
     }
 
@@ -439,7 +477,14 @@ mod tests {
         ];
         let report = aggregate_claude_quota_windows(
             "account-a",
-            &[],
+            &[record(
+                "2026-09-20T10:00:00Z",
+                None,
+                Some(1),
+                Some(0.1),
+                true,
+                true,
+            )],
             ClaudeQuotaHistoryOptions {
                 live_reset_at: Some(live_reset),
                 window_minutes: Some(10_080),
@@ -565,5 +610,77 @@ mod tests {
         );
         assert_eq!(before, ts("2026-09-22T12:00:00Z"));
         assert_eq!(report.account_scope, "account-a");
+    }
+
+    #[test]
+    fn account_scoped_history_excludes_unavailable_and_mismatched_rows() {
+        let mut unavailable = record(
+            "2026-09-20T10:00:00Z",
+            None,
+            Some(100),
+            Some(1.0),
+            true,
+            true,
+        );
+        unavailable.attribution = ClaudeHistoryAttribution::Unavailable;
+        let mut other_account = unavailable.clone();
+        other_account.attribution = ClaudeHistoryAttribution::Account("account-b".into());
+        let mut matching = unavailable.clone();
+        matching.attribution = ClaudeHistoryAttribution::Account("account-a".into());
+        let report = aggregate_claude_quota_windows(
+            "account-a",
+            &[unavailable, other_account, matching],
+            ClaudeQuotaHistoryOptions {
+                live_reset_at: Some(ts("2026-09-22T12:00:00Z")),
+                window_minutes: None,
+                observations: &[],
+                now: ts("2026-09-21T12:00:00Z"),
+                max_windows: 1,
+                history_coverage_established: true,
+            },
+        );
+        let window = &report.windows[0];
+        assert_eq!(window.entry_count, 1);
+        assert_eq!(window.total_tokens, Some(100));
+        assert_eq!(window.total_cost_usd, Some(1.0));
+    }
+
+    #[test]
+    fn account_scoped_history_is_absent_without_explicit_attribution() {
+        let mut record = record(
+            "2026-09-20T10:00:00Z",
+            None,
+            Some(100),
+            Some(1.0),
+            true,
+            true,
+        );
+        record.attribution = ClaudeHistoryAttribution::Unavailable;
+        let report = aggregate_claude_quota_windows(
+            "account-a",
+            &[record],
+            ClaudeQuotaHistoryOptions {
+                live_reset_at: Some(ts("2026-09-22T12:00:00Z")),
+                window_minutes: None,
+                observations: &[],
+                now: ts("2026-09-21T12:00:00Z"),
+                max_windows: 1,
+                history_coverage_established: true,
+            },
+        );
+        assert!(report.windows.is_empty());
+    }
+
+    #[test]
+    fn legacy_rows_without_attribution_deserialize_as_unavailable() {
+        let json = r#"{
+            "timestamp":"2026-09-20T10:00:00Z",
+            "tokens":1,
+            "cost_usd":0.1,
+            "tokens_are_complete":true,
+            "cost_is_complete":true
+        }"#;
+        let record: ClaudeQuotaHistoryRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(record.attribution, ClaudeHistoryAttribution::Unavailable);
     }
 }

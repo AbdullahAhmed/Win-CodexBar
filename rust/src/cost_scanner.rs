@@ -29,6 +29,9 @@ use crate::core::{
     CachedCostReport, CodexScanPauseReason, CostScanOptions, CostUsageCache, CostUsageDayRange,
     CostUsageFileUsage, JsonlScanner, ProviderId,
 };
+use crate::providers::claude::quota_history::{
+    ClaudeHistoryAttribution, ClaudeQuotaDedupKey, ClaudeQuotaHistoryRecord,
+};
 use crate::providers::opencodego::local as opencodego_local;
 use crate::settings::Settings;
 mod claude_pricing;
@@ -435,6 +438,30 @@ struct ClaudeUsageRecord {
     cost: f64,
 }
 
+/// Exact Claude request rows retained for quota-window projection.
+///
+/// This is intentionally separate from [`CostSummary`].  The summary is a
+/// presentation aggregate, while quota history needs timestamps, dedup keys,
+/// and independent completeness for tokens and pricing.
+#[derive(Debug, Clone, Default)]
+pub struct ClaudeQuotaHistoryScan {
+    pub records: Vec<ClaudeQuotaHistoryRecord>,
+    pub history_coverage_established: bool,
+}
+
+/// All chart-facing Claude history derived from one project-tree traversal.
+///
+/// The result keeps provider parsing and aggregation in Rust so callers can
+/// render daily cost, daily tokens, local summary, and quota windows without
+/// starting independent Claude scans. Transcript rows are deliberately marked
+/// as unattributed until a trustworthy historical account signal exists.
+#[derive(Debug, Clone)]
+pub struct ClaudeChartSnapshot {
+    pub summary: CostSummary,
+    pub daily_cost: Vec<(String, Option<f64>)>,
+    pub daily_tokens: Vec<(String, u64)>,
+    pub quota_history: ClaudeQuotaHistoryScan,
+}
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct ClaudeFileScanResult {
     counted: usize,
@@ -562,6 +589,122 @@ impl CostScanner {
         summary
     }
 
+    /// Scan Claude chart evidence once and derive every chart input from the
+    /// same de-duplicated record stream.
+    pub fn scan_claude_chart_snapshot_with_cancel(
+        &self,
+        cancel: Option<&AtomicBool>,
+    ) -> ClaudeChartSnapshot {
+        let projects_dir = self.get_claude_projects_dir();
+        let today = Local::now().date_naive();
+        let cutoff = Utc::now() - Duration::days(self.days as i64);
+        let mut summary = CostSummary {
+            period_start: Some(today - Duration::days(self.days as i64)),
+            period_end: Some(today),
+            ..CostSummary::default()
+        };
+        let mut daily_cost = HashMap::new();
+        let mut daily_tokens = HashMap::new();
+        for days_ago in 0..self.days {
+            let date = today - Duration::days(days_ago as i64);
+            let key = date.format("%Y-%m-%d").to_string();
+            daily_cost.insert(key.clone(), None);
+            daily_tokens.insert(key, 0);
+        }
+
+        let mut quota_records = Vec::new();
+        let mut scan_result = ClaudeFileScanResult::default();
+        let mut missing_timestamp = false;
+        if projects_dir.exists() {
+            let mut seen = HashSet::new();
+            let mut pricing = ClaudeScanPricingResolver::default();
+            self.walk_claude_files(&projects_dir, &cutoff, cancel, &mut |path| {
+                let mut file_has_usage = false;
+                let file_result = scan_claude_file_with_pricing(
+                    path,
+                    &cutoff,
+                    &mut seen,
+                    cancel,
+                    &mut pricing,
+                    |record| {
+                        file_has_usage = true;
+                        add_claude_record_to_summary(&mut summary, record);
+                        add_claude_record_to_daily_costs(&mut daily_cost, record);
+                        add_claude_record_to_daily_tokens(&mut daily_tokens, record);
+                        if let Some(quota_record) = quota_history_record_from_usage(record) {
+                            quota_records.push(quota_record);
+                        } else {
+                            missing_timestamp = true;
+                        }
+                    },
+                );
+                if file_has_usage {
+                    summary.sessions_count += 1;
+                }
+                scan_result.absorb(file_result);
+            });
+        }
+
+        crate::pi_session_cost::scan_pi_compatible_into(
+            &mut summary,
+            crate::pi_session_cost::PiMappedProvider::Claude,
+            self.days,
+            cancel,
+            &mut HashSet::new(),
+        );
+
+        let complete = projects_dir.exists()
+            && !is_cancelled(cancel)
+            && scan_result.is_complete()
+            && !missing_timestamp;
+        finalize_claude_summary(
+            &mut summary,
+            projects_dir.exists(),
+            scan_result,
+            is_cancelled(cancel),
+        );
+        if complete {
+            for value in daily_cost.values_mut() {
+                if value.is_none() {
+                    *value = Some(0.0);
+                }
+            }
+        }
+
+        let mut daily_cost = daily_cost.into_iter().collect::<Vec<_>>();
+        daily_cost.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut daily_tokens = daily_tokens.into_iter().collect::<Vec<_>>();
+        daily_tokens.sort_by(|left, right| left.0.cmp(&right.0));
+        ClaudeChartSnapshot {
+            summary,
+            daily_cost,
+            daily_tokens,
+            quota_history: ClaudeQuotaHistoryScan {
+                records: quota_records,
+                history_coverage_established: complete,
+            },
+        }
+    }
+
+    /// Scan Claude transcript rows for display-only quota-window history.
+    ///
+    /// The parser, preliminary-row filtering, provider filtering, and
+    /// request/session deduplication are shared with the ordinary Claude cost
+    /// summary path.  Missing timestamps or incomplete file reads keep the
+    /// coverage flag false; callers must not present those rows as an exact
+    /// historical total.
+    pub fn scan_claude_quota_history(&self) -> ClaudeQuotaHistoryScan {
+        self.scan_claude_quota_history_with_cancel(None)
+    }
+
+    /// Cancellable form of [`Self::scan_claude_quota_history`].
+    pub fn scan_claude_quota_history_with_cancel(
+        &self,
+        cancel: Option<&AtomicBool>,
+    ) -> ClaudeQuotaHistoryScan {
+        self.scan_claude_chart_snapshot_with_cancel(cancel)
+            .quota_history
+    }
     /// Scan OpenCode Go local SQLite usage (upstream #2649 per-model cost breakdown).
     ///
     /// Reads the local `opencode.db` and maps rows onto the shared `CostSummary`
@@ -862,6 +1005,40 @@ fn add_claude_record_to_summary(summary: &mut CostSummary, record: &ClaudeUsageR
     model_tokens.input_tokens += record.input;
     model_tokens.output_tokens += record.output;
     model_tokens.cached_tokens += record.cache_create + record.cache_read;
+}
+
+fn quota_history_record_from_usage(record: &ClaudeUsageRecord) -> Option<ClaudeQuotaHistoryRecord> {
+    let timestamp = record.timestamp?;
+    let tokens = record
+        .input
+        .checked_add(record.output)
+        .and_then(|value| value.checked_add(record.cache_create))
+        .and_then(|value| value.checked_add(record.cache_read));
+    let dedup_key = record.dedup_key.as_ref().map(|key| match key {
+        ClaudeUsageDedupKey::Request {
+            message_id,
+            request_id,
+        } => ClaudeQuotaDedupKey::Request {
+            message_id: message_id.clone(),
+            request_id: request_id.clone(),
+        },
+        ClaudeUsageDedupKey::Session {
+            session_id,
+            message_id,
+        } => ClaudeQuotaDedupKey::Session {
+            session_id: session_id.clone(),
+            message_id: message_id.clone(),
+        },
+    });
+    Some(ClaudeQuotaHistoryRecord {
+        timestamp,
+        tokens,
+        cost_usd: record.cost.is_finite().then_some(record.cost),
+        tokens_are_complete: tokens.is_some(),
+        cost_is_complete: record.pricing_known && record.cost.is_finite() && record.cost >= 0.0,
+        dedup_key,
+        attribution: ClaudeHistoryAttribution::Unavailable,
+    })
 }
 
 /// Add one usage record to the per-day cost buckets, keyed by the record's
