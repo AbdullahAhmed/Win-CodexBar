@@ -22,6 +22,7 @@ import type { LocaleKey } from "../i18n/keys";
 import { paceCategory } from "../surfaces/tray/paceCategory";
 import { SimpleBarChart, StackedBarChart } from "./MiniBarChart";
 import { InventoryItemRow } from "./InventoryRows";
+import { QuotaWindowHistory } from "./QuotaWindowHistory";
 import { getPaceBudget, type PaceBudget } from "../lib/paceBudget";
 import PaceDetailsChart from "./PaceDetailsChart";
 
@@ -435,6 +436,7 @@ export interface MenuCardPresence {
   hasCostHistory: boolean;
   hasCreditsHistory: boolean;
   hasUsageBreakdown: boolean;
+  hasQuotaWindowHistory: boolean;
   localUsage: ProviderChartData["localUsage"] | null;
   wayfinderUsage: ProviderUsageSnapshot["wayfinderUsage"] | null;
   hasDetails: boolean;
@@ -468,7 +470,10 @@ export function describeCard(
     chartData !== null && chartData.creditsHistory.length > 0;
   const hasUsageBreakdown =
     chartData !== null && chartData.usageBreakdown.length > 0;
-  const hasCharts = hasCostHistory || hasCreditsHistory || hasUsageBreakdown;
+  const hasQuotaWindowHistory =
+    chartData !== null && (chartData.quotaWindowHistory?.windows.length ?? 0) > 0;
+  const hasCharts =
+    hasCostHistory || hasCreditsHistory || hasUsageBreakdown || hasQuotaWindowHistory;
   const isWayfinder = provider.providerId === "wayfinder";
   const localUsage = provider.error ? null : chartData?.localUsage ?? null;
   const wayfinderUsage = isWayfinder ? provider.wayfinderUsage : null;
@@ -506,6 +511,7 @@ export function describeCard(
     hasCostHistory,
     hasCreditsHistory,
     hasUsageBreakdown,
+    hasQuotaWindowHistory,
     localUsage,
     wayfinderUsage,
     hasDetails,
@@ -546,6 +552,7 @@ export default function MenuCardDetails({
     hasCostHistory,
     hasCreditsHistory,
     hasUsageBreakdown,
+    hasQuotaWindowHistory,
     localUsage,
     wayfinderUsage,
   } = presence;
@@ -767,6 +774,9 @@ export default function MenuCardDetails({
                     height={56}
                     t={t}
                   />
+                )}
+                {hasQuotaWindowHistory && (
+                  <QuotaWindowHistory history={chartData!.quotaWindowHistory} t={t} />
                 )}
               </section>
             )}

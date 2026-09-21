@@ -4989,6 +4989,37 @@ html:has(.menu-surface--tray) {
   /* upstream uses .fontWeight(.medium) — 500 matches */
   font-weight: 500;
 }
+.quota-window-history__rows {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+}
+.quota-window-history__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+.quota-window-history__row--header {
+  color: var(--text-tertiary, var(--text-secondary));
+  font-size: var(--font-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.quota-window-history__row--header span:last-child,
+.quota-window-history__row > span:last-child {
+  text-align: right;
+}
+.quota-window-history__range,
+.quota-window-history__value {
+  display: block;
+}
+.quota-window-history__value {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
 .menu-metric__bar,
 .menu-card__pace-track {
   height: var(--bar-height);

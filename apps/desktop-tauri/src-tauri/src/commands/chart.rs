@@ -5,11 +5,17 @@
 //! the Codex / OpenAI dashboard cache and require an `account_email` to scope
 //! reads to the right cached bundle.
 
-use codexbar::core::OpenAIDashboardCacheStore;
+use crate::commands::bridge::RateWindowSnapshot;
+use crate::state::AppState;
+use chrono::{DateTime, Utc};
+use codexbar::core::{JsonlScanner, OpenAIDashboardCacheStore, ProviderId, RateWindow};
 use codexbar::cost_scanner::{
     CostScanner, CostSummary, get_daily_cost_history, get_daily_token_history,
 };
 use codexbar::locale::{self, LocaleKey};
+use codexbar::providers::claude::quota_history::{
+    ClaudeQuotaHistoryOptions, aggregate_claude_quota_windows,
+};
 use codexbar::providers::muse::local_usage as muse_local_usage;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -68,6 +74,34 @@ pub struct ProviderLocalUsageSummary {
     pub token_cost_updated_at_ms: i64,
 }
 
+/// One display-only quota-window history row.  Completeness is tracked per
+/// metric so a known token subtotal never makes an unknown cost look exact.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaWindowHistoryPoint {
+    pub offset: usize,
+    pub start: String,
+    pub end: String,
+    pub total_tokens: Option<u64>,
+    pub total_cost_usd: Option<f64>,
+    pub tokens_are_complete: bool,
+    pub cost_is_complete: bool,
+    pub entry_count: usize,
+    pub boundaries_are_estimated: bool,
+}
+
+/// Provider-scoped quota-window history carried alongside the existing chart
+/// data.  It never participates in the live provider snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaWindowHistoryBridge {
+    pub provider_id: String,
+    pub account_scope: Option<String>,
+    pub windows: Vec<QuotaWindowHistoryPoint>,
+    pub history_coverage_established: bool,
+    pub reset_observations_persisted: bool,
+}
+
 /// Full chart data bundle for one provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,22 +115,34 @@ pub struct ProviderChartData {
     /// backfill keeps the marker true so the UI can show "Refreshing".
     pub tokens_history: Vec<DailyTokenPoint>,
     pub tokens_incomplete: bool,
+    #[serde(default)]
+    pub quota_window_history: Option<QuotaWindowHistoryBridge>,
 }
 
 #[tauri::command]
 pub async fn get_provider_chart_data(
+    state: tauri::State<'_, std::sync::Mutex<AppState>>,
     provider_id: String,
     account_email: Option<String>,
-) -> ProviderChartData {
+) -> Result<ProviderChartData, String> {
     let fallback_provider_id = provider_id.clone();
+    let (weekly_window, cached_account_email) =
+        current_history_context(&state, &provider_id).unwrap_or((None, None));
+    let account_email = account_email.or(cached_account_email);
     let cancel = register_chart_scan(&provider_id);
     tauri::async_runtime::spawn_blocking(move || {
-        build_provider_chart_data_with_cancel(provider_id, account_email, Some(cancel))
+        build_provider_chart_data_with_cancel(
+            provider_id,
+            account_email,
+            Some(cancel),
+            weekly_window,
+        )
     })
     .await
+    .map(Ok)
     .unwrap_or_else(|err| {
         tracing::warn!("Provider chart data worker failed: {}", err);
-        ProviderChartData::empty(fallback_provider_id)
+        Ok(ProviderChartData::empty(fallback_provider_id))
     })
 }
 
@@ -119,13 +165,14 @@ pub(crate) fn build_provider_chart_data(
     provider_id: String,
     account_email: Option<String>,
 ) -> ProviderChartData {
-    build_provider_chart_data_with_cancel(provider_id, account_email, None)
+    build_provider_chart_data_with_cancel(provider_id, account_email, None, None)
 }
 
 fn build_provider_chart_data_with_cancel(
     provider_id: String,
     account_email: Option<String>,
     cancel: Option<Arc<AtomicBool>>,
+    weekly_window: Option<RateWindowSnapshot>,
 ) -> ProviderChartData {
     let (cost_history, tokens_history, tokens_incomplete, local_usage) = if provider_id == "muse" {
         if cancel
@@ -177,6 +224,13 @@ fn build_provider_chart_data_with_cancel(
     let (credits_history, usage_breakdown) =
         load_openai_dashboard_chart_data(&provider_id, account_email.as_deref());
 
+    let quota_window_history = build_quota_window_history(
+        &provider_id,
+        account_email.as_deref(),
+        weekly_window.as_ref(),
+        cancel.as_deref(),
+    );
+
     ProviderChartData {
         provider_id,
         cost_history,
@@ -185,6 +239,7 @@ fn build_provider_chart_data_with_cancel(
         local_usage,
         tokens_history,
         tokens_incomplete,
+        quota_window_history,
     }
 }
 
@@ -198,8 +253,144 @@ impl ProviderChartData {
             local_usage: None,
             tokens_history: Vec::new(),
             tokens_incomplete: false,
+            quota_window_history: None,
         }
     }
+}
+
+fn current_history_context(
+    state: &tauri::State<'_, std::sync::Mutex<AppState>>,
+    provider_id: &str,
+) -> Option<(Option<RateWindowSnapshot>, Option<String>)> {
+    let guard = state.lock().ok()?;
+    let snapshot = guard
+        .provider_cache
+        .iter()
+        .find(|snapshot| snapshot.provider_id.eq_ignore_ascii_case(provider_id))?;
+    let weekly_window = snapshot.secondary.clone().or_else(|| {
+        snapshot
+            .primary
+            .window_minutes
+            .filter(|minutes| *minutes >= 7 * 24 * 60)
+            .map(|_| snapshot.primary.clone())
+    });
+    Some((weekly_window, snapshot.account_email.clone()))
+}
+
+fn build_quota_window_history(
+    provider_id: &str,
+    account_email: Option<&str>,
+    weekly_window: Option<&RateWindowSnapshot>,
+    cancel: Option<&AtomicBool>,
+) -> Option<QuotaWindowHistoryBridge> {
+    if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return None;
+    }
+    let weekly_window = weekly_window?;
+    let live_window = rate_window_from_snapshot(weekly_window)?;
+    let now = Utc::now();
+
+    match provider_id {
+        "codex" => {
+            let cache = JsonlScanner::load_cache(ProviderId::Codex, None);
+            let windows = codexbar::codex_costs::codex_quota_windows_from_cache(
+                &cache,
+                Some(&live_window),
+                &[],
+                now,
+                4,
+            );
+            if windows.is_empty() {
+                return None;
+            }
+            let history_coverage_established = !cache.codex_scan_incomplete
+                && cache.codex_pending_paths.is_empty()
+                && cache.scan_since_key.is_some()
+                && cache.scan_until_key.is_some();
+            Some(QuotaWindowHistoryBridge {
+                provider_id: provider_id.to_string(),
+                account_scope: account_email
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned),
+                windows: windows
+                    .into_iter()
+                    .map(|window| QuotaWindowHistoryPoint {
+                        offset: window.offset,
+                        start: window.start.to_rfc3339(),
+                        end: window.end.to_rfc3339(),
+                        total_tokens: window.total_tokens,
+                        total_cost_usd: window.total_cost_usd,
+                        tokens_are_complete: window.tokens_are_complete,
+                        cost_is_complete: window.cost_is_complete,
+                        entry_count: window.entry_count,
+                        boundaries_are_estimated: window.boundaries_are_estimated,
+                    })
+                    .collect(),
+                history_coverage_established,
+                reset_observations_persisted: false,
+            })
+        }
+        "claude" => {
+            let account_scope = account_email
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)?;
+            let scan = CostScanner::new(35).scan_claude_quota_history_with_cancel(cancel);
+            let report = aggregate_claude_quota_windows(
+                account_scope.clone(),
+                &scan.records,
+                ClaudeQuotaHistoryOptions {
+                    live_reset_at: live_window.resets_at,
+                    window_minutes: live_window.window_minutes,
+                    observations: &[],
+                    now,
+                    max_windows: 4,
+                    history_coverage_established: scan.history_coverage_established,
+                },
+            );
+            if report.windows.is_empty() {
+                return None;
+            }
+            Some(QuotaWindowHistoryBridge {
+                provider_id: provider_id.to_string(),
+                account_scope: Some(report.account_scope),
+                windows: report
+                    .windows
+                    .into_iter()
+                    .enumerate()
+                    .map(|(offset, window)| QuotaWindowHistoryPoint {
+                        offset,
+                        start: window.start.to_rfc3339(),
+                        end: window.end.to_rfc3339(),
+                        total_tokens: window.total_tokens,
+                        total_cost_usd: window.total_cost_usd,
+                        tokens_are_complete: window.tokens_are_complete,
+                        cost_is_complete: window.cost_is_complete,
+                        entry_count: usize::try_from(window.entry_count).unwrap_or(usize::MAX),
+                        boundaries_are_estimated: window.boundaries_are_estimated,
+                    })
+                    .collect(),
+                history_coverage_established: report.history_coverage_established,
+                reset_observations_persisted: false,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn rate_window_from_snapshot(snapshot: &RateWindowSnapshot) -> Option<RateWindow> {
+    let resets_at = snapshot
+        .resets_at
+        .as_deref()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc));
+    Some(RateWindow::with_details(
+        snapshot.used_percent,
+        snapshot.window_minutes,
+        resets_at,
+        snapshot.reset_description.clone(),
+    ))
 }
 
 fn active_chart_scans() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
