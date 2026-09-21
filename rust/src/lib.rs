@@ -30,6 +30,6 @@ pub mod tray;
 pub mod updater;
 pub mod wsl;
 
-mod codex_costs;
+pub mod codex_costs;
 mod codex_sessions;
 mod pi_session_cost;

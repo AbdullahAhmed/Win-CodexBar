@@ -6,6 +6,7 @@ fn source_row_recovery_preserves_unanimous_pricing_only() {
     let cached = vec![
         CodexSourceUsageRow {
             day_key: "2026-09-19".to_string(),
+            timestamp: None,
             model: "gpt-5.5".to_string(),
             input: 200_000,
             cached: 0,
@@ -19,6 +20,7 @@ fn source_row_recovery_preserves_unanimous_pricing_only() {
         },
         CodexSourceUsageRow {
             day_key: "2026-09-19".to_string(),
+            timestamp: None,
             model: "gpt-5.5".to_string(),
             input: 200_000,
             cached: 0,
@@ -35,6 +37,7 @@ fn source_row_recovery_preserves_unanimous_pricing_only() {
         cached[0].clone(),
         CodexSourceUsageRow {
             day_key: "2026-09-19".to_string(),
+            timestamp: None,
             model: "gpt-5.4".to_string(),
             input: 50_000,
             cached: 0,
@@ -58,6 +61,7 @@ fn source_row_recovery_preserves_unanimous_pricing_only() {
 fn source_row_recovery_does_not_price_an_appended_duplicate() {
     let historical = CodexSourceUsageRow {
         day_key: "2026-09-19".to_string(),
+        timestamp: None,
         model: "gpt-5.5".to_string(),
         input: 200_000,
         cached: 0,
@@ -93,6 +97,7 @@ fn source_rows_from_records_use_source_model_as_initial_evidence() {
     let records = vec![(
         CodexUsageRecord {
             day_key: "2026-09-19".to_string(),
+            timestamp: None,
             model: "gpt-5.5-priority".to_string(),
             input: 12,
             cached: 20,

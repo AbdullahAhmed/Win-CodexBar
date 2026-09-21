@@ -8,6 +8,7 @@ allowances and per-model spending, clearer account switching, and steadier
 menu-bar layout.
 
 ### Added
+- Cost history: add provider-scoped, display-only Codex and Claude quota-window projection primitives with exact reset boundaries, independent token/cost completeness, and backward-compatible local evidence handling.
 - Grok: Settings and tray **Add account** flow matching Codex/Claude — isolated `grok login --oauth`, save current CLI login, switch, and remove without logging out the active session.
 - Replicate: cookie-authenticated monthly spend and optional prepaid credit balance from the billing page, with user and organization account isolation.
 - DeepSeek: show reported per-model spend in the provider details while preserving the billing currency, reporting period, zero values, and incomplete-total safeguards.

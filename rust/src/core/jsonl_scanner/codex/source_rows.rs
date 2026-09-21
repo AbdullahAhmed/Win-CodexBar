@@ -13,6 +13,7 @@ pub(crate) fn rows_from_records(records: &[(CodexUsageRecord, i64)]) -> Vec<Code
         .iter()
         .map(|(record, offset)| CodexSourceUsageRow {
             day_key: record.day_key.clone(),
+            timestamp: record.timestamp,
             model: record.model.clone(),
             input: record.input.max(0),
             cached: record.cached.max(0).min(record.input.max(0)),
@@ -233,6 +234,7 @@ fn source_prefix_hash(file_path: &Path, size: u64) -> Option<u64> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct CodexSourceRowKey {
     day_key: String,
+    timestamp: Option<chrono::DateTime<chrono::Utc>>,
     model: String,
     input: i64,
     cached: i64,
@@ -244,6 +246,7 @@ impl From<&CodexSourceUsageRow> for CodexSourceRowKey {
     fn from(row: &CodexSourceUsageRow) -> Self {
         Self {
             day_key: row.day_key.clone(),
+            timestamp: row.timestamp,
             model: row.model.clone(),
             input: row.input,
             cached: row.cached,

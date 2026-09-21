@@ -136,6 +136,7 @@ fn codex_token_pipeline_preserves_counts_above_i32_max() {
             &mut packed,
             &CodexUsageRecord {
                 day_key: "2026-09-09".to_string(),
+                timestamp: None,
                 model: "gpt-5.6-luna".to_string(),
                 input: 1_500_000_000,
                 cached: 1_400_000_000,
@@ -216,6 +217,7 @@ fn negative_cumulative_totals_do_not_inflate_later_deltas() {
 fn legacy_packed_rows_remain_three_slots_and_report_reasoning_is_unknown() {
     let record = CodexUsageRecord {
         day_key: "2026-05-31".to_string(),
+        timestamp: None,
         model: "gpt-5.6-sol".to_string(),
         input: 5,
         cached: 1,
