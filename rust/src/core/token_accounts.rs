@@ -372,6 +372,7 @@ impl TokenAccountSupport {
             | ProviderId::QwenCloud
             | ProviderId::Fireworks
             | ProviderId::Meta
+            | ProviderId::Nous
             | ProviderId::Muse => None,
         }
     }

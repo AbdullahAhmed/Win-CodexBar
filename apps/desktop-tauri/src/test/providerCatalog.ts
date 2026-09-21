@@ -72,4 +72,5 @@ export const TEST_PROVIDER_CATALOG: Array<[string, string]> = [
   ["replicate", "Replicate"],
   ["meta", "Meta"],
   ["muse", "Muse Code"],
+  ["nous", "Nous Portal"],
 ];

@@ -16,8 +16,8 @@ use crate::providers::{
     GrokProvider, GroqProvider, HuggingFaceProvider, InfiniProvider, JetBrainsProvider,
     KiloProvider, KimiK2Provider, KimiProvider, KiroProvider, LLMProxyProvider, LiteLLMProvider,
     LongCatProvider, ManusProvider, MetaProvider, MiMoProvider, MiniMaxProvider, MistralProvider,
-    MuseProvider, NanoGPTProvider, NeuralwattProvider, NotionProvider, OllamaProvider,
-    OpenAIApiProvider, OpenCodeGoProvider, OpenCodeProvider, OpenRouterProvider,
+    MuseProvider, NanoGPTProvider, NeuralwattProvider, NotionProvider, NousProvider,
+    OllamaProvider, OpenAIApiProvider, OpenCodeGoProvider, OpenCodeProvider, OpenRouterProvider,
     PerplexityProvider, PoeProvider, QoderProvider, QwenCloudProvider, ReplicateProvider,
     SakanaProvider, StepFunProvider, Sub2ApiProvider, T3ChatProvider, VeniceProvider,
     VertexAIProvider, WarpProvider, WayfinderProvider, WindsurfProvider, XaiProvider, ZaiProvider,
@@ -105,6 +105,7 @@ pub fn instantiate(id: ProviderId) -> Box<dyn Provider> {
         ProviderId::Fireworks => Box::new(FireworksProvider::new()),
         ProviderId::Meta => Box::new(MetaProvider::new()),
         ProviderId::Muse => Box::new(MuseProvider::new()),
+        ProviderId::Nous => Box::new(NousProvider::new()),
     }
 }
 

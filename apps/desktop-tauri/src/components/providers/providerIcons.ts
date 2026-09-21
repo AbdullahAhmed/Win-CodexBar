@@ -46,6 +46,7 @@ import minimax from "./icons/ProviderIcon-minimax.svg?raw";
 import mistral from "./icons/ProviderIcon-mistral.svg?raw";
 import muse from "./icons/ProviderIcon-muse.svg?raw";
 import notion from "./icons/ProviderIcon-notion.svg?raw";
+import nous from "./icons/ProviderIcon-nous.svg?raw";
 import xai from "./icons/ProviderIcon-xai.svg?raw";
 import ollama from "./icons/ProviderIcon-ollama.svg?raw";
 import opencode from "./icons/ProviderIcon-opencode.svg?raw";
@@ -131,6 +132,7 @@ const RAW: Record<string, string> = {
   mimo: tint(mimo),
   minimax: tint(minimax),
   notion: tint(notion),
+  nous: tint(nous),
   xai: tint(xai),
   mistral: tint(mistral),
   muse: tint(muse),
@@ -232,6 +234,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   zed:         { id: "zed",         brandColor: "#084ccf", fallbackLetter: "Z" },
   qwencloud:   { id: "qwencloud",   brandColor: "#615CED", fallbackLetter: "Q" },
   notion:      { id: "notion",      brandColor: "#337EA9", fallbackLetter: "N", svgPath: RAW.notion },
+  nous:        { id: "nous",        brandColor: "#D6A55C", fallbackLetter: "N", svgPath: RAW.nous },
   xai:         { id: "xai",         brandColor: "#8e8e93", fallbackLetter: "X", svgPath: RAW.xai },
   meta:        { id: "meta",        brandColor: "#0467DF", fallbackLetter: "M", svgPath: RAW.meta },
 };

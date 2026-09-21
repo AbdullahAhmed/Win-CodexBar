@@ -88,6 +88,7 @@ pub enum ProviderId {
     Meta,
     Muse,
     Replicate,
+    Nous,
 }
 
 impl ProviderId {
@@ -169,6 +170,7 @@ impl ProviderId {
             ProviderId::Meta,
             ProviderId::Muse,
             ProviderId::Replicate,
+            ProviderId::Nous,
         ]
     }
 
@@ -214,6 +216,7 @@ impl ProviderId {
             ProviderId::Fireworks => "fireworks",
             ProviderId::Meta => "meta",
             ProviderId::Muse => "muse",
+            ProviderId::Nous => "nous",
             ProviderId::AiAnd => "aiand",
             ProviderId::Windsurf => "windsurf",
             ProviderId::Manus => "manus",
@@ -296,6 +299,7 @@ impl ProviderId {
             ProviderId::Fireworks => "Fireworks",
             ProviderId::Meta => "Meta",
             ProviderId::Muse => "Muse Code",
+            ProviderId::Nous => "Nous Portal",
             ProviderId::AiAnd => "ai&",
             ProviderId::Windsurf => "Windsurf",
             ProviderId::Manus => "Manus",
@@ -393,6 +397,7 @@ impl ProviderId {
             ProviderId::Fireworks => None,
             ProviderId::Meta => None,
             ProviderId::Muse => None,
+            ProviderId::Nous => None,
             ProviderId::AiAnd => None,
             ProviderId::Windsurf => None,
             ProviderId::Doubao => None,
@@ -468,6 +473,7 @@ impl ProviderId {
             "deepinfra" | "deep-infra" | "di" => Some(ProviderId::DeepInfra),
             "fireworks" | "fireworks-ai" | "fw" => Some(ProviderId::Fireworks),
             "muse" | "muse-code" | "muse code" => Some(ProviderId::Muse),
+            "nous" | "nous-portal" | "nous portal" | "hermes" => Some(ProviderId::Nous),
             "meta" | "metaspark" | "meta-spark" | "muse-spark" | "musespark" | "muse spark"
             | "meta muse spark" => Some(ProviderId::Meta),
             "aiand" | "ai&" | "ai-and" | "ai and" => Some(ProviderId::AiAnd),
@@ -925,6 +931,9 @@ pub fn cli_name_map() -> HashMap<&'static str, ProviderId> {
     map.insert("fw", ProviderId::Fireworks);
     map.insert("muse-code", ProviderId::Muse);
     map.insert("muse code", ProviderId::Muse);
+    map.insert("nous-portal", ProviderId::Nous);
+    map.insert("nous portal", ProviderId::Nous);
+    map.insert("hermes", ProviderId::Nous);
     map.insert("metaspark", ProviderId::Meta);
     map.insert("meta-spark", ProviderId::Meta);
     map.insert("muse-spark", ProviderId::Meta);
@@ -1065,6 +1074,7 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::Meta => "#0467DF",
         ProviderId::Muse => "#0668E1",
         ProviderId::Replicate => "#000000",
+        ProviderId::Nous => "#D6A55C",
     }
 }
 
@@ -1079,7 +1089,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 75);
+        assert_eq!(all.len(), 76);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Fireworks));
@@ -1135,6 +1145,7 @@ mod tests {
         assert!(all.contains(&ProviderId::Meta));
         assert!(all.contains(&ProviderId::Replicate));
         assert!(all.contains(&ProviderId::Muse));
+        assert!(all.contains(&ProviderId::Nous));
     }
 
     #[test]
