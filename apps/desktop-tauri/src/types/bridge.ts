@@ -827,6 +827,25 @@ export interface ProviderLocalUsageSummary {
   tokenCostUpdatedAtMs: number;
 }
 
+export interface QuotaWindowHistoryPoint {
+  offset: number;
+  start: string;
+  end: string;
+  totalTokens: number | null;
+  totalCostUsd: number | null;
+  tokensAreComplete: boolean;
+  costIsComplete: boolean;
+  entryCount: number;
+  boundariesAreEstimated: boolean;
+}
+
+export interface QuotaWindowHistoryBridge {
+  providerId: string;
+  accountScope: string | null;
+  windows: QuotaWindowHistoryPoint[];
+  historyCoverageEstablished: boolean;
+}
+
 export interface ProviderChartData {
   providerId: string;
   costHistory: DailyCostPoint[];
@@ -835,6 +854,7 @@ export interface ProviderChartData {
   localUsage: ProviderLocalUsageSummary | null;
   tokensHistory: DailyTokenPoint[];
   tokensIncomplete: boolean;
+  quotaWindowHistory?: QuotaWindowHistoryBridge | null;
 }
 
 // ── Token account types ──────────────────────────────────────────────

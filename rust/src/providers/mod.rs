@@ -14,6 +14,7 @@ pub mod antigravity;
 pub mod augment;
 pub mod azureopenai;
 pub mod bedrock;
+pub mod chart;
 pub mod chutes;
 pub mod claude;
 pub mod clinepass;

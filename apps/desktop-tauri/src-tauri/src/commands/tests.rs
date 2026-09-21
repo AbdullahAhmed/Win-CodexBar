@@ -1585,7 +1585,8 @@ fn non_claude_error_message_is_preserved() {
 #[test]
 fn chart_data_serde_roundtrip_preserves_fields() {
     use super::{
-        DailyCostPoint, DailyTokenPoint, DailyUsageBreakdown, ProviderChartData, ServiceUsagePoint,
+        DailyCostPoint, DailyTokenPoint, DailyUsageBreakdown, ProviderChartData,
+        QuotaWindowHistoryBridge, QuotaWindowHistoryPoint, ServiceUsagePoint,
     };
 
     let original = ProviderChartData {
@@ -1624,6 +1625,22 @@ fn chart_data_serde_roundtrip_preserves_fields() {
             tokens: 123_456,
         }],
         tokens_incomplete: true,
+        quota_window_history: Some(QuotaWindowHistoryBridge {
+            provider_id: "codex".into(),
+            account_scope: Some("person@example.com".into()),
+            windows: vec![QuotaWindowHistoryPoint {
+                offset: 0,
+                start: "2025-01-01T00:00:00Z".into(),
+                end: "2025-01-08T00:00:00Z".into(),
+                total_tokens: Some(123_456),
+                total_cost_usd: None,
+                tokens_are_complete: true,
+                cost_is_complete: false,
+                entry_count: 2,
+                boundaries_are_estimated: true,
+            }],
+            history_coverage_established: false,
+        }),
     };
 
     let json = serde_json::to_string(&original).expect("serialize");
@@ -1650,6 +1667,21 @@ fn chart_data_serde_roundtrip_preserves_fields() {
     assert_eq!(back.usage_breakdown[0].total_credits_used, 13.5);
     assert_eq!(back.tokens_history[0].tokens, 123_456);
     assert!(back.tokens_incomplete);
+    let history = back.quota_window_history.expect("quota history");
+    assert_eq!(history.account_scope.as_deref(), Some("person@example.com"));
+    assert_eq!(history.windows[0].offset, 0);
+    assert!(history.windows[0].boundaries_are_estimated);
+    assert!(!history.windows[0].cost_is_complete);
+    assert!(!history.history_coverage_established);
+
+    let mut legacy = serde_json::to_value(&original).expect("serialize legacy fixture");
+    legacy
+        .as_object_mut()
+        .expect("chart object")
+        .remove("quotaWindowHistory");
+    let legacy_back: ProviderChartData =
+        serde_json::from_value(legacy).expect("legacy chart payload remains readable");
+    assert!(legacy_back.quota_window_history.is_none());
 }
 
 #[test]
