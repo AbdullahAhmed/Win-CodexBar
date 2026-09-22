@@ -327,7 +327,12 @@ mod tests {
         let (stacked, _, _) = render_stacked_bar_icon_rgba(100.0, 0.0, true);
         let pixel = |rgba: &[u8], x: u32, y: u32| {
             let index = ((y * width + x) * 4) as usize;
-            &rgba[index..index + 4]
+            [
+                rgba[index],
+                rgba[index + 1],
+                rgba[index + 2],
+                rgba[index + 3],
+            ]
         };
 
         assert_eq!(pixel(&normal, 8, 12), pixel(&stacked, 8, 8));
