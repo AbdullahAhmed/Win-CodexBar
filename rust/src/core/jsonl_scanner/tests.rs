@@ -139,9 +139,9 @@ fn inferred_fork_waits_for_present_explicit_start_ordinal() {
     );
 
     assert_eq!(state.records.len(), 1);
-    assert_eq!(state.records[0].input, 10);
-    assert_eq!(state.records[0].cached, 2);
-    assert_eq!(state.records[0].output, 1);
+    assert_eq!(state.records[0].0.input, 10);
+    assert_eq!(state.records[0].0.cached, 2);
+    assert_eq!(state.records[0].0.output, 1);
 }
 
 #[test]
