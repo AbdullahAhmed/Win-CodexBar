@@ -26,6 +26,10 @@ pub struct UsageSpendRow {
     pub display_name: String,
     pub seven_day: Option<f64>,
     pub thirty_day: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seven_day_estimate: Option<codexbar::spend_contract::LocalCostEstimate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thirty_day_estimate: Option<codexbar::spend_contract::LocalCostEstimate>,
     pub seven_day_tokens: Option<u64>,
     pub thirty_day_tokens: Option<u64>,
     pub currency: String,
@@ -496,6 +500,7 @@ fn build_usage_spend_summary(
             })
             .unwrap_or_else(|| provider_id.clone());
 
+        let mut local_cost_estimates = None;
         let spend = match provider_id.as_str() {
             "codex" => SpendValues {
                 seven_day: codex_7_contract.known_cost_usd,
@@ -590,21 +595,22 @@ fn build_usage_spend_summary(
                 let seven = codexbar::providers::antigravity::local_sessions::summarize(7);
                 let thirty = codexbar::providers::antigravity::local_sessions::summarize(30);
                 let mut spend = cached_spend(cached_snapshot);
-                spend.seven_day = seven.estimated_cost_usd;
-                spend.thirty_day = thirty.estimated_cost_usd;
+                spend.seven_day = seven.cost_estimate.total_usd();
+                spend.thirty_day = thirty.cost_estimate.total_usd();
                 spend.seven_day_tokens = matches!(seven.coverage, LocalHistoryCoverage::Complete)
                     .then_some(seven.total_tokens);
                 spend.thirty_day_tokens = matches!(thirty.coverage, LocalHistoryCoverage::Complete)
                     .then_some(thirty.total_tokens);
-                if thirty.estimated_cost_usd.is_some() {
-                    spend.source = if matches!(thirty.coverage, LocalHistoryCoverage::Complete) {
-                        "local Antigravity history · API list-price estimate".to_string()
-                    } else {
-                        "partial local Antigravity history · API list-price estimate".to_string()
-                    };
+                if thirty.cost_estimate.total_usd().is_some() {
+                    spend.source =
+                        "local Antigravity history · API list-price estimate".to_string();
+                } else if thirty.cost_estimate.known_subtotal_usd.is_some() {
+                    spend.source =
+                        "local Antigravity history · known API list-price subtotal".to_string();
                 } else if matches!(thirty.coverage, LocalHistoryCoverage::Complete) {
                     spend.source = "local Antigravity history · unpriced".to_string();
                 }
+                local_cost_estimates = Some((seven.cost_estimate, thirty.cost_estimate));
                 spend
             }
             _ => cached_spend(cached_snapshot),
@@ -626,11 +632,16 @@ fn build_usage_spend_summary(
                     .collect()
             })
             .unwrap_or_default();
+        let (seven_day_estimate, thirty_day_estimate) = local_cost_estimates
+            .map(|(seven, thirty)| (Some(seven), Some(thirty)))
+            .unwrap_or((None, None));
         rows.push(UsageSpendRow {
             provider_id: provider_id.clone(),
             display_name,
             seven_day: spend.seven_day,
             thirty_day: spend.thirty_day,
+            seven_day_estimate,
+            thirty_day_estimate,
             seven_day_tokens: spend.seven_day_tokens,
             thirty_day_tokens: spend.thirty_day_tokens,
             currency,

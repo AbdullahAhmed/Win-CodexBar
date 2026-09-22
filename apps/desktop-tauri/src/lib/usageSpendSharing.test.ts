@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatUsageSpendReportingDay,
+  formatSpendMetric,
   filterUsageSpendSummaryForOverview,
   renderUsageSpendSharePng,
   usageSpendShareFooter,
@@ -10,6 +11,10 @@ import {
 import type { SpendContract, UsageSpendRow, UsageSpendSummary } from "../types/bridge";
 
 describe("usage spend sharing", () => {
+  it("labels a mixed-pricing subtotal without presenting it as a total", () => {
+    expect(formatSpendMetric(null, 1_500, "USD", "tokens", 0.0125)).toMatch(/^≥.* known/);
+  });
+
   it.each([
     [0, "0 subscriptions"],
     [1, "1 subscription"],

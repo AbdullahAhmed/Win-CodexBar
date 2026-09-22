@@ -79,14 +79,45 @@ pub enum LocalHistoryCoverage {
     Unavailable,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct LocalTokenHistorySummary {
     pub total_tokens: u64,
     pub session_count: usize,
     pub coverage: LocalHistoryCoverage,
-    /// Known subtotal priced at public API list rates. `None` means that no
-    /// local request in the selected window had a resolvable model price.
-    pub estimated_cost_usd: Option<f64>,
+    pub cost_estimate: LocalCostEstimate,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalCostEstimate {
+    /// Sum of requests whose models have public API list prices. This remains
+    /// a subtotal when one or more requests are unpriced.
+    pub known_subtotal_usd: Option<f64>,
+    pub coverage: CostCoverageCounts,
+}
+
+impl LocalCostEstimate {
+    pub fn total_usd(&self) -> Option<f64> {
+        if self.coverage.unpriced == 0 && self.coverage.unmetered == 0 {
+            self.known_subtotal_usd
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn record_list_price(&mut self, cost: Option<f64>) {
+        let Some(cost) = cost.filter(|value| value.is_finite() && *value >= 0.0) else {
+            self.coverage.unpriced = self.coverage.unpriced.saturating_add(1);
+            return;
+        };
+        let next = self.known_subtotal_usd.unwrap_or(0.0) + cost;
+        if next.is_finite() {
+            self.known_subtotal_usd = Some(next);
+            self.coverage.estimated = self.coverage.estimated.saturating_add(1);
+        } else {
+            self.coverage.unpriced = self.coverage.unpriced.saturating_add(1);
+        }
+    }
 }
 
 pub fn local_token_history_json(
@@ -95,13 +126,17 @@ pub fn local_token_history_json(
     days: u32,
 ) -> serde_json::Value {
     let complete = history.coverage == LocalHistoryCoverage::Complete;
+    let total_usd = history.cost_estimate.total_usd();
+    let known_subtotal_usd = history.cost_estimate.known_subtotal_usd;
     serde_json::json!({
         "provider": provider,
         "supported": true,
         "days_scanned": days,
         "cost": {
-            "total_usd": history.estimated_cost_usd,
-            "currency": history.estimated_cost_usd.map(|_| "USD")
+            "total_usd": total_usd,
+            "known_subtotal_usd": known_subtotal_usd,
+            "currency": known_subtotal_usd.map(|_| "USD"),
+            "pricingCoverage": history.cost_estimate.coverage,
         },
         "daily": [],
         "tokens": {"total": complete.then_some(history.total_tokens)},
@@ -112,8 +147,10 @@ pub fn local_token_history_json(
             LocalHistoryCoverage::Unavailable => "unavailable",
         },
         "knownZero": complete && history.total_tokens == 0,
-        "note": if history.estimated_cost_usd.is_some() {
+        "note": if total_usd.is_some() {
             "Local token history estimated at public API list prices; not billed spend"
+        } else if known_subtotal_usd.is_some() {
+            "Known public API list-price subtotal; some local requests are unpriced"
         } else {
             "Local token history; dollar costs unavailable"
         }

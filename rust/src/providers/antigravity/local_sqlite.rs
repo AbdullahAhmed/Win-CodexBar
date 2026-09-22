@@ -184,7 +184,7 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
     }
 
     let mut total_tokens = 0_u64;
-    let mut estimated_cost_usd = None;
+    let mut cost_estimate = crate::spend_contract::LocalCostEstimate::default();
     let mut sessions = HashSet::new();
     let mut rows: HashMap<(String, i64), Event> = HashMap::new();
     let mut responses: HashMap<(String, String), Event> = HashMap::new();
@@ -250,7 +250,7 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
                 continue;
             }
         }
-        if let Some(usage) = event.turn.usage.as_ref() {
+        let estimated_cost = event.turn.usage.as_ref().and_then(|usage| {
             let inherited_model = event.turn.label.as_ref().and_then(|label| {
                 let key = (event.session.clone(), label.clone());
                 (!conflicting_labels.contains(&key))
@@ -261,19 +261,13 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
             let model = event.turn.model.as_deref().or(inherited_model);
             let input = usage.system_prompt.checked_add(usage.new_input);
             let output = usage.output.checked_add(usage.reasoning);
-            if let (Some(input), Some(output)) = (input, output)
-                && let Some(cost) = super::local_sessions::estimate_cost_usd(
-                    model,
-                    input,
-                    usage.cache_read,
-                    0,
-                    output,
-                )
-            {
-                estimated_cost_usd =
-                    super::local_sessions::checked_cost_sum(estimated_cost_usd, cost);
+            if let (Some(input), Some(output)) = (input, output) {
+                super::local_sessions::estimate_cost_usd(model, input, usage.cache_read, 0, output)
+            } else {
+                None
             }
-        }
+        });
+        cost_estimate.record_list_price(estimated_cost);
         sessions.insert(event.session);
     }
 
@@ -285,7 +279,7 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
         } else {
             LocalHistoryCoverage::Partial
         },
-        estimated_cost_usd,
+        cost_estimate,
     })
 }
 

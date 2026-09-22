@@ -386,8 +386,13 @@ fn print_local_token_history(history: crate::spend_contract::LocalTokenHistorySu
             println!("  Local token history is unavailable or incomplete");
         }
     }
-    if let Some(cost) = history.estimated_cost_usd {
+    if let Some(cost) = history.cost_estimate.total_usd() {
         println!("  API list-price estimate: ${cost:.2} (not billed spend)");
+    } else if let Some(cost) = history.cost_estimate.known_subtotal_usd {
+        println!(
+            "  Known API list-price subtotal: ${cost:.2} ({} unpriced requests)",
+            history.cost_estimate.coverage.unpriced
+        );
     } else {
         println!("  Local token history; dollar costs unavailable");
     }
@@ -629,7 +634,7 @@ mod tests {
                 total_tokens: 12_345,
                 session_count: 2,
                 coverage: LocalHistoryCoverage::Complete,
-                estimated_cost_usd: None,
+                cost_estimate: Default::default(),
             },
             30,
         );
@@ -644,7 +649,7 @@ mod tests {
                 total_tokens: 999,
                 session_count: 1,
                 coverage: LocalHistoryCoverage::Partial,
-                estimated_cost_usd: None,
+                cost_estimate: Default::default(),
             },
             30,
         );
@@ -662,13 +667,49 @@ mod tests {
                 total_tokens: 1_000,
                 session_count: 1,
                 coverage: LocalHistoryCoverage::Complete,
-                estimated_cost_usd: Some(0.0125),
+                cost_estimate: crate::spend_contract::LocalCostEstimate {
+                    known_subtotal_usd: Some(0.0125),
+                    coverage: crate::spend_contract::CostCoverageCounts {
+                        estimated: 1,
+                        ..Default::default()
+                    },
+                },
             },
             30,
         );
         assert_eq!(payload["cost"]["total_usd"], 0.0125);
+        assert_eq!(payload["cost"]["known_subtotal_usd"], 0.0125);
         assert_eq!(payload["cost"]["currency"], "USD");
         assert!(payload["note"].as_str().unwrap().contains("not billed"));
+    }
+
+    #[test]
+    fn antigravity_json_keeps_mixed_pricing_as_a_known_subtotal() {
+        use crate::spend_contract::{
+            CostCoverageCounts, LocalCostEstimate, LocalHistoryCoverage, LocalTokenHistorySummary,
+        };
+        let payload = crate::spend_contract::local_token_history_json(
+            "antigravity",
+            LocalTokenHistorySummary {
+                total_tokens: 1_500,
+                session_count: 2,
+                coverage: LocalHistoryCoverage::Complete,
+                cost_estimate: LocalCostEstimate {
+                    known_subtotal_usd: Some(0.0125),
+                    coverage: CostCoverageCounts {
+                        estimated: 1,
+                        unpriced: 1,
+                        ..Default::default()
+                    },
+                },
+            },
+            30,
+        );
+        assert!(payload["cost"]["total_usd"].is_null());
+        assert_eq!(payload["cost"]["known_subtotal_usd"], 0.0125);
+        assert_eq!(payload["cost"]["pricingCoverage"]["estimated"], 1);
+        assert_eq!(payload["cost"]["pricingCoverage"]["unpriced"], 1);
+        assert!(payload["note"].as_str().unwrap().contains("subtotal"));
     }
 
     #[test]

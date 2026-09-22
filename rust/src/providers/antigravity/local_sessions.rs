@@ -145,7 +145,7 @@ fn summarize_paths(
     let first_day = now.with_timezone(&Local).date_naive()
         - Duration::days(i64::from(days.clamp(1, 365).saturating_sub(1)));
     let mut total_tokens = 0_u64;
-    let mut estimated_cost_usd = None;
+    let mut cost_estimate = crate::spend_contract::LocalCostEstimate::default();
     let mut sessions_with_usage = HashSet::new();
     let mut seen_response_ids = HashSet::new();
     let mut complete = !truncated;
@@ -235,15 +235,13 @@ fn summarize_paths(
                 continue;
             }
             total_tokens = total_tokens.saturating_add(total);
-            if let Some(cost) = estimate_cost_usd(
+            cost_estimate.record_list_price(estimate_cost_usd(
                 model.as_deref(),
                 input,
                 cache_read,
                 cache_write,
                 output.saturating_add(reasoning),
-            ) {
-                estimated_cost_usd = checked_cost_sum(estimated_cost_usd, cost);
-            }
+            ));
             path_had_usage = true;
         }
         if path_had_usage {
@@ -261,7 +259,7 @@ fn summarize_paths(
         } else {
             LocalHistoryCoverage::Partial
         },
-        estimated_cost_usd,
+        cost_estimate,
     }
 }
 
@@ -288,11 +286,6 @@ pub(super) fn estimate_cost_usd(
             .filter(|base| !base.is_empty())
             .and_then(resolve)
     })
-}
-
-pub(super) fn checked_cost_sum(current: Option<f64>, cost: f64) -> Option<f64> {
-    let next = current.unwrap_or(0.0) + cost;
-    next.is_finite().then_some(next)
 }
 
 fn read_bounded_jsonl_line<R: BufRead>(
@@ -367,6 +360,37 @@ mod tests {
             estimate_cost_usd(Some("claude-sonnet-4-6"), i32::MAX as u64 + 1, 0, 0, 0),
             None
         );
+    }
+
+    #[test]
+    fn mixed_known_and_unknown_models_keep_only_a_known_subtotal() {
+        let dir = tempfile::tempdir().unwrap();
+        let known = dir.path().join("known.jsonl");
+        let unknown = dir.path().join("unknown.jsonl");
+        fs::write(
+            &known,
+            concat!(
+                "{\"type\":\"session_meta\",\"modelId\":\"claude-sonnet-4-6\"}\n",
+                "{\"type\":\"usage\",\"responseId\":\"known\",\"timestamp\":1787572800000,\"input\":1000,\"output\":200}\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            &unknown,
+            concat!(
+                "{\"type\":\"session_meta\",\"modelId\":\"future-model\"}\n",
+                "{\"type\":\"usage\",\"responseId\":\"unknown\",\"timestamp\":1787572800000,\"input\":500,\"output\":100}\n"
+            ),
+        )
+        .unwrap();
+        let now = Utc.timestamp_millis_opt(1787576400000).single().unwrap();
+
+        let summary = summarize_paths(&[known, unknown], now, 7, false);
+
+        assert_eq!(summary.cost_estimate.coverage.estimated, 1);
+        assert_eq!(summary.cost_estimate.coverage.unpriced, 1);
+        assert!(summary.cost_estimate.known_subtotal_usd.is_some());
+        assert_eq!(summary.cost_estimate.total_usd(), None);
     }
     use rusqlite::Connection;
 
