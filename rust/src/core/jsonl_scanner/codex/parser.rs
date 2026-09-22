@@ -25,6 +25,33 @@ pub(super) struct CodexParserState {
     fork_baseline_inference: Option<ForkBaselineInference>,
 }
 
+pub(super) enum CodexParseMode {
+    Standard {
+        start_offset: i64,
+        initial_model: Option<String>,
+        initial_totals: Option<CodexTotals>,
+        previous_token_timestamp: Option<String>,
+        token_timestamps_monotonic: Option<bool>,
+    },
+    ParentBaseline {
+        baseline: CodexTotals,
+        paginated_continuation: bool,
+        remaining_inherited_totals: Option<CodexTotals>,
+    },
+    InferSubagent {
+        start_ordinal: Option<i64>,
+    },
+}
+
+impl CodexParseMode {
+    pub(super) fn start_offset(&self) -> i64 {
+        match self {
+            Self::Standard { start_offset, .. } => *start_offset,
+            Self::ParentBaseline { .. } | Self::InferSubagent { .. } => 0,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ForkBaselineInference {
     explicit_start_ordinal: Option<i64>,
@@ -33,6 +60,11 @@ struct ForkBaselineInference {
     inherited_opening: bool,
     locally_confirmed: bool,
     resolved: bool,
+}
+
+enum ForkBaselineDecision {
+    SkipCopiedPrefix,
+    ProcessWithBaseline(CodexTotals),
 }
 
 impl ForkBaselineInference {
@@ -59,19 +91,27 @@ impl ForkBaselineInference {
         }
     }
 
-    /// Return the baseline when this is the first owned token event. `None`
-    /// means the event is still part of the copied prefix.
-    fn observe_token(&mut self, obj: &Value) -> Option<CodexTotals> {
-        let payload = token_count_payload(obj)?;
-        let info = payload.get("info")?;
-        let total = read_token_totals(info.get("total_token_usage")?);
-        let last = read_token_totals(info.get("last_token_usage")?);
+    fn observe_token(&mut self, obj: &Value) -> ForkBaselineDecision {
+        let Some(payload) = token_count_payload(obj) else {
+            return ForkBaselineDecision::SkipCopiedPrefix;
+        };
+        let Some(info) = payload.get("info") else {
+            return ForkBaselineDecision::SkipCopiedPrefix;
+        };
+        let Some(total_usage) = info.get("total_token_usage") else {
+            return ForkBaselineDecision::SkipCopiedPrefix;
+        };
+        let Some(last_usage) = info.get("last_token_usage") else {
+            return ForkBaselineDecision::SkipCopiedPrefix;
+        };
+        let total = read_token_totals(total_usage);
+        let last = read_token_totals(last_usage);
         let ordinal = obj.get("ordinal").and_then(Value::as_i64);
 
         if let Some(start) = self.explicit_start_ordinal {
             if ordinal.is_some_and(|ordinal| ordinal < start) {
                 self.baseline = Some(total);
-                return None;
+                return ForkBaselineDecision::SkipCopiedPrefix;
             }
             self.boundary_open = true;
         } else if self.baseline.is_none() {
@@ -80,7 +120,7 @@ impl ForkBaselineInference {
                 self.inherited_opening = true;
                 self.locally_confirmed = true;
             }
-            return None;
+            return ForkBaselineDecision::SkipCopiedPrefix;
         } else if !self.boundary_open {
             let changed = self
                 .baseline
@@ -89,7 +129,7 @@ impl ForkBaselineInference {
             if self.inherited_opening && changed && totals_contain_usage(&last) {
                 self.boundary_open = true;
             } else {
-                return None;
+                return ForkBaselineDecision::SkipCopiedPrefix;
             }
         }
 
@@ -100,21 +140,21 @@ impl ForkBaselineInference {
             reasoning: None,
         });
         if total == baseline {
-            return None;
+            return ForkBaselineDecision::SkipCopiedPrefix;
         }
         let copied_snapshot =
             totals_contain_usage(&baseline) && total == last && totals_at_least(&total, &baseline);
         if copied_snapshot {
             self.baseline = Some(total);
             self.locally_confirmed = true;
-            return None;
+            return ForkBaselineDecision::SkipCopiedPrefix;
         }
 
         let owned_baseline = totals_delta(&last, &total);
         self.baseline = Some(owned_baseline.clone());
         self.locally_confirmed = true;
         self.resolved = true;
-        Some(owned_baseline)
+        ForkBaselineDecision::ProcessWithBaseline(owned_baseline)
     }
 }
 
@@ -139,58 +179,74 @@ fn totals_delta(last: &CodexTotals, total: &CodexTotals) -> CodexTotals {
 
 impl CodexParserState {
     pub(super) fn new(initial_model: Option<String>, initial_totals: Option<CodexTotals>) -> Self {
-        Self::with_timestamp_state(initial_model, initial_totals, None, None)
+        Self::from_mode(CodexParseMode::Standard {
+            start_offset: 0,
+            initial_model,
+            initial_totals,
+            previous_token_timestamp: None,
+            token_timestamps_monotonic: None,
+        })
     }
 
-    fn with_timestamp_state(
-        initial_model: Option<String>,
-        initial_totals: Option<CodexTotals>,
-        previous_token_timestamp: Option<String>,
-        token_timestamps_monotonic: Option<bool>,
-    ) -> Self {
-        Self::with_timestamp_state_and_fork_mode(
+    pub(super) fn from_mode(mode: CodexParseMode) -> Self {
+        let (
             initial_model,
             initial_totals,
             previous_token_timestamp,
             token_timestamps_monotonic,
-            false,
-        )
-    }
-
-    pub(super) fn with_timestamp_state_and_fork_mode(
-        initial_model: Option<String>,
-        initial_totals: Option<CodexTotals>,
-        previous_token_timestamp: Option<String>,
-        token_timestamps_monotonic: Option<bool>,
-        fork_baseline_mode: bool,
-    ) -> Self {
-        Self::with_timestamp_state_and_fork_options(
-            initial_model,
-            initial_totals,
-            previous_token_timestamp,
-            token_timestamps_monotonic,
-            fork_baseline_mode,
-            false,
-            None,
-        )
-    }
-
-    pub(super) fn with_timestamp_state_and_fork_options(
-        initial_model: Option<String>,
-        initial_totals: Option<CodexTotals>,
-        previous_token_timestamp: Option<String>,
-        token_timestamps_monotonic: Option<bool>,
-        fork_baseline_mode: bool,
-        paginated_continuation: bool,
-        remaining_inherited_totals: Option<CodexTotals>,
-    ) -> Self {
+            fork_baseline,
+            paginated_continuation,
+            remaining_inherited_totals,
+            fork_baseline_inference,
+        ) = match mode {
+            CodexParseMode::Standard {
+                initial_model,
+                initial_totals,
+                previous_token_timestamp,
+                token_timestamps_monotonic,
+                ..
+            } => (
+                initial_model,
+                initial_totals,
+                previous_token_timestamp,
+                token_timestamps_monotonic,
+                None,
+                false,
+                None,
+                None,
+            ),
+            CodexParseMode::ParentBaseline {
+                baseline,
+                paginated_continuation,
+                remaining_inherited_totals,
+            } => {
+                let remaining_inherited_totals =
+                    remaining_inherited_totals.or_else(|| Some(baseline.clone()));
+                (
+                    None,
+                    Some(baseline.clone()),
+                    None,
+                    None,
+                    Some(baseline),
+                    paginated_continuation,
+                    remaining_inherited_totals,
+                    None,
+                )
+            }
+            CodexParseMode::InferSubagent { start_ordinal } => (
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+                None,
+                Some(ForkBaselineInference::new(start_ordinal)),
+            ),
+        };
         let previous_token_timestamp_parsed = previous_token_timestamp
             .as_deref()
             .and_then(parse_rfc3339_timestamp);
-        let fork_baseline = fork_baseline_mode.then(|| initial_totals.clone()).flatten();
-        let remaining_inherited_totals = fork_baseline
-            .as_ref()
-            .and_then(|baseline| remaining_inherited_totals.or_else(|| Some(baseline.clone())));
         Self {
             current_model: initial_model,
             previous_totals: initial_totals.clone(),
@@ -208,16 +264,8 @@ impl CodexParserState {
             paginated_continuation,
             paginated_baseline_checked: false,
             fork_baseline_ambiguous: false,
-            fork_baseline_inference: None,
+            fork_baseline_inference,
         }
-    }
-
-    pub(super) fn enable_fork_baseline_inference(&mut self, start_ordinal: Option<i64>) {
-        self.fork_baseline = None;
-        self.remaining_inherited_totals = None;
-        self.previous_totals = None;
-        self.totals_watermark = None;
-        self.fork_baseline_inference = Some(ForkBaselineInference::new(start_ordinal));
     }
 
     pub(super) fn fork_baseline_locally_resolved(&self) -> bool {
@@ -245,11 +293,14 @@ impl CodexParserState {
                 return;
             };
             if token_count_payload(&obj).is_some() {
-                let baseline = self
+                let decision = self
                     .fork_baseline_inference
                     .as_mut()
-                    .and_then(|inference| inference.observe_token(&obj));
-                let Some(baseline) = baseline else { return };
+                    .expect("inference exists")
+                    .observe_token(&obj);
+                let ForkBaselineDecision::ProcessWithBaseline(baseline) = decision else {
+                    return;
+                };
                 self.fork_baseline = Some(baseline.clone());
                 self.remaining_inherited_totals = Some(baseline.clone());
                 self.previous_totals = Some(baseline.clone());

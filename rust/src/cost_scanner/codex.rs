@@ -653,8 +653,6 @@ impl CostScanner {
                 cancel,
                 parse_target_size,
                 max_bytes_to_read,
-                false,
-                None,
             )
         } else {
             JsonlScanner::parse_codex_file_with_state_bounded(

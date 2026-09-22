@@ -77,13 +77,11 @@ fn fork_baseline_subtracts_known_reasoning_without_affecting_core_tokens() {
         output: 10,
         reasoning: Some(4),
     };
-    let mut state = CodexParserState::with_timestamp_state_and_fork_mode(
-        None,
-        Some(baseline),
-        None,
-        None,
-        true,
-    );
+    let mut state = CodexParserState::from_mode(CodexParseMode::ParentBaseline {
+        baseline,
+        paginated_continuation: false,
+        remaining_inherited_totals: None,
+    });
     assert_eq!(
         state.apply_totals_delta(CodexTotals {
             input: 20,
@@ -100,13 +98,11 @@ fn fork_baseline_subtracts_known_reasoning_without_affecting_core_tokens() {
         output: 10,
         reasoning: None,
     };
-    let mut state = CodexParserState::with_timestamp_state_and_fork_mode(
-        None,
-        Some(baseline_without_reasoning),
-        None,
-        None,
-        true,
-    );
+    let mut state = CodexParserState::from_mode(CodexParseMode::ParentBaseline {
+        baseline: baseline_without_reasoning,
+        paginated_continuation: false,
+        remaining_inherited_totals: None,
+    });
     assert_eq!(
         state.apply_totals_delta(CodexTotals {
             input: 20,
