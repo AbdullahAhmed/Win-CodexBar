@@ -93,6 +93,67 @@ pub fn render_bar_icon_rgba(
     (img.into_raw(), SZ, SZ)
 }
 
+/// Render two providers as equally prominent stacked usage meters.
+///
+/// Unlike [`render_bar_icon_rgba`], both rows represent the selected metric
+/// for separate providers. The upper and lower rows therefore use equal
+/// height so neither provider is presented as a secondary quota window.
+pub fn render_stacked_bar_icon_rgba(
+    top_percent: f64,
+    bottom_percent: f64,
+    has_error: bool,
+) -> (Vec<u8>, u32, u32) {
+    const SZ: u32 = TRAY_ICON_SIZE;
+    let mut img: RgbaImage = ImageBuffer::new(SZ, SZ);
+
+    for pixel in img.pixels_mut() {
+        *pixel = Rgba([0, 0, 0, 0]);
+    }
+
+    let bg_alpha = if has_error { 180 } else { 255 };
+    for y in 2..SZ - 2 {
+        for x in 2..SZ - 2 {
+            img.put_pixel(x, y, Rgba([60, 60, 70, bg_alpha]));
+        }
+    }
+
+    let bar_left = 4u32;
+    let bar_right = SZ - 4;
+    let bar_width = bar_right - bar_left;
+    let mut draw_provider = |y_start: u32, y_end: u32, percent: f64| {
+        let (r, g, b) = UsageLevel::from_percent(percent).color();
+        let color = if has_error {
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "mean of three u8 channels is bounded to 0..=255"
+            )]
+            let gray = ((r as u16 + g as u16 + b as u16) / 3) as u8;
+            Rgba([gray, gray, gray, 255])
+        } else {
+            Rgba([r, g, b, 255])
+        };
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "percent is clamped to 0..=100 and scaled to a 24-pixel meter"
+        )]
+        let fill = ((percent.clamp(0.0, 100.0) / 100.0) * bar_width as f64) as u32;
+        let fill_end = (bar_left + fill).min(bar_right);
+
+        for y in y_start..y_end {
+            for x in bar_left..bar_right {
+                img.put_pixel(x, y, Rgba([80, 80, 90, 255]));
+            }
+            for x in bar_left..fill_end {
+                img.put_pixel(x, y, color);
+            }
+        }
+    };
+
+    draw_provider(6, 14, top_percent);
+    draw_provider(18, 26, bottom_percent);
+    (img.into_raw(), SZ, SZ)
+}
+
 /// Render a compact numeric percent tray icon as raw RGBA bytes.
 pub fn render_percent_icon_rgba(percent: f64, has_error: bool) -> (Vec<u8>, u32, u32) {
     const SZ: u32 = TRAY_ICON_SIZE;
@@ -303,5 +364,25 @@ mod tests {
     fn percent_icon_clamps_to_hundred() {
         let (rgba, w, h) = render_percent_icon_rgba(125.0, false);
         assert_eq!(u32::try_from(rgba.len()).unwrap(), w * h * 4);
+    }
+
+    #[test]
+    fn stacked_provider_icon_uses_equal_separate_rows() {
+        let (rgba, width, height) = render_stacked_bar_icon_rgba(100.0, 0.0, false);
+        assert_eq!((width, height), (TRAY_ICON_SIZE, TRAY_ICON_SIZE));
+
+        let pixel = |x: u32, y: u32| {
+            let index = ((y * width + x) * 4) as usize;
+            [
+                rgba[index],
+                rgba[index + 1],
+                rgba[index + 2],
+                rgba[index + 3],
+            ]
+        };
+        let (r, g, b) = UsageLevel::Critical.color();
+        assert_eq!(pixel(8, 8), [r, g, b, 255]);
+        assert_eq!(pixel(8, 20), [80, 80, 90, 255]);
+        assert_eq!(pixel(8, 15), [60, 60, 70, 255]);
     }
 }

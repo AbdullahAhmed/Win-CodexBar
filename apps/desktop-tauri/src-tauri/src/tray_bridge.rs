@@ -12,7 +12,9 @@ use tauri::menu::{CheckMenuItemBuilder, IsMenuItem, Menu, MenuItem, PredefinedMe
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
 
-use codexbar::tray::{render_bar_icon_rgba, render_percent_icon_rgba};
+use codexbar::tray::{
+    render_bar_icon_rgba, render_percent_icon_rgba, render_stacked_bar_icon_rgba,
+};
 
 use crate::shell;
 use crate::state::{AppState, TrayAnchor};
@@ -480,15 +482,27 @@ pub fn update_tray_icon_and_tooltip(
 
     let picked = pick_tray_provider(&ok_snapshots, prefer_highest);
 
-    let (session_pct, weekly_pct) = match picked {
-        Some(s) => selected_tray_percents(s, &settings),
-        None => (
-            ok_snapshots
-                .iter()
-                .map(|s| selected_tray_percents(s, &settings).0)
-                .fold(0.0_f64, f64::max),
-            None,
-        ),
+    let (session_pct, weekly_pct) = if settings.tray_icon_mode == TrayIconMode::Stacked {
+        pick_stacked_tray_providers(&ok_snapshots, &settings)
+            .map(|(top, bottom)| {
+                (
+                    selected_tray_percents(top, &settings).0,
+                    Some(selected_tray_percents(bottom, &settings).0),
+                )
+            })
+            .or_else(|| picked.map(|snapshot| selected_tray_percents(snapshot, &settings)))
+            .unwrap_or((0.0, None))
+    } else {
+        match picked {
+            Some(s) => selected_tray_percents(s, &settings),
+            None => (
+                ok_snapshots
+                    .iter()
+                    .map(|s| selected_tray_percents(s, &settings).0)
+                    .fold(0.0_f64, f64::max),
+                None,
+            ),
+        }
     };
 
     let (rgba, w, h) = render_tray_icon_for_settings(&settings, session_pct, weekly_pct, all_error);
@@ -515,6 +529,23 @@ fn status_labels_for_settings(
             .into_iter()
             .map(|s| provider_status_label(s, lang))
             .collect::<Vec<_>>();
+    }
+
+    if settings.tray_icon_mode == TrayIconMode::Stacked {
+        return pick_stacked_tray_providers(&healthy, settings)
+            .map(|(top, bottom)| {
+                vec![
+                    provider_status_label(top, lang),
+                    provider_status_label(bottom, lang),
+                ]
+            })
+            .unwrap_or_else(|| {
+                healthy
+                    .first()
+                    .map(|s| provider_status_label(s, lang))
+                    .into_iter()
+                    .collect()
+            });
     }
 
     let Some(selected) = pick_tray_provider(
@@ -629,11 +660,56 @@ fn render_tray_icon_for_settings(
     weekly_pct: Option<f64>,
     all_error: bool,
 ) -> (Vec<u8>, u32, u32) {
-    if settings.menu_bar_shows_percent {
+    if settings.tray_icon_mode == TrayIconMode::Stacked
+        && let Some(bottom_pct) = weekly_pct
+    {
+        render_stacked_bar_icon_rgba(session_pct, bottom_pct, all_error)
+    } else if settings.menu_bar_shows_percent {
         render_percent_icon_rgba(session_pct, all_error)
     } else {
         render_bar_icon_rgba(session_pct, weekly_pct, all_error)
     }
+}
+
+/// Resolve a stable top/bottom pair while retaining stale saved preferences.
+/// Eligible provider order is the user's provider display order. An invalid,
+/// disabled, or duplicate preference falls back without rewriting settings.
+fn pick_stacked_tray_providers<'a>(
+    ok_snapshots: &'a [&'a crate::commands::ProviderUsageSnapshot],
+    settings: &Settings,
+) -> Option<(
+    &'a crate::commands::ProviderUsageSnapshot,
+    &'a crate::commands::ProviderUsageSnapshot,
+)> {
+    if ok_snapshots.len() < 2 {
+        return None;
+    }
+
+    let preferred = |provider_id: Option<&str>| {
+        provider_id.and_then(|id| {
+            ok_snapshots
+                .iter()
+                .copied()
+                .find(|snapshot| snapshot.provider_id == id)
+        })
+    };
+    let preferred_bottom = preferred(settings.stacked_tray_bottom_provider.as_deref());
+    let top = preferred(settings.stacked_tray_top_provider.as_deref()).or_else(|| {
+        ok_snapshots.iter().copied().find(|snapshot| {
+            preferred_bottom.map(|bottom| bottom.provider_id.as_str())
+                != Some(snapshot.provider_id.as_str())
+        })
+    })?;
+    let bottom = preferred_bottom
+        .filter(|snapshot| snapshot.provider_id != top.provider_id)
+        .or_else(|| {
+            ok_snapshots
+                .iter()
+                .copied()
+                .find(|snapshot| snapshot.provider_id != top.provider_id)
+        })?;
+
+    Some((top, bottom))
 }
 
 /// Pick the provider whose usage the tray icon should render.
@@ -1216,6 +1292,71 @@ mod tests {
     }
 
     #[test]
+    fn stacked_mode_resolves_distinct_preferred_providers() {
+        let settings = Settings {
+            tray_icon_mode: TrayIconMode::Stacked,
+            stacked_tray_top_provider: Some("claude".to_string()),
+            stacked_tray_bottom_provider: Some("codex".to_string()),
+            ..Settings::default()
+        };
+        let codex = fake_snapshot("codex", "Codex", 30.0);
+        let claude = fake_snapshot("claude", "Claude", 72.0);
+        let gemini = fake_snapshot("gemini", "Gemini", 44.0);
+        let snapshots = vec![&codex, &claude, &gemini];
+
+        let pair = pick_stacked_tray_providers(&snapshots, &settings).unwrap();
+
+        assert_eq!(pair.0.provider_id, "claude");
+        assert_eq!(pair.1.provider_id, "codex");
+    }
+
+    #[test]
+    fn stacked_mode_falls_back_around_stale_and_duplicate_preferences() {
+        let settings = Settings {
+            tray_icon_mode: TrayIconMode::Stacked,
+            stacked_tray_top_provider: Some("missing".to_string()),
+            stacked_tray_bottom_provider: Some("claude".to_string()),
+            ..Settings::default()
+        };
+        let codex = fake_snapshot("codex", "Codex", 30.0);
+        let claude = fake_snapshot("claude", "Claude", 72.0);
+        let snapshots = vec![&codex, &claude];
+
+        let pair = pick_stacked_tray_providers(&snapshots, &settings).unwrap();
+
+        assert_eq!(pair.0.provider_id, "codex");
+        assert_eq!(pair.1.provider_id, "claude");
+    }
+
+    #[test]
+    fn stacked_mode_lists_both_provider_statuses() {
+        let settings = Settings {
+            tray_icon_mode: TrayIconMode::Stacked,
+            stacked_tray_top_provider: Some("claude".to_string()),
+            stacked_tray_bottom_provider: Some("codex".to_string()),
+            ..Settings::default()
+        };
+        let snapshots = vec![
+            fake_snapshot("codex", "Codex", 30.0),
+            fake_snapshot("claude", "Claude", 72.0),
+        ];
+
+        let labels = status_labels_for_settings(
+            &settings,
+            &snapshots,
+            codexbar::settings::Language::English,
+        );
+
+        assert_eq!(
+            labels,
+            vec![
+                ("claude".to_string(), "Claude 72%".to_string()),
+                ("codex".to_string(), "Codex 30%".to_string()),
+            ]
+        );
+    }
+
+    #[test]
     fn tray_icon_renderer_uses_percent_mode_when_enabled() {
         let bar_settings = Settings {
             menu_bar_shows_percent: false,
@@ -1233,6 +1374,23 @@ mod tests {
 
         assert_eq!((bar_w, bar_h), (pct_w, pct_h));
         assert_ne!(bar, percent);
+    }
+
+    #[test]
+    fn tray_icon_renderer_uses_stacked_rows_for_two_providers() {
+        let settings = Settings {
+            tray_icon_mode: TrayIconMode::Stacked,
+            menu_bar_shows_percent: true,
+            ..Settings::default()
+        };
+
+        let (stacked, width, height) =
+            render_tray_icon_for_settings(&settings, 72.0, Some(40.0), false);
+        let (expected, expected_width, expected_height) =
+            render_stacked_bar_icon_rgba(72.0, 40.0, false);
+
+        assert_eq!((width, height), (expected_width, expected_height));
+        assert_eq!(stacked, expected);
     }
 
     #[test]
