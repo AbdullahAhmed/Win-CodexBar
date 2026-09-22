@@ -143,6 +143,7 @@ struct CodexPreparedCandidate {
     path: PathBuf,
     session_metadata: CodexSessionMetadata,
     lineage_gate: CodexLineageGate,
+    parent_owner_expected: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -499,11 +500,14 @@ impl CostScanner {
         let lineage_gate = prepared_candidate
             .map(|candidate| candidate.lineage_gate)
             .unwrap_or_default();
+        let parent_owner_expected =
+            prepared_candidate.is_some_and(|candidate| candidate.parent_owner_expected);
         let lineage_decision = CodexLineagePlanner::new(cache).decision_for_scan(
             is_fork,
             lineage_gate,
             codex_forked_from_id.as_deref(),
             codex_fork_timestamp.as_deref(),
+            parent_owner_expected,
         );
         let accounting_mode = lineage_decision.accounting_mode(
             matching_cached_fork_state,

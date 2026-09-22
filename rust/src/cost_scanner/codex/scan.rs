@@ -230,6 +230,7 @@ pub(super) fn scan_codex_detailed_with_cache(
                 .unwrap_or_default(),
             path: candidate.path,
             lineage_gate: CodexLineageGate::Eligible,
+            parent_owner_expected: false,
         });
     }
     let mut unprocessed = Vec::new();
@@ -237,7 +238,8 @@ pub(super) fn scan_codex_detailed_with_cache(
         unprocessed.extend(work_queue.drain(..).map(|candidate| candidate.path));
         unprocessed.extend(cancelled_during_preparation);
     } else {
-        let unsafe_cached_paths = plan_codex_candidates_by_lineage(&cache, &mut work_queue);
+        let unsafe_cached_paths =
+            CodexLineagePlanner::plan_candidates_by_lineage(&cache, &mut work_queue);
         invalidated_unsafe_lineage = !unsafe_cached_paths.is_empty();
         if invalidated_unsafe_lineage {
             cache.previous_report = None;
