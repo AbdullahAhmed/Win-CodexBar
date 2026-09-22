@@ -116,6 +116,35 @@ fn fork_baseline_subtracts_known_reasoning_without_affecting_core_tokens() {
 }
 
 #[test]
+fn inferred_fork_waits_for_present_explicit_start_ordinal() {
+    let range = CostUsageDayRange::new(
+        NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+        NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+    );
+    let mut state = CodexParserState::from_mode(CodexParseMode::InferSubagent {
+        start_ordinal: Some(10),
+    });
+
+    state.process_line(
+        r#"{"timestamp":"2026-09-22T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.6-sol","total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10},"last_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0}}}}"#,
+        &range,
+    );
+
+    assert!(state.records.is_empty());
+    assert!(state.fork_baseline.is_none());
+
+    state.process_line(
+        r#"{"ordinal":10,"timestamp":"2026-09-22T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.6-sol","total_token_usage":{"input_tokens":110,"cached_input_tokens":22,"output_tokens":11},"last_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":1}}}}"#,
+        &range,
+    );
+
+    assert_eq!(state.records.len(), 1);
+    assert_eq!(state.records[0].input, 10);
+    assert_eq!(state.records[0].cached, 2);
+    assert_eq!(state.records[0].output, 1);
+}
+
+#[test]
 fn codex_token_pipeline_preserves_counts_above_i32_max() {
     let parsed = read_token_totals(&serde_json::json!({
         "input_tokens": 3_000_000_000_i64,

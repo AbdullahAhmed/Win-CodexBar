@@ -138,6 +138,7 @@ fn write_codex_paginated_continuation_fixture(
 fn write_copied_prefix_subagent_fixture(
     sessions_root: &Path,
     name: &str,
+    parent_id: &str,
     base: DateTime<Utc>,
     owned: bool,
 ) -> PathBuf {
@@ -152,10 +153,10 @@ fn write_copied_prefix_subagent_fixture(
         serde_json::json!({
             "type": "session_meta", "ordinal": 0, "timestamp": base.to_rfc3339(),
             "payload": {
-                "id": "child-id", "forked_from_id": "missing-parent",
+                "id": "child-id", "forked_from_id": parent_id,
                 "subagent_history_start_ordinal": 10,
                 "thread_source": "subagent",
-                "source": {"subagent": {"thread_spawn": {"parent_thread_id": "missing-parent"}}}
+                "source": {"subagent": {"thread_spawn": {"parent_thread_id": parent_id}}}
             }
         }),
         token_row(base, 2, [1_000, 900, 100], [0, 0, 0], "gpt-5.6-sol"),
@@ -236,6 +237,7 @@ fn copied_prefix_subagent_infers_advancing_baseline_without_parent() {
     let child = write_copied_prefix_subagent_fixture(
         &sessions,
         "child.jsonl",
+        "missing-parent",
         Utc::now() - Duration::hours(1),
         true,
     );
@@ -275,6 +277,7 @@ fn copied_prefix_subagent_inherited_only_suffix_is_not_billed() {
     let child = write_copied_prefix_subagent_fixture(
         &sessions,
         "child.jsonl",
+        "missing-parent",
         Utc::now() - Duration::hours(1),
         false,
     );
@@ -299,6 +302,45 @@ fn copied_prefix_subagent_inherited_only_suffix_is_not_billed() {
     assert_eq!(cached.output_tokens, 0);
     assert_eq!(cached.sessions_count, 0);
     assert!(stats.codex_history_read_paths.is_empty());
+}
+
+#[test]
+fn copied_prefix_subagent_prefers_validated_parent_baseline() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let base = Utc::now() - Duration::hours(1);
+    write_codex_fork_session_fixture(
+        &sessions,
+        "parent.jsonl",
+        "parent-id",
+        None,
+        base,
+        base,
+        &[1_000],
+    );
+    let child = write_copied_prefix_subagent_fixture(
+        &sessions,
+        "child.jsonl",
+        "parent-id",
+        base + Duration::seconds(10),
+        true,
+    );
+    let mut options = CostScanOptions::app_driven();
+    options.prefer_newest_codex_sessions_first = false;
+    let scanner = CostScanner::new(7)
+        .with_options(options)
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+
+    let (_, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+    let state = cache.files[&child.to_string_lossy().to_string()]
+        .codex_fork_accounting_state
+        .as_ref()
+        .unwrap();
+
+    assert_eq!(state.inherited_totals.as_ref().unwrap().input, 1_000);
+    assert!(!state.locally_resolved);
 }
 
 #[test]

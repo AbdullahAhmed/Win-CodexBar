@@ -13,6 +13,41 @@ use pending_range::{
 };
 use reconciliation::*;
 
+#[derive(Debug)]
+enum CodexAccountingMode {
+    Standard,
+    ValidatedBaseline {
+        baseline: crate::core::CodexTotals,
+        paginated_continuation: bool,
+        remaining_inherited_totals: Option<crate::core::CodexTotals>,
+        locally_resolved: bool,
+    },
+    InferSubagent {
+        start_ordinal: Option<i64>,
+    },
+    Unresolved,
+}
+
+impl CodexAccountingMode {
+    fn is_unresolved(&self) -> bool {
+        matches!(self, Self::Unresolved)
+    }
+
+    fn infers_subagent_baseline(&self) -> bool {
+        matches!(self, Self::InferSubagent { .. })
+    }
+
+    fn locally_resolved(&self) -> bool {
+        matches!(
+            self,
+            Self::ValidatedBaseline {
+                locally_resolved: true,
+                ..
+            }
+        )
+    }
+}
+
 fn summary_from_cached_report(
     report: &CachedCostReport,
     period_start: NaiveDate,
@@ -463,7 +498,6 @@ impl CostScanner {
                     }))
         });
         let is_fork = codex_lineage.uses_parent_baseline();
-        let locally_inferred_subagent = is_fork && session_metadata.is_subagent;
         let cached_fork_state_matches =
             cached_fork_accounting_state.as_ref().is_some_and(|state| {
                 state.session_id == codex_session_id
@@ -471,29 +505,44 @@ impl CostScanner {
                     && state.history_base_thread_id == history_base_thread_id
                     && state.fork_timestamp == codex_fork_timestamp
             });
-        let fork_baseline = cached_fork_accounting_state
+        let matching_cached_fork_state = cached_fork_accounting_state
             .as_ref()
-            .filter(|_| cached_fork_state_matches)
-            .and_then(|state| state.inherited_totals.clone())
-            .or_else(|| {
-                is_fork
-                    .then_some(codex_forked_from_id.as_deref())
-                    .flatten()
-                    .and_then(|parent_id| {
-                        codex_parent_baseline(cache, parent_id, codex_fork_timestamp.as_deref())
-                    })
+            .filter(|_| cached_fork_state_matches);
+        let cached_fork_baseline =
+            matching_cached_fork_state.and_then(|state| state.inherited_totals.clone());
+        let parent_fork_baseline = is_fork
+            .then_some(codex_forked_from_id.as_deref())
+            .flatten()
+            .and_then(|parent_id| {
+                codex_parent_baseline(cache, parent_id, codex_fork_timestamp.as_deref())
             });
-        let remaining_inherited_totals = cached_fork_accounting_state
-            .as_ref()
-            .filter(|_| cached_fork_state_matches)
-            .and_then(|state| state.remaining_inherited_totals.clone());
+        let fork_baseline = cached_fork_baseline.or(parent_fork_baseline);
+        let remaining_inherited_totals =
+            matching_cached_fork_state.and_then(|state| state.remaining_inherited_totals.clone());
         let paginated_continuation = is_fork
             && codex_forked_from_id.is_some()
             && history_base_thread_id
                 .as_deref()
                 .is_some_and(|history_base| Some(history_base) != codex_forked_from_id.as_deref());
+        let accounting_mode = if !is_fork {
+            CodexAccountingMode::Standard
+        } else if let Some(baseline) = fork_baseline {
+            CodexAccountingMode::ValidatedBaseline {
+                baseline,
+                paginated_continuation,
+                remaining_inherited_totals,
+                locally_resolved: matching_cached_fork_state
+                    .is_some_and(|state| state.locally_resolved),
+            }
+        } else if session_metadata.is_subagent {
+            CodexAccountingMode::InferSubagent {
+                start_ordinal: session_metadata.subagent_history_start_ordinal,
+            }
+        } else {
+            CodexAccountingMode::Unresolved
+        };
 
-        if is_fork && fork_baseline.is_none() && !locally_inferred_subagent {
+        if accounting_mode.is_unresolved() {
             cache.files.insert(
                 path_key,
                 CostUsageFileUsage {
@@ -634,28 +683,8 @@ impl CostScanner {
         let parse_target_size = cached
             .as_ref()
             .and_then(|entry| codex_resumable_scan_target_size(size, entry));
-        let parse_result = match if locally_inferred_subagent {
-            JsonlScanner::parse_codex_file_with_inferred_fork_baseline(
-                path,
-                range,
-                session_metadata.subagent_history_start_ordinal,
-                cancel,
-                parse_target_size,
-                max_bytes_to_read,
-            )
-        } else if let Some(baseline) = fork_baseline.clone() {
-            JsonlScanner::parse_codex_file_with_state_bounded_fork_target_with_accounting(
-                path,
-                range,
-                baseline,
-                paginated_continuation,
-                remaining_inherited_totals.clone(),
-                cancel,
-                parse_target_size,
-                max_bytes_to_read,
-            )
-        } else {
-            JsonlScanner::parse_codex_file_with_state_bounded(
+        let parse_result = match match &accounting_mode {
+            CodexAccountingMode::Standard => JsonlScanner::parse_codex_file_with_state_bounded(
                 path,
                 range,
                 0,
@@ -665,7 +694,35 @@ impl CostScanner {
                 None,
                 cancel,
                 max_bytes_to_read,
-            )
+            ),
+            CodexAccountingMode::ValidatedBaseline {
+                baseline,
+                paginated_continuation,
+                remaining_inherited_totals,
+                ..
+            } => JsonlScanner::parse_codex_file_with_state_bounded_fork_target_with_accounting(
+                path,
+                range,
+                baseline.clone(),
+                *paginated_continuation,
+                remaining_inherited_totals.clone(),
+                cancel,
+                parse_target_size,
+                max_bytes_to_read,
+            ),
+            CodexAccountingMode::InferSubagent { start_ordinal } => {
+                JsonlScanner::parse_codex_file_with_inferred_fork_baseline(
+                    path,
+                    range,
+                    *start_ordinal,
+                    cancel,
+                    parse_target_size,
+                    max_bytes_to_read,
+                )
+            }
+            CodexAccountingMode::Unresolved => {
+                unreachable!("unresolved forks return before parsing")
+            }
         } {
             Ok(result) => result,
             Err(_) => return CodexFileScanOutcome::default(),
@@ -674,7 +731,8 @@ impl CostScanner {
             .token_timestamp_comparisons
             .saturating_add(parse_result.token_timestamp_comparisons);
         if parse_result.fork_baseline_ambiguous
-            || (locally_inferred_subagent && !parse_result.fork_baseline_locally_resolved)
+            || (accounting_mode.infers_subagent_baseline()
+                && !parse_result.fork_baseline_locally_resolved)
         {
             cache.files.insert(
                 path_key,
@@ -715,6 +773,8 @@ impl CostScanner {
             bytes_read: parse_result.bytes_read,
             is_complete: parse_result.is_complete,
         };
+        let locally_resolved =
+            accounting_mode.locally_resolved() || parse_result.fork_baseline_locally_resolved;
         let codex_fork_accounting_state = if is_fork
             && (parse_result.fork_baseline.is_some() || parse_result.fork_baseline_locally_resolved)
         {
@@ -725,7 +785,7 @@ impl CostScanner {
                 fork_timestamp: codex_fork_timestamp.clone(),
                 inherited_totals: parse_result.fork_baseline.clone(),
                 remaining_inherited_totals: parse_result.remaining_inherited_totals.clone(),
-                locally_resolved: parse_result.fork_baseline_locally_resolved,
+                locally_resolved,
             })
         } else {
             None

@@ -108,8 +108,14 @@ impl ForkBaselineInference {
         let last = read_token_totals(last_usage);
         let ordinal = obj.get("ordinal").and_then(Value::as_i64);
 
-        if let Some(start) = self.explicit_start_ordinal {
-            if ordinal.is_some_and(|ordinal| ordinal < start) {
+        if let Some(start) = self.explicit_start_ordinal
+            && !self.boundary_open
+        {
+            let Some(ordinal) = ordinal else {
+                self.baseline = Some(total);
+                return ForkBaselineDecision::SkipCopiedPrefix;
+            };
+            if ordinal < start {
                 self.baseline = Some(total);
                 return ForkBaselineDecision::SkipCopiedPrefix;
             }
