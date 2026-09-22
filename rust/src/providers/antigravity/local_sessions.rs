@@ -390,7 +390,7 @@ mod tests {
         assert_eq!(summary.cost_estimate.coverage.estimated, 1);
         assert_eq!(summary.cost_estimate.coverage.unpriced, 1);
         assert!(summary.cost_estimate.known_subtotal_usd.is_some());
-        assert_eq!(summary.cost_estimate.total_usd(), None);
+        assert_eq!(summary.total_usd(), None);
     }
     use rusqlite::Connection;
 

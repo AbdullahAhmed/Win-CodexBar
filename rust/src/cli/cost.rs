@@ -286,7 +286,7 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32, group_b
             println!("{title}");
         }
 
-        if let Some(history) = result.token_history {
+        if let Some(history) = result.token_history.as_ref() {
             print_local_token_history(history, days);
         } else if group_by == CostGroupBy::Session && result.provider == "codex" {
             print_codex_session_output(result, days);
@@ -372,7 +372,7 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32, group_b
     }
 }
 
-fn print_local_token_history(history: crate::spend_contract::LocalTokenHistorySummary, days: u32) {
+fn print_local_token_history(history: &crate::spend_contract::LocalTokenHistorySummary, days: u32) {
     use crate::spend_contract::LocalHistoryCoverage;
     match history.coverage {
         LocalHistoryCoverage::Complete if history.total_tokens == 0 => {
@@ -386,13 +386,17 @@ fn print_local_token_history(history: crate::spend_contract::LocalTokenHistorySu
             println!("  Local token history is unavailable or incomplete");
         }
     }
-    if let Some(cost) = history.cost_estimate.total_usd() {
+    if let Some(cost) = history.total_usd() {
         println!("  API list-price estimate: ${cost:.2} (not billed spend)");
     } else if let Some(cost) = history.cost_estimate.known_subtotal_usd {
-        println!(
-            "  Known API list-price subtotal: ${cost:.2} ({} unpriced requests)",
-            history.cost_estimate.coverage.unpriced
-        );
+        if history.coverage == LocalHistoryCoverage::Complete {
+            println!(
+                "  Known API list-price subtotal: ${cost:.2} ({} unpriced requests)",
+                history.cost_estimate.coverage.unpriced
+            );
+        } else {
+            println!("  Known API list-price subtotal: ${cost:.2} (history incomplete)");
+        }
     } else {
         println!("  Local token history; dollar costs unavailable");
     }
@@ -468,7 +472,7 @@ fn build_json_payloads(results: &[CostResult], days: u32) -> Vec<serde_json::Val
     results
         .iter()
         .map(|r| {
-            if let Some(history) = r.token_history {
+            if let Some(history) = r.token_history.as_ref() {
                 return crate::spend_contract::local_token_history_json(&r.provider, history, days);
             }
             if !r.supported {
@@ -630,7 +634,7 @@ mod tests {
         use crate::spend_contract::{LocalHistoryCoverage, LocalTokenHistorySummary};
         let payload = crate::spend_contract::local_token_history_json(
             "antigravity",
-            LocalTokenHistorySummary {
+            &LocalTokenHistorySummary {
                 total_tokens: 12_345,
                 session_count: 2,
                 coverage: LocalHistoryCoverage::Complete,
@@ -645,7 +649,7 @@ mod tests {
 
         let partial = crate::spend_contract::local_token_history_json(
             "antigravity",
-            LocalTokenHistorySummary {
+            &LocalTokenHistorySummary {
                 total_tokens: 999,
                 session_count: 1,
                 coverage: LocalHistoryCoverage::Partial,
@@ -663,7 +667,7 @@ mod tests {
         use crate::spend_contract::{LocalHistoryCoverage, LocalTokenHistorySummary};
         let payload = crate::spend_contract::local_token_history_json(
             "antigravity",
-            LocalTokenHistorySummary {
+            &LocalTokenHistorySummary {
                 total_tokens: 1_000,
                 session_count: 1,
                 coverage: LocalHistoryCoverage::Complete,
@@ -684,13 +688,62 @@ mod tests {
     }
 
     #[test]
+    fn antigravity_json_keeps_partial_scan_cost_as_a_subtotal() {
+        use crate::spend_contract::{
+            CostCoverageCounts, LocalCostEstimate, LocalHistoryCoverage, LocalTokenHistorySummary,
+        };
+        let payload = crate::spend_contract::local_token_history_json(
+            "antigravity",
+            &LocalTokenHistorySummary {
+                total_tokens: 1_000,
+                session_count: 1,
+                coverage: LocalHistoryCoverage::Partial,
+                cost_estimate: LocalCostEstimate {
+                    known_subtotal_usd: Some(0.0125),
+                    coverage: CostCoverageCounts {
+                        estimated: 1,
+                        ..Default::default()
+                    },
+                },
+            },
+            30,
+        );
+        assert!(payload["cost"]["total_usd"].is_null());
+        assert_eq!(payload["cost"]["known_subtotal_usd"], 0.0125);
+        assert_eq!(payload["historyCoverage"], "partial");
+        assert!(
+            payload["note"]
+                .as_str()
+                .unwrap()
+                .contains("history is incomplete")
+        );
+    }
+
+    #[test]
+    fn antigravity_json_emits_zero_for_complete_empty_history() {
+        use crate::spend_contract::{LocalHistoryCoverage, LocalTokenHistorySummary};
+        let payload = crate::spend_contract::local_token_history_json(
+            "antigravity",
+            &LocalTokenHistorySummary {
+                coverage: LocalHistoryCoverage::Complete,
+                ..Default::default()
+            },
+            30,
+        );
+        assert_eq!(payload["cost"]["total_usd"], 0.0);
+        assert!(payload["cost"]["known_subtotal_usd"].is_null());
+        assert_eq!(payload["cost"]["currency"], "USD");
+        assert_eq!(payload["knownZero"], true);
+    }
+
+    #[test]
     fn antigravity_json_keeps_mixed_pricing_as_a_known_subtotal() {
         use crate::spend_contract::{
             CostCoverageCounts, LocalCostEstimate, LocalHistoryCoverage, LocalTokenHistorySummary,
         };
         let payload = crate::spend_contract::local_token_history_json(
             "antigravity",
-            LocalTokenHistorySummary {
+            &LocalTokenHistorySummary {
                 total_tokens: 1_500,
                 session_count: 2,
                 coverage: LocalHistoryCoverage::Complete,
