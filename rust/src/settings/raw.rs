@@ -1,4 +1,41 @@
 use super::*;
+use serde::Deserializer;
+use serde::de::{IgnoredAny, MapAccess, Visitor};
+use std::fmt;
+
+fn deserialize_provider_configs<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<ProviderId, ProviderConfig>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct ProviderConfigsVisitor;
+
+    impl<'de> Visitor<'de> for ProviderConfigsVisitor {
+        type Value = HashMap<ProviderId, ProviderConfig>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a map of provider IDs to provider settings")
+        }
+
+        fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+        where
+            M: MapAccess<'de>,
+        {
+            let mut configs = HashMap::with_capacity(map.size_hint().unwrap_or(0));
+            while let Some(key) = map.next_key::<String>()? {
+                if let Some(provider_id) = ProviderId::from_cli_name(&key) {
+                    configs.insert(provider_id, map.next_value()?);
+                } else {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+            Ok(configs)
+        }
+    }
+
+    deserializer.deserialize_map(ProviderConfigsVisitor)
+}
 
 /// Raw on-disk shape of [`Settings`] used purely for deserialization.
 ///
@@ -52,6 +89,7 @@ pub(super) struct RawSettings {
     show_all_token_accounts_in_menu: bool,
 
     // ── New unified per-provider map ─────────────────────────────────
+    #[serde(default, deserialize_with = "deserialize_provider_configs")]
     provider_configs: HashMap<ProviderId, ProviderConfig>,
 
     // ── Legacy flat per-provider fields (migrated on load) ───────────
@@ -297,6 +335,8 @@ impl Default for RawSettings {
 impl From<RawSettings> for Settings {
     fn from(raw: RawSettings) -> Self {
         let mut provider_configs = raw.provider_configs;
+        let is_known_provider =
+            |provider_id: &String| ProviderId::from_cli_name(provider_id).is_some();
 
         // Helper closures to lazily insert per-provider configs from legacy
         // flat fields. Existing `provider_configs` entries take precedence.
@@ -515,7 +555,11 @@ impl From<RawSettings> for Settings {
         };
 
         Settings {
-            enabled_providers: raw.enabled_providers,
+            enabled_providers: raw
+                .enabled_providers
+                .into_iter()
+                .filter(&is_known_provider)
+                .collect(),
             refresh_interval_secs: raw.refresh_interval_secs,
             adaptive_refresh: raw.adaptive_refresh,
             refresh_all_providers_on_menu_open: raw.refresh_all_providers_on_menu_open,
@@ -549,7 +593,11 @@ impl From<RawSettings> for Settings {
             disable_keychain_access: raw.disable_keychain_access,
             hide_personal_info: raw.hide_personal_info,
             update_channel: raw.update_channel,
-            provider_metrics: raw.provider_metrics,
+            provider_metrics: raw
+                .provider_metrics
+                .into_iter()
+                .filter(|(provider_id, _)| is_known_provider(provider_id))
+                .collect(),
             provider_order: if raw.provider_order.is_empty() {
                 Vec::new()
             } else {
@@ -578,7 +626,11 @@ impl From<RawSettings> for Settings {
             float_bar_orientation: normalize_float_bar_orientation(&raw.float_bar_orientation),
             float_bar_style: normalize_float_bar_style(&raw.float_bar_style),
             float_bar_click_through: raw.float_bar_click_through,
-            float_bar_provider_ids: raw.float_bar_provider_ids,
+            float_bar_provider_ids: raw
+                .float_bar_provider_ids
+                .into_iter()
+                .filter(&is_known_provider)
+                .collect(),
             float_bar_dark_text: raw.float_bar_dark_text,
             float_bar_show_reset_inline: raw.float_bar_show_reset_inline,
             float_bar_show_cost: raw.float_bar_show_cost,
