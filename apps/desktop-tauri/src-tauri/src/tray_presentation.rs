@@ -285,7 +285,7 @@ pub(crate) fn codex_lane_headline_window(snapshot: &ProviderUsageSnapshot) -> &R
 
 /// Resolve a stable top/bottom pair while retaining stale saved preferences.
 fn pick_stacked_tray_providers<'a>(
-    healthy: &'a [&'a ProviderUsageSnapshot],
+    healthy: &[&'a ProviderUsageSnapshot],
     settings: &Settings,
 ) -> Option<(&'a ProviderUsageSnapshot, &'a ProviderUsageSnapshot)> {
     if healthy.len() < 2 {
@@ -320,7 +320,7 @@ fn pick_stacked_tray_providers<'a>(
 }
 
 fn pick_tray_provider<'a>(
-    healthy: &'a [&'a ProviderUsageSnapshot],
+    healthy: &[&'a ProviderUsageSnapshot],
     prefer_highest: bool,
 ) -> Option<&'a ProviderUsageSnapshot> {
     if prefer_highest {
@@ -468,6 +468,24 @@ mod tests {
     }
 
     #[test]
+    fn single_plan_borrows_selected_snapshot_from_stable_input() {
+        let settings = Settings {
+            tray_icon_mode: TrayIconMode::Single,
+            menu_bar_shows_highest_usage: true,
+            ..Settings::default()
+        };
+        let snapshots = vec![
+            fake_snapshot("codex", "Codex", 30.0),
+            fake_snapshot("claude", "Claude", 72.0),
+        ];
+
+        // `resolve` drops its temporary ordered/healthy vectors before returning.
+        let plan = TrayPresentationPlan::resolve(&settings, &snapshots);
+
+        assert!(std::ptr::eq(plan.status_rows[0].snapshot, &snapshots[1]));
+    }
+
+    #[test]
     fn per_provider_plan_preserves_configured_order_for_status_rows() {
         let settings = Settings {
             tray_icon_mode: TrayIconMode::PerProvider,
@@ -525,6 +543,27 @@ mod tests {
                 ("codex".to_string(), "Codex 30%".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn stacked_plan_borrows_both_snapshots_from_stable_input() {
+        let settings = Settings {
+            tray_icon_mode: TrayIconMode::Stacked,
+            stacked_tray_top_provider: Some("claude".to_string()),
+            stacked_tray_bottom_provider: Some("codex".to_string()),
+            ..Settings::default()
+        };
+        let snapshots = vec![
+            fake_snapshot("codex", "Codex", 30.0),
+            fake_snapshot("claude", "Claude", 72.0),
+        ];
+
+        // The plan retains references to the caller-owned snapshots, not the
+        // temporary vector of references used during selection.
+        let plan = TrayPresentationPlan::resolve(&settings, &snapshots);
+
+        assert!(std::ptr::eq(plan.status_rows[0].snapshot, &snapshots[1]));
+        assert!(std::ptr::eq(plan.status_rows[1].snapshot, &snapshots[0]));
     }
 
     #[test]
