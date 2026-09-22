@@ -326,6 +326,13 @@ fn copied_prefix_subagent_prefers_validated_parent_baseline() {
         base + Duration::seconds(10),
         true,
     );
+    let now = std::time::SystemTime::now();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&child)
+        .unwrap()
+        .set_modified(now - std::time::Duration::from_secs(20))
+        .unwrap();
     let mut options = CostScanOptions::app_driven();
     options.prefer_newest_codex_sessions_first = false;
     let scanner = CostScanner::new(7)
@@ -343,8 +350,9 @@ fn copied_prefix_subagent_prefers_validated_parent_baseline() {
     assert!(!state.locally_resolved);
 }
 
-#[test]
-fn copied_prefix_subagent_replaces_cached_inference_when_parent_appears() {
+fn assert_cached_inference_is_replaced_when_parent_appears(
+    prefer_newest_codex_sessions_first: bool,
+) {
     let root = tempfile::tempdir().unwrap();
     let sessions = root.path().join("sessions");
     let cache_root = root.path().join("cache");
@@ -357,7 +365,7 @@ fn copied_prefix_subagent_replaces_cached_inference_when_parent_appears() {
         true,
     );
     let mut options = CostScanOptions::app_driven();
-    options.prefer_newest_codex_sessions_first = false;
+    options.prefer_newest_codex_sessions_first = prefer_newest_codex_sessions_first;
     let scanner = CostScanner::new(7)
         .with_options(options)
         .with_cache_root(&cache_root)
@@ -374,7 +382,7 @@ fn copied_prefix_subagent_replaces_cached_inference_when_parent_appears() {
         5_000
     );
 
-    write_codex_fork_session_fixture(
+    let parent = write_codex_fork_session_fixture(
         &sessions,
         "parent.jsonl",
         "parent-id",
@@ -383,6 +391,12 @@ fn copied_prefix_subagent_replaces_cached_inference_when_parent_appears() {
         base,
         &[1_000],
     );
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(parent)
+        .unwrap()
+        .set_modified(now - std::time::Duration::from_secs(10))
+        .unwrap();
 
     let (_, stats, validated_cache) = scanner.scan_codex_detailed_with_cache(None);
     let validated_state = validated_cache.files[&child.to_string_lossy().to_string()]
@@ -400,6 +414,16 @@ fn copied_prefix_subagent_replaces_cached_inference_when_parent_appears() {
             .contains(&child.to_string_lossy().to_string()),
         "the unchanged child must be reparsed when baseline provenance changes"
     );
+}
+
+#[test]
+fn copied_prefix_subagent_replaces_cached_inference_when_parent_is_visited_first() {
+    assert_cached_inference_is_replaced_when_parent_appears(true);
+}
+
+#[test]
+fn copied_prefix_subagent_replaces_cached_inference_when_child_would_be_visited_first() {
+    assert_cached_inference_is_replaced_when_parent_appears(false);
 }
 
 #[test]

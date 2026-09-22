@@ -96,24 +96,38 @@ fn summary_from_cached_report(
 }
 
 fn codex_fork_parent_is_safe(cache: &CostUsageCache, usage: &CostUsageFileUsage) -> bool {
-    if usage
+    let locally_resolved = usage
         .codex_fork_accounting_state
         .as_ref()
-        .is_some_and(|state| state.locally_resolved)
-    {
-        return true;
-    }
+        .is_some_and(|state| state.locally_resolved);
     let uses_parent_baseline = usage.codex_lineage.uses_parent_baseline()
         || (matches!(usage.codex_lineage, CodexSessionLineage::Root)
             && usage.codex_forked_from_id.is_some());
-    !uses_parent_baseline
-        || usage
-            .codex_forked_from_id
-            .as_deref()
-            .is_some_and(|parent_id| {
-                codex_parent_baseline(cache, parent_id, usage.codex_fork_timestamp.as_deref())
-                    .is_some()
-            })
+    if !uses_parent_baseline {
+        return true;
+    }
+    let parent_is_available = usage
+        .codex_forked_from_id
+        .as_deref()
+        .is_some_and(|parent_id| {
+            codex_parent_baseline(cache, parent_id, usage.codex_fork_timestamp.as_deref()).is_some()
+        });
+
+    // Local inference is safe only while no validated parent is available.
+    // Once the parent enters the cache, force the child through baseline
+    // replacement instead of accepting its unchanged-file fast path.
+    if locally_resolved {
+        !parent_is_available
+    } else {
+        parent_is_available
+    }
+}
+
+fn codex_fork_uses_local_inference(usage: &CostUsageFileUsage) -> bool {
+    usage
+        .codex_fork_accounting_state
+        .as_ref()
+        .is_some_and(|state| state.locally_resolved)
 }
 
 /// Return a parent cumulative baseline only when exactly one cached session

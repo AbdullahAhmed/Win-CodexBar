@@ -198,6 +198,7 @@ pub(super) fn scan_codex_detailed_with_cache(
     let mut pending_next = cache.codex_pending_paths.clone();
     let pending_paths_before_pass = cache.codex_pending_paths.clone();
     prioritize_codex_pending_candidates(&mut candidates, &pending_paths_before_pass);
+    defer_codex_locally_inferred_candidates(&mut candidates, &cache);
     if discovery_complete && !is_cancelled(cancel) {
         pending_next
             .retain(|path| !cached_codex_file_is_complete_for_range(&cache, path, scan_range));

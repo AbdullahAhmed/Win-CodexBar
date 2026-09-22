@@ -42,8 +42,40 @@ pub(super) fn cached_codex_file_is_complete_for_range(
                 && codex_scan_target_size(usage) == size
                 && usage.parsed_bytes.unwrap_or(0) >= size
                 && !usage.codex_unresolved_fork_parent
+                // Reconsider locally inferred children after this pass has
+                // had a chance to discover and cache their parent.
+                && !super::codex_fork_uses_local_inference(usage)
                 && super::codex_fork_parent_is_safe(cache, usage)
         })
+}
+
+/// Process cached local-inference children after all other candidates. A
+/// parent discovered in this pass must enter the cache before its unchanged
+/// child can decide whether the inferred baseline is still authoritative.
+pub(super) fn defer_codex_locally_inferred_candidates(
+    candidates: &mut Vec<CodexScanCandidate>,
+    cache: &CostUsageCache,
+) {
+    if candidates.len() < 2 {
+        return;
+    }
+
+    let mut other = Vec::with_capacity(candidates.len());
+    let mut locally_inferred = Vec::new();
+    for candidate in candidates.drain(..) {
+        let path_key = candidate.path.to_string_lossy();
+        if cache
+            .files
+            .get(path_key.as_ref())
+            .is_some_and(super::codex_fork_uses_local_inference)
+        {
+            locally_inferred.push(candidate);
+        } else {
+            other.push(candidate);
+        }
+    }
+    other.extend(locally_inferred);
+    candidates.extend(other);
 }
 
 /// Give paths already in the durable queue their saved turn before newly
