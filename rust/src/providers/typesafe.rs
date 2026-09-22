@@ -90,7 +90,7 @@ impl TypeSafeProvider {
 
     async fn discover_action(&self, cookie: &str, page: &str) -> Result<String, ProviderError> {
         for url in extract_chunk_urls(page).into_iter().take(MAX_CHUNKS) {
-            let chunk = self.get(&url, &cookie, "application/javascript").await?;
+            let chunk = self.get(&url, cookie, "application/javascript").await?;
             if let Some(found) = find_action_id(&chunk) {
                 return Ok(found);
             }

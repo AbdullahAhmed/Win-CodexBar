@@ -320,7 +320,10 @@ fn parse_reset(value: Option<&Value>) -> Result<Option<chrono::DateTime<Utc>>, P
     } else {
         raw
     };
-    Ok(Utc.timestamp_opt(seconds.trunc() as i64, 0).single())
+    let seconds = format!("{:.0}", seconds.trunc())
+        .parse::<i64>()
+        .map_err(|_| parse_failure("reset"))?;
+    Ok(Utc.timestamp_opt(seconds, 0).single())
 }
 
 fn percent(used: f64, limit: f64) -> Option<f64> {
@@ -363,5 +366,6 @@ mod tests {
     fn rejects_unknown_billing_type_and_negative_limits() {
         assert!(parse_billing(&json!({"billingType": "future", "data": {}})).is_err());
         assert!(parse_quota(&json!({"limit": -1}), "rate").is_err());
+        assert!(parse_reset(Some(&json!(1e30))).is_err());
     }
 }

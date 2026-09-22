@@ -263,12 +263,11 @@ fn parse_models(quota: &Value, premium: bool) -> Result<Vec<ModelQuota>, Provide
         .ok_or_else(|| parse_failure("periodStart"))?;
     let fallback = DateTime::parse_from_rfc3339(period_start)
         .ok()
-        .map(|date| {
+        .and_then(|date| {
             let date = date.with_timezone(&Utc);
             Utc.with_ymd_and_hms(date.year(), date.month(), 1, 0, 0, 0)
                 .single()
-        })
-        .flatten();
+        });
     let models = object
         .get("models")
         .and_then(Value::as_array)
@@ -293,7 +292,9 @@ fn parse_models(quota: &Value, premium: bool) -> Result<Vec<ModelQuota>, Provide
             let credit =
                 optional_nonnegative(row.get("creditTokens"), "creditTokens")?.unwrap_or(0.0);
             let window_hours = optional_nonnegative(row.get("windowHours"), "windowHours")?
-                .map(|value| value as u32);
+                .map(|value| format!("{value:.0}").parse::<u32>())
+                .transpose()
+                .map_err(|_| parse_failure("windowHours"))?;
             if window_hours.is_some_and(|hours| hours == 0 || hours > 8_760) {
                 return Err(parse_failure("windowHours"));
             }
@@ -392,5 +393,12 @@ mod tests {
     fn rejects_fractional_or_negative_quota_counts() {
         assert!(parse_models(&json!({"periodStart":"2030-01-01T00:00:00Z","models":[{"model":"x","cap":1.5,"tokensUsed":0}]}), true).is_err());
         assert!(parse_models(&json!({"periodStart":"2030-01-01T00:00:00Z","models":[{"model":"x","cap":1,"tokensUsed":-1}]}), true).is_err());
+        assert!(
+            parse_models(
+                &json!({"periodStart":"2030-01-01T00:00:00Z","models":[{"model":"x","cap":1,"tokensUsed":0,"windowHours":4_294_967_296_u64}]}),
+                true,
+            )
+            .is_err()
+        );
     }
 }
