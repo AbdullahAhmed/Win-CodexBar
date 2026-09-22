@@ -705,6 +705,22 @@ fn fetch_context_includes_minimax_region() {
 }
 
 #[test]
+fn provider_dashboard_url_uses_selected_regional_console() {
+    let mut settings = Settings::default();
+    settings.set_api_region(ProviderId::MiniMax, "cn");
+    settings.set_api_region(ProviderId::Kimi, "international");
+
+    assert_eq!(
+        super::provider_dashboard_url(ProviderId::MiniMax, &settings).as_deref(),
+        Some("https://platform.minimaxi.com/user-center/payment/coding-plan?cycle_type=3")
+    );
+    assert_eq!(
+        super::provider_dashboard_url(ProviderId::Kimi, &settings).as_deref(),
+        Some("https://www.kimi.ai/code/console")
+    );
+}
+
+#[test]
 fn fetch_context_token_account_uses_web_cookie_header() {
     let settings = Settings::default();
     let cookies = ManualCookies::default();
