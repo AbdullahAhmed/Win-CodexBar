@@ -391,6 +391,7 @@ fn assert_cached_inference_is_replaced_when_parent_appears(
         base,
         &[1_000],
     );
+    let now = std::time::SystemTime::now();
     std::fs::OpenOptions::new()
         .write(true)
         .open(parent)
