@@ -42,6 +42,13 @@ fn summary_from_cached_report(
 }
 
 fn codex_fork_parent_is_safe(cache: &CostUsageCache, usage: &CostUsageFileUsage) -> bool {
+    if usage
+        .codex_fork_accounting_state
+        .as_ref()
+        .is_some_and(|state| state.locally_resolved)
+    {
+        return true;
+    }
     let uses_parent_baseline = usage.codex_lineage.uses_parent_baseline()
         || (matches!(usage.codex_lineage, CodexSessionLineage::Root)
             && usage.codex_forked_from_id.is_some());
@@ -456,6 +463,7 @@ impl CostScanner {
                     }))
         });
         let is_fork = codex_lineage.uses_parent_baseline();
+        let locally_inferred_subagent = is_fork && session_metadata.is_subagent;
         let cached_fork_state_matches =
             cached_fork_accounting_state.as_ref().is_some_and(|state| {
                 state.session_id == codex_session_id
@@ -485,7 +493,7 @@ impl CostScanner {
                 .as_deref()
                 .is_some_and(|history_base| Some(history_base) != codex_forked_from_id.as_deref());
 
-        if is_fork && fork_baseline.is_none() {
+        if is_fork && fork_baseline.is_none() && !locally_inferred_subagent {
             cache.files.insert(
                 path_key,
                 CostUsageFileUsage {
@@ -626,7 +634,16 @@ impl CostScanner {
         let parse_target_size = cached
             .as_ref()
             .and_then(|entry| codex_resumable_scan_target_size(size, entry));
-        let parse_result = match if let Some(baseline) = fork_baseline.clone() {
+        let parse_result = match if locally_inferred_subagent {
+            JsonlScanner::parse_codex_file_with_inferred_fork_baseline(
+                path,
+                range,
+                session_metadata.subagent_history_start_ordinal,
+                cancel,
+                parse_target_size,
+                max_bytes_to_read,
+            )
+        } else if let Some(baseline) = fork_baseline.clone() {
             JsonlScanner::parse_codex_file_with_state_bounded_fork_target_with_accounting(
                 path,
                 range,
@@ -636,6 +653,8 @@ impl CostScanner {
                 cancel,
                 parse_target_size,
                 max_bytes_to_read,
+                false,
+                None,
             )
         } else {
             JsonlScanner::parse_codex_file_with_state_bounded(
@@ -656,7 +675,9 @@ impl CostScanner {
         stats.token_timestamp_comparisons = stats
             .token_timestamp_comparisons
             .saturating_add(parse_result.token_timestamp_comparisons);
-        if parse_result.fork_baseline_ambiguous {
+        if parse_result.fork_baseline_ambiguous
+            || (locally_inferred_subagent && !parse_result.fork_baseline_locally_resolved)
+        {
             cache.files.insert(
                 path_key,
                 CostUsageFileUsage {
@@ -707,6 +728,7 @@ impl CostScanner {
                     fork_timestamp: codex_fork_timestamp.clone(),
                     inherited_totals: Some(inherited_totals),
                     remaining_inherited_totals: parse_result.remaining_inherited_totals.clone(),
+                    locally_resolved: parse_result.fork_baseline_locally_resolved,
                 })
         } else {
             None

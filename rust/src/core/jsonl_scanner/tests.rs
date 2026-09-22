@@ -1043,6 +1043,8 @@ fn session_meta_pre_read_accepts_snake_and_camel_fork_identity() {
             lineage: CodexSessionLineage::Child,
             fork_timestamp: Some("2026-05-31T10:00:00Z".to_string()),
             history_base_thread_id: Some("history-snake".to_string()),
+            is_subagent: false,
+            subagent_history_start_ordinal: None,
         }
     );
 

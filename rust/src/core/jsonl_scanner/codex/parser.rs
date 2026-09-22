@@ -22,6 +22,119 @@ pub(super) struct CodexParserState {
     paginated_continuation: bool,
     paginated_baseline_checked: bool,
     pub(super) fork_baseline_ambiguous: bool,
+    fork_baseline_inference: Option<ForkBaselineInference>,
+}
+
+#[derive(Debug)]
+struct ForkBaselineInference {
+    explicit_start_ordinal: Option<i64>,
+    baseline: Option<CodexTotals>,
+    boundary_open: bool,
+    inherited_opening: bool,
+    locally_confirmed: bool,
+    resolved: bool,
+}
+
+impl ForkBaselineInference {
+    fn new(explicit_start_ordinal: Option<i64>) -> Self {
+        Self {
+            explicit_start_ordinal,
+            baseline: explicit_start_ordinal.map(|_| CodexTotals {
+                input: 0,
+                cached: 0,
+                output: 0,
+                reasoning: None,
+            }),
+            boundary_open: false,
+            inherited_opening: false,
+            locally_confirmed: explicit_start_ordinal.is_some(),
+            resolved: false,
+        }
+    }
+
+    fn observe_non_token(&mut self, obj: &Value) {
+        if obj.get("type").and_then(Value::as_str) == Some("turn_context") && self.inherited_opening
+        {
+            self.boundary_open = true;
+        }
+    }
+
+    /// Return the baseline when this is the first owned token event. `None`
+    /// means the event is still part of the copied prefix.
+    fn observe_token(&mut self, obj: &Value) -> Option<CodexTotals> {
+        let payload = token_count_payload(obj)?;
+        let info = payload.get("info")?;
+        let total = read_token_totals(info.get("total_token_usage")?);
+        let last = read_token_totals(info.get("last_token_usage")?);
+        let ordinal = obj.get("ordinal").and_then(Value::as_i64);
+
+        if let Some(start) = self.explicit_start_ordinal {
+            if ordinal.is_some_and(|ordinal| ordinal < start) {
+                self.baseline = Some(total);
+                return None;
+            }
+            self.boundary_open = true;
+        } else if self.baseline.is_none() {
+            if totals_contain_usage(&total) && !totals_contain_usage(&last) {
+                self.baseline = Some(total);
+                self.inherited_opening = true;
+                self.locally_confirmed = true;
+            }
+            return None;
+        } else if !self.boundary_open {
+            let changed = self
+                .baseline
+                .as_ref()
+                .is_some_and(|baseline| baseline != &total);
+            if self.inherited_opening && changed && totals_contain_usage(&last) {
+                self.boundary_open = true;
+            } else {
+                return None;
+            }
+        }
+
+        let baseline = self.baseline.clone().unwrap_or(CodexTotals {
+            input: 0,
+            cached: 0,
+            output: 0,
+            reasoning: None,
+        });
+        if total == baseline {
+            return None;
+        }
+        let copied_snapshot =
+            totals_contain_usage(&baseline) && total == last && totals_at_least(&total, &baseline);
+        if copied_snapshot {
+            self.baseline = Some(total);
+            self.locally_confirmed = true;
+            return None;
+        }
+
+        let owned_baseline = totals_delta(&last, &total);
+        self.baseline = Some(owned_baseline.clone());
+        self.locally_confirmed = true;
+        self.resolved = true;
+        Some(owned_baseline)
+    }
+}
+
+fn totals_contain_usage(totals: &CodexTotals) -> bool {
+    totals.input > 0 || totals.cached > 0 || totals.output > 0
+}
+
+fn totals_at_least(total: &CodexTotals, baseline: &CodexTotals) -> bool {
+    total.input >= baseline.input
+        && total.cached >= baseline.cached
+        && total.output >= baseline.output
+}
+
+fn totals_delta(last: &CodexTotals, total: &CodexTotals) -> CodexTotals {
+    CodexTotals {
+        input: total.input.saturating_sub(last.input).max(0),
+        cached: total.cached.saturating_sub(last.cached).max(0),
+        output: total.output.saturating_sub(last.output).max(0),
+        reasoning: subtract_optional(total.reasoning, last.reasoning),
+    }
 }
 
 impl CodexParserState {
@@ -95,7 +208,22 @@ impl CodexParserState {
             paginated_continuation,
             paginated_baseline_checked: false,
             fork_baseline_ambiguous: false,
+            fork_baseline_inference: None,
         }
+    }
+
+    pub(super) fn enable_fork_baseline_inference(&mut self, start_ordinal: Option<i64>) {
+        self.fork_baseline = None;
+        self.remaining_inherited_totals = None;
+        self.previous_totals = None;
+        self.totals_watermark = None;
+        self.fork_baseline_inference = Some(ForkBaselineInference::new(start_ordinal));
+    }
+
+    pub(super) fn fork_baseline_locally_resolved(&self) -> bool {
+        self.fork_baseline_inference
+            .as_ref()
+            .is_some_and(|inference| inference.locally_confirmed)
     }
 
     pub(super) fn process_line(&mut self, line: &str, range: &CostUsageDayRange) {
@@ -108,6 +236,36 @@ impl CodexParserState {
         range: &CostUsageDayRange,
         source_end_offset: i64,
     ) {
+        if self
+            .fork_baseline_inference
+            .as_ref()
+            .is_some_and(|inference| !inference.resolved)
+        {
+            let Ok(obj) = serde_json::from_str::<Value>(line) else {
+                return;
+            };
+            if token_count_payload(&obj).is_some() {
+                let baseline = self
+                    .fork_baseline_inference
+                    .as_mut()
+                    .and_then(|inference| inference.observe_token(&obj));
+                let Some(baseline) = baseline else { return };
+                self.fork_baseline = Some(baseline.clone());
+                self.remaining_inherited_totals = Some(baseline.clone());
+                self.previous_totals = Some(baseline.clone());
+                self.totals_watermark = Some(baseline);
+            } else {
+                self.fork_baseline_inference
+                    .as_mut()
+                    .expect("inference exists")
+                    .observe_non_token(&obj);
+                if obj.get("type").and_then(Value::as_str) == Some("turn_context") {
+                    self.update_current_model(&obj);
+                }
+                return;
+            }
+        }
+
         let event_candidate = is_candidate_codex_line(line);
         let bare_candidate = !event_candidate && line.contains("\"usage\"");
         if !event_candidate && !bare_candidate {

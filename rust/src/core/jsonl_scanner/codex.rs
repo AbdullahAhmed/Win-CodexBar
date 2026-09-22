@@ -13,8 +13,9 @@ use parser::CodexParserState;
 /// Persisted Codex cache schema version. Version 0 predates 64-bit totals;
 /// version 1 can retain a terminal pause after treating a paginated v2
 /// subagent's independent counters as an inherited fork. Version 3 adds
-/// persisted paginated-fork accounting state. Rebuild older artifacts.
-pub(crate) const CODEX_CACHE_SCHEMA_VERSION: u32 = 3;
+/// persisted paginated-fork accounting state. Version 4 reparses copied-prefix
+/// subagents with locally inferred component baselines. Rebuild older artifacts.
+pub(crate) const CODEX_CACHE_SCHEMA_VERSION: u32 = 4;
 
 /// Whether a persisted Codex cache artifact matches the current schema.
 /// A mismatched artifact (e.g. a pre-64-bit cache from an older release) is
@@ -186,6 +187,12 @@ impl JsonlScanner {
                             .pointer("/source/subagent/thread_spawn")
                             .is_some_and(Value::is_object))
             });
+            let is_subagent = payload.is_some_and(|value| {
+                value.get("thread_source").and_then(Value::as_str) == Some("subagent")
+                    || value
+                        .pointer("/source/subagent/thread_spawn")
+                        .is_some_and(Value::is_object)
+            });
             let history_base_thread_id = payload
                 .and_then(|value| value.get("history_base"))
                 .filter(|value| value.is_object())
@@ -220,6 +227,10 @@ impl JsonlScanner {
                     payload.and_then(|value| nonempty_json_string(value.get("timestamp")))
                 }),
                 history_base_thread_id,
+                is_subagent,
+                subagent_history_start_ordinal: payload
+                    .and_then(|value| value.get("subagent_history_start_ordinal"))
+                    .and_then(Value::as_i64),
             });
         }
 
@@ -364,6 +375,8 @@ impl JsonlScanner {
             None,
             None,
             max_bytes_to_read,
+            false,
+            None,
         )
     }
 
@@ -400,6 +413,8 @@ impl JsonlScanner {
             None,
             scan_target_size,
             max_bytes_to_read,
+            false,
+            None,
         )
     }
 
@@ -431,6 +446,8 @@ impl JsonlScanner {
             None,
             None,
             max_bytes_to_read,
+            false,
+            None,
         )
     }
 
@@ -456,6 +473,35 @@ impl JsonlScanner {
             cancel,
             scan_target_size,
             max_bytes_to_read,
+            false,
+            None,
+        )
+    }
+
+    pub(crate) fn parse_codex_file_with_inferred_fork_baseline(
+        file_path: &Path,
+        range: &CostUsageDayRange,
+        subagent_history_start_ordinal: Option<i64>,
+        cancel: Option<&AtomicBool>,
+        scan_target_size: Option<i64>,
+        max_bytes_to_read: Option<i64>,
+    ) -> std::io::Result<CodexParseResult> {
+        Self::parse_codex_file_with_state_bounded_internal(
+            file_path,
+            range,
+            0,
+            None,
+            None,
+            None,
+            None,
+            cancel,
+            true,
+            false,
+            None,
+            scan_target_size,
+            max_bytes_to_read,
+            true,
+            subagent_history_start_ordinal,
         )
     }
 
@@ -473,6 +519,8 @@ impl JsonlScanner {
         cancel: Option<&AtomicBool>,
         scan_target_size: Option<i64>,
         max_bytes_to_read: Option<i64>,
+        infer_fork_baseline: bool,
+        subagent_history_start_ordinal: Option<i64>,
     ) -> std::io::Result<CodexParseResult> {
         Self::parse_codex_file_with_state_bounded_internal(
             file_path,
@@ -488,6 +536,8 @@ impl JsonlScanner {
             remaining_inherited_totals,
             scan_target_size,
             max_bytes_to_read,
+            infer_fork_baseline,
+            subagent_history_start_ordinal,
         )
     }
 
@@ -509,6 +559,8 @@ impl JsonlScanner {
         remaining_inherited_totals: Option<CodexTotals>,
         scan_target_size: Option<i64>,
         max_bytes_to_read: Option<i64>,
+        infer_fork_baseline: bool,
+        subagent_history_start_ordinal: Option<i64>,
     ) -> std::io::Result<CodexParseResult> {
         let file = File::open(file_path)?;
         // Session JSONL files are bounded by the cache budget; sizes fit i64.
@@ -538,6 +590,9 @@ impl JsonlScanner {
             paginated_continuation,
             remaining_inherited_totals,
         );
+        if infer_fork_baseline {
+            parser.enable_fork_baseline_inference(subagent_history_start_ordinal);
+        }
         let mut parsed_bytes = safe_start_offset;
         let mut committed_bytes = safe_start_offset;
         let mut cancelled = false;
@@ -626,6 +681,7 @@ impl JsonlScanner {
         };
         let is_complete = !cancelled && !budget_exhausted && parsed_bytes >= effective_target_size;
         let bytes_read = parsed_bytes.saturating_sub(safe_start_offset).max(0);
+        let fork_baseline_locally_resolved = parser.fork_baseline_locally_resolved();
         Ok(CodexParseResult {
             records: parser.records,
             parsed_bytes,
@@ -644,6 +700,7 @@ impl JsonlScanner {
             fork_baseline_ambiguous: parser.fork_baseline_ambiguous,
             fork_baseline: parser.fork_baseline,
             remaining_inherited_totals: parser.remaining_inherited_totals,
+            fork_baseline_locally_resolved,
         })
     }
 

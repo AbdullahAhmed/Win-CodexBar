@@ -135,6 +135,163 @@ fn write_codex_paginated_continuation_fixture(
     path
 }
 
+fn write_copied_prefix_subagent_fixture(
+    sessions_root: &Path,
+    name: &str,
+    base: DateTime<Utc>,
+    owned: bool,
+) -> PathBuf {
+    let day = base.with_timezone(&Local).date_naive();
+    let day_dir = sessions_root
+        .join(day.format("%Y").to_string())
+        .join(day.format("%m").to_string())
+        .join(day.format("%d").to_string());
+    std::fs::create_dir_all(&day_dir).unwrap();
+    let path = day_dir.join(name);
+    let mut lines = vec![
+        serde_json::json!({
+            "type": "session_meta", "ordinal": 0, "timestamp": base.to_rfc3339(),
+            "payload": {
+                "id": "child-id", "forked_from_id": "missing-parent",
+                "subagent_history_start_ordinal": 10,
+                "thread_source": "subagent",
+                "source": {"subagent": {"thread_spawn": {"parent_thread_id": "missing-parent"}}}
+            }
+        }),
+        token_row(base, 2, [1_000, 900, 100], [0, 0, 0], "gpt-5.6-sol"),
+        serde_json::json!({
+            "type": "turn_context", "ordinal": 10, "timestamp": base.to_rfc3339(),
+            "payload": {"model": "gpt-5.6-sol"}
+        }),
+        token_row(
+            base,
+            12,
+            [1_000, 900, 100],
+            [1_000, 900, 100],
+            "gpt-5.6-sol",
+        ),
+        token_row(
+            base,
+            13,
+            [5_000, 3_900, 500],
+            [5_000, 3_900, 500],
+            "gpt-5.6-sol",
+        ),
+    ];
+    if owned {
+        lines.extend([
+            token_row(base, 19, [5_050, 3_910, 505], [50, 10, 5], "gpt-5.6-sol"),
+            token_row(
+                base + Duration::seconds(1),
+                20,
+                [5_070, 3_915, 510],
+                [20, 5, 5],
+                "gpt-5.6-sol",
+            ),
+            token_row(
+                base + Duration::seconds(2),
+                21,
+                [5_070, 3_915, 510],
+                [20, 5, 5],
+                "gpt-5.6-sol",
+            ),
+        ]);
+    }
+    let body = lines
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
+fn token_row(
+    timestamp: DateTime<Utc>,
+    ordinal: i64,
+    total: [i64; 3],
+    last: [i64; 3],
+    model: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "type": "event_msg", "ordinal": ordinal, "timestamp": timestamp.to_rfc3339(),
+        "payload": {"type": "token_count", "info": {
+            "model": model,
+            "total_token_usage": {
+                "input_tokens": total[0], "cached_input_tokens": total[1], "output_tokens": total[2]
+            },
+            "last_token_usage": {
+                "input_tokens": last[0], "cached_input_tokens": last[1], "output_tokens": last[2]
+            }
+        }}
+    })
+}
+
+#[test]
+fn copied_prefix_subagent_infers_advancing_baseline_without_parent() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let child = write_copied_prefix_subagent_fixture(
+        &sessions,
+        "child.jsonl",
+        Utc::now() - Duration::hours(1),
+        true,
+    );
+    let scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+
+    let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+    assert_eq!(summary.input_tokens, 70);
+    assert_eq!(summary.cached_tokens, 15);
+    assert_eq!(summary.output_tokens, 10);
+    assert_eq!(summary.sessions_count, 1);
+    let usage = &cache.files[&child.to_string_lossy().to_string()];
+    assert!(!usage.codex_unresolved_fork_parent);
+    assert!(
+        usage
+            .codex_fork_accounting_state
+            .as_ref()
+            .is_some_and(|state| state.locally_resolved)
+    );
+    assert_eq!(
+        usage.days.values().next().unwrap()["gpt-5.6-sol"],
+        vec![70, 15, 10]
+    );
+
+    let (cached, stats, _) = scanner.scan_codex_detailed_with_cache(None);
+    assert_eq!(cached.input_tokens, 70);
+    assert!(stats.codex_history_read_paths.is_empty());
+}
+
+#[test]
+fn copied_prefix_subagent_inherited_only_suffix_is_not_billed() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let child = write_copied_prefix_subagent_fixture(
+        &sessions,
+        "child.jsonl",
+        Utc::now() - Duration::hours(1),
+        false,
+    );
+    let scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+
+    let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+    assert_eq!(summary.input_tokens, 0);
+    assert_eq!(summary.output_tokens, 0);
+    assert_eq!(summary.sessions_count, 0);
+    let usage = &cache.files[&child.to_string_lossy().to_string()];
+    assert!(usage.days.is_empty());
+    assert!(!usage.codex_unresolved_fork_parent);
+}
+
 #[test]
 fn paginated_continuation_raises_inherited_baseline_from_total_last() {
     let root = tempfile::tempdir().unwrap();
