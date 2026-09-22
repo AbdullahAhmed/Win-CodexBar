@@ -79,6 +79,12 @@ pub(crate) fn build_provider_detail(
                 settings.api_region(id),
             )),
         )
+    } else if id == codexbar::core::ProviderId::Kimi {
+        Some(
+            codexbar::providers::KimiRegion::from_settings(Some(settings.api_region(id)))
+                .console_url()
+                .to_string(),
+        )
     } else {
         metadata.dashboard_url.map(|s| s.to_string())
     };

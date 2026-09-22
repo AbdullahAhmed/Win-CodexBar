@@ -9,12 +9,11 @@ use std::path::{Path, PathBuf};
 
 use super::web;
 use super::{
-    FetchContext, KimiCodeApiUsageResponse, KimiProvider, KimiRatioPool, KimiUsageDetail,
-    ProviderError, UsageSnapshot, ascii_header_value, cleaned_env, cleaned_owned,
+    FetchContext, KimiCodeApiUsageResponse, KimiProvider, KimiRatioPool, KimiRegion,
+    KimiUsageDetail, ProviderError, UsageSnapshot, ascii_header_value, cleaned_env, cleaned_owned,
     kimi_window_minutes,
 };
 
-const KIMI_CODE_API_BASE: &str = "https://api.kimi.com";
 const KIMI_CODE_API_KEY_ENV: &str = "KIMI_CODE_API_KEY";
 const KIMI_CODE_BASE_URL_ENV: &str = "KIMI_CODE_BASE_URL";
 const KIMI_CODE_HOME_ENV: &str = "KIMI_CODE_HOME";
@@ -43,12 +42,13 @@ struct KimiCodeCredentialFile {
 /// to the un-enriched snapshot.
 pub(crate) async fn fetch_via_code_api(
     ctx: &FetchContext,
+    region: KimiRegion,
     api_key_override: Option<&str>,
     identity_headers_override: Option<&[(&str, String)]>,
     login_method: &str,
 ) -> Result<UsageSnapshot, ProviderError> {
     let api_key = code_api_key(api_key_override.or(ctx.api_key.as_deref()))?;
-    let base_url = code_api_base_url()?;
+    let base_url = code_api_base_url(region)?;
     let endpoint = code_api_usage_endpoint(&base_url)?;
     let client = crate::core::credentialed_http_client_builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -89,14 +89,15 @@ pub(crate) async fn fetch_via_code_api(
 
     // Upstream #2622: enrich Code API + CLI usage with the monthly membership
     // pool from a signed-in Kimi Desktop (or browser/manual) session.
-    for web_token in web::web_auth_tokens(ctx.manual_cookie_header.as_deref()) {
-        match web::fetch_subscription_for_enrichment_result(&client, &web_token).await {
+    for web_token in web::web_auth_tokens(ctx.manual_cookie_header.as_deref(), region) {
+        match web::fetch_subscription_for_enrichment_result(&client, &web_token, region).await {
             Ok(subscription) => {
                 if let Some(subscription) = subscription {
                     snapshot = super::apply_subscription_windows(snapshot, &subscription);
                 }
                 if !has_plan_name
-                    && let Some(plan) = web::fetch_subscription_plan(&client, &web_token).await
+                    && let Some(plan) =
+                        web::fetch_subscription_plan(&client, &web_token, region).await
                 {
                     snapshot.login_method = Some(plan);
                 }
@@ -247,8 +248,9 @@ pub(crate) fn code_api_key(explicit: Option<&str>) -> Result<String, ProviderErr
     cleaned_env(KIMI_CODE_API_KEY_ENV).ok_or(ProviderError::AuthRequired)
 }
 
-fn code_api_base_url() -> Result<Url, ProviderError> {
-    let raw = cleaned_env(KIMI_CODE_BASE_URL_ENV).unwrap_or_else(|| KIMI_CODE_API_BASE.to_string());
+fn code_api_base_url(region: KimiRegion) -> Result<Url, ProviderError> {
+    let raw = cleaned_env(KIMI_CODE_BASE_URL_ENV)
+        .unwrap_or_else(|| region.code_api_base_url().to_string());
     crate::providers::validated_https_url(&raw, "Kimi Code API base")
 }
 
@@ -285,8 +287,8 @@ pub(crate) fn kimi_code_home() -> Option<PathBuf> {
 ///
 /// Never refreshes or rewrites CLI-owned `credentials/kimi-code.json`.
 /// Skips when `KIMI_CODE_BASE_URL` / OAuth host overrides are set.
-pub(crate) fn kimi_code_cli_access_token(now_unix: f64) -> Option<String> {
-    if has_code_endpoint_override() {
+pub(crate) fn kimi_code_cli_access_token(region: KimiRegion, now_unix: f64) -> Option<String> {
+    if region != KimiRegion::China || has_code_endpoint_override() {
         return None;
     }
     let home = kimi_code_home()?;
@@ -417,7 +419,7 @@ mod tests {
             std::env::set_var(KIMI_CODE_HOME_ENV, home.path());
         }
 
-        let token = kimi_code_cli_access_token(now);
+        let token = kimi_code_cli_access_token(KimiRegion::China, now);
         assert_eq!(token.as_deref(), Some("oauth-token"));
 
         let after = std::fs::read(&cred_path).unwrap();
@@ -466,7 +468,7 @@ mod tests {
             std::env::set_var(KIMI_CODE_BASE_URL_ENV, "https://proxy.example.com/kimi");
         }
         assert!(has_code_endpoint_override());
-        assert!(kimi_code_cli_access_token(now).is_none());
+        assert!(kimi_code_cli_access_token(KimiRegion::China, now).is_none());
 
         // SAFETY: still under the same env_lock() guard; swapping which
         // override keys are present between assertions.
@@ -474,7 +476,7 @@ mod tests {
             std::env::remove_var(KIMI_CODE_BASE_URL_ENV);
             std::env::set_var(KIMI_CODE_OAUTH_HOST_ENV, "https://oauth.example.com");
         }
-        assert!(kimi_code_cli_access_token(now).is_none());
+        assert!(kimi_code_cli_access_token(KimiRegion::China, now).is_none());
 
         // SAFETY: final cleanup while the env_lock() guard is still alive.
         unsafe {

@@ -205,6 +205,16 @@ pub fn quit_app(app: tauri::AppHandle) {
 }
 
 fn dashboard_url_for_provider(provider_id: &str) -> Option<String> {
+    if provider_id == ProviderId::Kimi.cli_name() {
+        let settings = Settings::load();
+        return Some(
+            codexbar::providers::KimiRegion::from_settings(Some(
+                settings.api_region(ProviderId::Kimi),
+            ))
+            .console_url()
+            .to_string(),
+        );
+    }
     if provider_id == ProviderId::MiniMax.cli_name() {
         let settings = Settings::load();
         return Some(
