@@ -53,6 +53,12 @@ struct IdentitySnapshot {
     plan: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct WalletCandidate {
+    user_id: String,
+    balance: f64,
+}
+
 #[derive(Debug, Clone, Default)]
 struct TokenEnvironment {
     config_api_key: Option<String>,
@@ -166,26 +172,21 @@ impl HuggingFaceProvider {
         let zerogpu_url = Url::parse(ZEROGPU_URL)
             .map_err(|_| ProviderError::Other("Invalid Hugging Face ZeroGPU URL.".to_string()))?;
 
-        let (billing, identity, zerogpu) = tokio::join!(
+        let (billing, identity, zerogpu, wallet_candidate) = tokio::join!(
             self.fetch_json(billing_url, &token, PRIMARY_TIMEOUT),
             self.fetch_optional_json(whoami_url, &token),
             self.fetch_optional_json(zerogpu_url, &token),
+            self.fetch_optional_wallet_candidate(),
         );
         let billing = parse_billing(billing?)?;
         let identity = identity.and_then(|value| parse_identity(&value));
         let zerogpu = zerogpu.and_then(|value| parse_zerogpu(&value));
-        let balance = match identity
-            .as_ref()
-            .and_then(|identity| identity.user_id.as_deref())
-        {
-            Some(user_id) => self.fetch_optional_wallet(user_id).await,
-            None => None,
-        };
+        let balance = matching_wallet_balance(identity.as_ref(), wallet_candidate);
 
         Ok(build_result(billing, identity, zerogpu, balance))
     }
 
-    async fn fetch_optional_wallet(&self, expected_user_id: &str) -> Option<f64> {
+    async fn fetch_optional_wallet_candidate(&self) -> Option<WalletCandidate> {
         let cookie = crate::providers::browser_cookie_header(&["huggingface.co"]).ok()?;
         let (billing, whoami) = tokio::join!(
             self.fetch_cookie_text(
@@ -197,17 +198,10 @@ impl HuggingFaceProvider {
         );
         let billing = billing.ok()?;
         let whoami = whoami.ok()?;
-        let candidate = parse_wallet_balance(&billing).ok()?;
+        let balance = parse_wallet_balance(&billing).ok()?;
         let profile: Value = serde_json::from_str(&whoami).ok()?;
-        let observed_user_id = profile
-            .get("type")
-            .and_then(Value::as_str)
-            .filter(|kind| *kind == "user")
-            .and_then(|_| profile.get("id"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())?;
-        (observed_user_id == expected_user_id).then_some(candidate)
+        let user_id = parse_identity(&profile)?.user_id?;
+        Some(WalletCandidate { user_id, balance })
     }
 
     async fn fetch_cookie_text(
@@ -484,6 +478,15 @@ fn parse_identity(value: &Value) -> Option<IdentitySnapshot> {
             plan,
         },
     )
+}
+
+fn matching_wallet_balance(
+    identity: Option<&IdentitySnapshot>,
+    candidate: Option<WalletCandidate>,
+) -> Option<f64> {
+    let expected_user_id = identity?.user_id.as_deref()?;
+    let candidate = candidate?;
+    (candidate.user_id == expected_user_id).then_some(candidate.balance)
 }
 
 fn safe_text(value: Option<&str>) -> Option<String> {
@@ -894,6 +897,34 @@ mod tests {
         assert_eq!(identity.email.as_deref(), Some("n@example.test"));
         assert_eq!(identity.plan.as_deref(), Some("Pro"));
         assert!(parse_identity(&json!({"email": "bad\nemail"})).is_none());
+    }
+
+    #[test]
+    fn wallet_candidate_is_attached_only_to_the_matching_token_identity() {
+        let identity = IdentitySnapshot {
+            user_id: Some("user-a".to_string()),
+            name: None,
+            email: None,
+            plan: None,
+        };
+        let candidate = WalletCandidate {
+            user_id: "user-a".to_string(),
+            balance: 12.5,
+        };
+        assert_eq!(
+            matching_wallet_balance(Some(&identity), Some(candidate.clone())),
+            Some(12.5)
+        );
+
+        let other_identity = IdentitySnapshot {
+            user_id: Some("user-b".to_string()),
+            ..identity.clone()
+        };
+        assert_eq!(
+            matching_wallet_balance(Some(&other_identity), Some(candidate.clone())),
+            None
+        );
+        assert_eq!(matching_wallet_balance(None, Some(candidate)), None);
     }
 
     #[test]

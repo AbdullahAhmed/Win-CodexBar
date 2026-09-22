@@ -205,6 +205,22 @@ pub(crate) fn cookie_values<'a>(cookie_header: &'a str, name: &str) -> Vec<&'a s
         .collect()
 }
 
+/// Normalize a user-supplied `Cookie` header value at the shared provider boundary.
+///
+/// Accepts either the raw header value or a full, case-insensitive `Cookie:` line.
+/// Empty values and control characters are rejected before the value reaches an
+/// HTTP client.
+pub(crate) fn normalize_cookie_header(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let value = trimmed
+        .get(.."cookie:".len())
+        .filter(|prefix| prefix.eq_ignore_ascii_case("cookie:"))
+        .map_or(trimmed, |_| &trimmed["cookie:".len()..])
+        .trim();
+
+    (!value.is_empty() && !value.chars().any(char::is_control)).then(|| value.to_string())
+}
+
 pub(crate) fn browser_cookies_for_domain(
     domain: &str,
 ) -> Result<Vec<crate::browser::cookies::Cookie>, crate::core::ProviderError> {
@@ -339,4 +355,35 @@ pub(crate) fn extract_renewal(text: &str) -> Option<chrono::DateTime<chrono::Utc
     chrono::DateTime::parse_from_rfc3339(raw)
         .ok()
         .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_cookie_header;
+
+    #[test]
+    fn normalizes_raw_and_prefixed_cookie_headers() {
+        assert_eq!(
+            normalize_cookie_header("  session=abc; user=42  ").as_deref(),
+            Some("session=abc; user=42")
+        );
+        assert_eq!(
+            normalize_cookie_header(" Cookie: session=abc ").as_deref(),
+            Some("session=abc")
+        );
+        assert_eq!(
+            normalize_cookie_header("cOoKiE: session=abc").as_deref(),
+            Some("session=abc")
+        );
+    }
+
+    #[test]
+    fn rejects_empty_and_control_character_cookie_headers() {
+        assert_eq!(normalize_cookie_header("  "), None);
+        assert_eq!(normalize_cookie_header("Cookie:  "), None);
+        assert_eq!(
+            normalize_cookie_header("session=abc\r\nInjected: true"),
+            None
+        );
+    }
 }

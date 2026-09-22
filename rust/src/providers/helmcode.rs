@@ -93,7 +93,8 @@ impl HelmcodeProvider {
         let mut rejected = false;
         for tenant in candidates {
             let cookie = match ctx.manual_cookie_header.as_deref() {
-                Some(raw) => normalize_cookie(raw).ok_or(ProviderError::NoCookies)?,
+                Some(raw) => crate::providers::normalize_cookie_header(raw)
+                    .ok_or(ProviderError::NoCookies)?,
                 None => match crate::providers::browser_cookie_header(&[tenant.domain()]) {
                     Ok(header) => header,
                     Err(_) => continue,
@@ -355,14 +356,6 @@ fn optional_nonnegative(value: Option<&Value>, field: &str) -> Result<Option<f64
         None | Some(Value::Null) => Ok(None),
         Some(value) => nonnegative(Some(value), field).map(Some),
     }
-}
-fn normalize_cookie(raw: &str) -> Option<String> {
-    let value = raw
-        .trim()
-        .strip_prefix("Cookie:")
-        .unwrap_or(raw.trim())
-        .trim();
-    (!value.is_empty() && !value.chars().any(char::is_control)).then(|| value.to_string())
 }
 fn parse_failure(field: impl AsRef<str>) -> ProviderError {
     ProviderError::Parse(format!(

@@ -66,7 +66,7 @@ impl TypeSafeProvider {
 
     async fn fetch_web(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         let cookie = match ctx.manual_cookie_header.as_deref() {
-            Some(raw) => normalize_cookie(raw).ok_or_else(|| {
+            Some(raw) => crate::providers::normalize_cookie_header(raw).ok_or_else(|| {
                 ProviderError::Other(
                     "TypeSafe needs a nonempty Cookie header from the billing page.".into(),
                 )
@@ -407,14 +407,6 @@ fn build_result(billing: Billing) -> ProviderFetchResult {
     result
 }
 
-fn normalize_cookie(raw: &str) -> Option<String> {
-    let value = raw
-        .trim()
-        .strip_prefix("Cookie:")
-        .unwrap_or(raw.trim())
-        .trim();
-    (!value.is_empty() && !value.chars().any(char::is_control)).then(|| value.to_string())
-}
 fn finite(value: Option<&Value>, field: &str) -> Result<f64, ProviderError> {
     value
         .and_then(Value::as_f64)
