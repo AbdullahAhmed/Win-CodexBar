@@ -358,7 +358,7 @@ describe("TrayPanel provider grid", () => {
     renderTrayPanel([provider("codex", "Codex", 35)]);
 
     expect(await screen.findByRole("button", { name: "UsageSpendShare" })).toBeInTheDocument();
-    expect(screen.getByText("$2.00")).toBeInTheDocument();
+    expect(screen.getByText("~$2.00")).toBeInTheDocument();
     expect(screen.getByText(/1 of 2 OverviewSpendProviderCoverage/)).toBeInTheDocument();
   });
 
