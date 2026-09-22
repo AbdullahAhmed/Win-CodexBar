@@ -79,11 +79,14 @@ pub enum LocalHistoryCoverage {
     Unavailable,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct LocalTokenHistorySummary {
     pub total_tokens: u64,
     pub session_count: usize,
     pub coverage: LocalHistoryCoverage,
+    /// Known subtotal priced at public API list rates. `None` means that no
+    /// local request in the selected window had a resolvable model price.
+    pub estimated_cost_usd: Option<f64>,
 }
 
 pub fn local_token_history_json(
@@ -96,7 +99,10 @@ pub fn local_token_history_json(
         "provider": provider,
         "supported": true,
         "days_scanned": days,
-        "cost": {"total_usd": serde_json::Value::Null, "currency": serde_json::Value::Null},
+        "cost": {
+            "total_usd": history.estimated_cost_usd,
+            "currency": history.estimated_cost_usd.map(|_| "USD")
+        },
         "daily": [],
         "tokens": {"total": complete.then_some(history.total_tokens)},
         "sessions_count": complete.then_some(history.session_count),
@@ -106,7 +112,11 @@ pub fn local_token_history_json(
             LocalHistoryCoverage::Unavailable => "unavailable",
         },
         "knownZero": complete && history.total_tokens == 0,
-        "note": "Local token history; dollar costs unavailable"
+        "note": if history.estimated_cost_usd.is_some() {
+            "Local token history estimated at public API list prices; not billed spend"
+        } else {
+            "Local token history; dollar costs unavailable"
+        }
     })
 }
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

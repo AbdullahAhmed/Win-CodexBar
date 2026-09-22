@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Duration, Local, TimeZone, Utc};
 use serde_json::Value;
 
+use crate::core::CostUsagePricing;
+
 const MAX_SESSION_FILES: usize = 2048;
 const MAX_SESSION_FILE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_SESSION_FILE_BYTES_U64: u64 = 32 * 1024 * 1024;
@@ -143,6 +145,7 @@ fn summarize_paths(
     let first_day = now.with_timezone(&Local).date_naive()
         - Duration::days(i64::from(days.clamp(1, 365).saturating_sub(1)));
     let mut total_tokens = 0_u64;
+    let mut estimated_cost_usd = None;
     let mut sessions_with_usage = HashSet::new();
     let mut seen_response_ids = HashSet::new();
     let mut complete = !truncated;
@@ -163,6 +166,7 @@ fn summarize_paths(
         let mut reader = BufReader::new(file);
         let mut remaining = MAX_SESSION_FILE_BYTES;
         let mut path_had_usage = false;
+        let mut model = None::<String>;
         loop {
             let line = match read_bounded_jsonl_line(&mut reader, &mut remaining) {
                 Ok(Some(line)) => line,
@@ -179,6 +183,16 @@ fn summarize_paths(
                 continue;
             };
             let kind = value.get("type").and_then(Value::as_str);
+            if kind == Some("session_meta") {
+                model = value
+                    .get("modelId")
+                    .or_else(|| value.get("model_id"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string);
+                continue;
+            }
             if kind != Some("usage") && value.get("input").is_none() {
                 continue;
             }
@@ -208,14 +222,28 @@ fn summarize_paths(
             let output = token_field(&value, &["output"]);
             let cache_read = token_field(&value, &["cacheRead", "cache_read"]);
             let cache_write = token_field(&value, &["cacheWrite", "cache_write"]);
+            let reasoning = token_field(
+                &value,
+                &["reasoning", "reasoningTokens", "reasoning_tokens"],
+            );
             let total = input
                 .saturating_add(output)
                 .saturating_add(cache_read)
-                .saturating_add(cache_write);
+                .saturating_add(cache_write)
+                .saturating_add(reasoning);
             if total == 0 {
                 continue;
             }
             total_tokens = total_tokens.saturating_add(total);
+            if let Some(cost) = estimate_cost_usd(
+                model.as_deref(),
+                input,
+                cache_read,
+                cache_write,
+                output.saturating_add(reasoning),
+            ) {
+                estimated_cost_usd = checked_cost_sum(estimated_cost_usd, cost);
+            }
             path_had_usage = true;
         }
         if path_had_usage {
@@ -233,7 +261,38 @@ fn summarize_paths(
         } else {
             LocalHistoryCoverage::Partial
         },
+        estimated_cost_usd,
     }
+}
+
+pub(super) fn estimate_cost_usd(
+    model: Option<&str>,
+    input: u64,
+    cache_read: u64,
+    cache_write: u64,
+    output: u64,
+) -> Option<f64> {
+    let model = model.map(str::trim).filter(|value| !value.is_empty())?;
+    let input = i32::try_from(input).ok()?;
+    let cache_read = i32::try_from(cache_read).ok()?;
+    let cache_write = i32::try_from(cache_write).ok()?;
+    let output = i32::try_from(output).ok()?;
+    let resolve = |candidate: &str| {
+        CostUsagePricing::claude_cost_usd(candidate, input, cache_read, cache_write, output)
+            .filter(|cost| cost.is_finite() && *cost >= 0.0)
+    };
+    resolve(model).or_else(|| {
+        ["-tiered", "-low", "-thinking"]
+            .iter()
+            .find_map(|suffix| model.strip_suffix(suffix))
+            .filter(|base| !base.is_empty())
+            .and_then(resolve)
+    })
+}
+
+pub(super) fn checked_cost_sum(current: Option<f64>, cost: f64) -> Option<f64> {
+    let next = current.unwrap_or(0.0) + cost;
+    next.is_finite().then_some(next)
 }
 
 fn read_bounded_jsonl_line<R: BufRead>(
@@ -290,6 +349,25 @@ fn token_field(value: &Value, keys: &[&str]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prices_known_models_and_provider_local_routing_variants() {
+        let direct = estimate_cost_usd(Some("claude-sonnet-4-6"), 1_000, 200, 100, 500)
+            .expect("known public price");
+        let routed = estimate_cost_usd(Some("claude-sonnet-4-6-thinking"), 1_000, 200, 100, 500)
+            .expect("routing suffix uses the base public price");
+        assert!(direct > 0.0);
+        assert_eq!(direct, routed);
+    }
+
+    #[test]
+    fn unknown_or_oversized_pricing_inputs_fail_closed() {
+        assert_eq!(estimate_cost_usd(Some("unknown"), 1, 2, 3, 4), None);
+        assert_eq!(
+            estimate_cost_usd(Some("claude-sonnet-4-6"), i32::MAX as u64 + 1, 0, 0, 0),
+            None
+        );
+    }
     use rusqlite::Connection;
 
     #[test]

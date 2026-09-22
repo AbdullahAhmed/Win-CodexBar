@@ -386,7 +386,11 @@ fn print_local_token_history(history: crate::spend_contract::LocalTokenHistorySu
             println!("  Local token history is unavailable or incomplete");
         }
     }
-    println!("  Local token history; dollar costs unavailable");
+    if let Some(cost) = history.estimated_cost_usd {
+        println!("  API list-price estimate: ${cost:.2} (not billed spend)");
+    } else {
+        println!("  Local token history; dollar costs unavailable");
+    }
 }
 
 fn print_codex_session_output(result: &CostResult, days: u32) {
@@ -625,6 +629,7 @@ mod tests {
                 total_tokens: 12_345,
                 session_count: 2,
                 coverage: LocalHistoryCoverage::Complete,
+                estimated_cost_usd: None,
             },
             30,
         );
@@ -639,6 +644,7 @@ mod tests {
                 total_tokens: 999,
                 session_count: 1,
                 coverage: LocalHistoryCoverage::Partial,
+                estimated_cost_usd: None,
             },
             30,
         );
@@ -646,6 +652,25 @@ mod tests {
         assert!(partial["tokens"]["total"].is_null());
         assert_eq!(partial["historyCoverage"], "partial");
     }
+
+    #[test]
+    fn antigravity_json_labels_public_price_estimates() {
+        use crate::spend_contract::{LocalHistoryCoverage, LocalTokenHistorySummary};
+        let payload = crate::spend_contract::local_token_history_json(
+            "antigravity",
+            LocalTokenHistorySummary {
+                total_tokens: 1_000,
+                session_count: 1,
+                coverage: LocalHistoryCoverage::Complete,
+                estimated_cost_usd: Some(0.0125),
+            },
+            30,
+        );
+        assert_eq!(payload["cost"]["total_usd"], 0.0125);
+        assert_eq!(payload["cost"]["currency"], "USD");
+        assert!(payload["note"].as_str().unwrap().contains("not billed"));
+    }
+
     #[test]
     fn provider_native_only_flag_default_false() {
         // Default CostArgs has provider_native_only = false (backward compat).

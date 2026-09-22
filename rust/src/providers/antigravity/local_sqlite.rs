@@ -184,9 +184,25 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
     }
 
     let mut total_tokens = 0_u64;
+    let mut estimated_cost_usd = None;
     let mut sessions = HashSet::new();
     let mut rows: HashMap<(String, i64), Event> = HashMap::new();
     let mut responses: HashMap<(String, String), Event> = HashMap::new();
+
+    let mut label_models = HashMap::<(String, String), String>::new();
+    let mut conflicting_labels = HashSet::<(String, String)>::new();
+    for event in &events {
+        let (Some(label), Some(model)) = (event.turn.label.as_ref(), event.turn.model.as_ref())
+        else {
+            continue;
+        };
+        let key = (event.session.clone(), label.clone());
+        if label_models.get(&key).is_some_and(|prior| prior != model) {
+            conflicting_labels.insert(key);
+        } else {
+            label_models.insert(key, model.clone());
+        }
+    }
 
     for event in events {
         let row_key = (event.session.clone(), event.row);
@@ -234,6 +250,30 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
                 continue;
             }
         }
+        if let Some(usage) = event.turn.usage.as_ref() {
+            let inherited_model = event.turn.label.as_ref().and_then(|label| {
+                let key = (event.session.clone(), label.clone());
+                (!conflicting_labels.contains(&key))
+                    .then(|| label_models.get(&key))
+                    .flatten()
+                    .map(String::as_str)
+            });
+            let model = event.turn.model.as_deref().or(inherited_model);
+            let input = usage.system_prompt.checked_add(usage.new_input);
+            let output = usage.output.checked_add(usage.reasoning);
+            if let (Some(input), Some(output)) = (input, output)
+                && let Some(cost) = super::local_sessions::estimate_cost_usd(
+                    model,
+                    input,
+                    usage.cache_read,
+                    0,
+                    output,
+                )
+            {
+                estimated_cost_usd =
+                    super::local_sessions::checked_cost_sum(estimated_cost_usd, cost);
+            }
+        }
         sessions.insert(event.session);
     }
 
@@ -245,6 +285,7 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
         } else {
             LocalHistoryCoverage::Partial
         },
+        estimated_cost_usd,
     })
 }
 

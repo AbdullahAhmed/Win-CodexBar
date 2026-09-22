@@ -590,12 +590,20 @@ fn build_usage_spend_summary(
                 let seven = codexbar::providers::antigravity::local_sessions::summarize(7);
                 let thirty = codexbar::providers::antigravity::local_sessions::summarize(30);
                 let mut spend = cached_spend(cached_snapshot);
+                spend.seven_day = seven.estimated_cost_usd;
+                spend.thirty_day = thirty.estimated_cost_usd;
                 spend.seven_day_tokens = matches!(seven.coverage, LocalHistoryCoverage::Complete)
                     .then_some(seven.total_tokens);
                 spend.thirty_day_tokens = matches!(thirty.coverage, LocalHistoryCoverage::Complete)
                     .then_some(thirty.total_tokens);
-                if matches!(thirty.coverage, LocalHistoryCoverage::Complete) {
-                    spend.source = "local Antigravity history".to_string();
+                if thirty.estimated_cost_usd.is_some() {
+                    spend.source = if matches!(thirty.coverage, LocalHistoryCoverage::Complete) {
+                        "local Antigravity history · API list-price estimate".to_string()
+                    } else {
+                        "partial local Antigravity history · API list-price estimate".to_string()
+                    };
+                } else if matches!(thirty.coverage, LocalHistoryCoverage::Complete) {
+                    spend.source = "local Antigravity history · unpriced".to_string();
                 }
                 spend
             }

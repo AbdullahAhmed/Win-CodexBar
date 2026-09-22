@@ -164,6 +164,7 @@ mod tests {
                 total_tokens: 42,
                 session_count: 1,
                 coverage: LocalHistoryCoverage::Complete,
+                estimated_cost_usd: None,
             },
             30,
         );
@@ -177,6 +178,7 @@ mod tests {
                 total_tokens: 42,
                 session_count: 1,
                 coverage: LocalHistoryCoverage::Partial,
+                estimated_cost_usd: None,
             },
             30,
         );
