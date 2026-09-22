@@ -290,6 +290,15 @@ fn copied_prefix_subagent_inherited_only_suffix_is_not_billed() {
     let usage = &cache.files[&child.to_string_lossy().to_string()];
     assert!(usage.days.is_empty());
     assert!(!usage.codex_unresolved_fork_parent);
+    let state = usage.codex_fork_accounting_state.as_ref().unwrap();
+    assert!(state.locally_resolved);
+    assert!(state.inherited_totals.is_none());
+
+    let (cached, stats, _) = scanner.scan_codex_detailed_with_cache(None);
+    assert_eq!(cached.input_tokens, 0);
+    assert_eq!(cached.output_tokens, 0);
+    assert_eq!(cached.sessions_count, 0);
+    assert!(stats.codex_history_read_paths.is_empty());
 }
 
 #[test]

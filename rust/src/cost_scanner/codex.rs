@@ -715,19 +715,18 @@ impl CostScanner {
             bytes_read: parse_result.bytes_read,
             is_complete: parse_result.is_complete,
         };
-        let codex_fork_accounting_state = if is_fork {
-            parse_result
-                .fork_baseline
-                .clone()
-                .map(|inherited_totals| CodexForkAccountingState {
-                    session_id: codex_session_id.clone(),
-                    forked_from_id: codex_forked_from_id.clone(),
-                    history_base_thread_id: history_base_thread_id.clone(),
-                    fork_timestamp: codex_fork_timestamp.clone(),
-                    inherited_totals: Some(inherited_totals),
-                    remaining_inherited_totals: parse_result.remaining_inherited_totals.clone(),
-                    locally_resolved: parse_result.fork_baseline_locally_resolved,
-                })
+        let codex_fork_accounting_state = if is_fork
+            && (parse_result.fork_baseline.is_some() || parse_result.fork_baseline_locally_resolved)
+        {
+            Some(CodexForkAccountingState {
+                session_id: codex_session_id.clone(),
+                forked_from_id: codex_forked_from_id.clone(),
+                history_base_thread_id: history_base_thread_id.clone(),
+                fork_timestamp: codex_fork_timestamp.clone(),
+                inherited_totals: parse_result.fork_baseline.clone(),
+                remaining_inherited_totals: parse_result.remaining_inherited_totals.clone(),
+                locally_resolved: parse_result.fork_baseline_locally_resolved,
+            })
         } else {
             None
         };
