@@ -207,6 +207,14 @@ struct CodexScanCandidate {
 struct CodexPreparedCandidate {
     path: PathBuf,
     session_metadata: CodexSessionMetadata,
+    lineage_disposition: CodexLineageDisposition,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum CodexLineageDisposition {
+    #[default]
+    Ready,
+    AmbiguousOrCyclic,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -403,12 +411,12 @@ impl CostScanner {
         cancel: Option<&AtomicBool>,
         stats: &mut CostScanStats,
         max_bytes_to_read: Option<i64>,
-        prepared_session_metadata: Option<&CodexSessionMetadata>,
+        prepared_candidate: Option<&CodexPreparedCandidate>,
     ) -> CodexFileScanOutcome {
         if is_cancelled(cancel) {
             return CodexFileScanOutcome::default();
         }
-        if prepared_session_metadata.is_none() {
+        if prepared_candidate.is_none() {
             stats.files_seen = stats.files_seen.saturating_add(1);
         }
 
@@ -454,6 +462,9 @@ impl CostScanner {
         // before reading even the bounded metadata prefix; raw token history
         // is only needed after freshness fails or a fork needs reconciliation.
         if let Some(entry) = cached.as_ref()
+            && prepared_candidate.is_none_or(|candidate| {
+                candidate.lineage_disposition == CodexLineageDisposition::Ready
+            })
             && cache_entry_is_fresh(entry)
             && identity_matches_cached(entry)
         {
@@ -470,8 +481,8 @@ impl CostScanner {
             };
         }
 
-        let session_metadata = if let Some(prepared) = prepared_session_metadata {
-            prepared.clone()
+        let session_metadata = if let Some(prepared) = prepared_candidate {
+            prepared.session_metadata.clone()
         } else {
             stats.codex_metadata_read_paths.push(path_key.clone());
             stats.codex_read_receipt.metadata_reads =
@@ -565,7 +576,11 @@ impl CostScanner {
             && history_base_thread_id
                 .as_deref()
                 .is_some_and(|history_base| Some(history_base) != codex_forked_from_id.as_deref());
-        let accounting_mode = if !is_fork {
+        let accounting_mode = if prepared_candidate.is_some_and(|candidate| {
+            candidate.lineage_disposition == CodexLineageDisposition::AmbiguousOrCyclic
+        }) {
+            CodexAccountingMode::Unresolved
+        } else if !is_fork {
             CodexAccountingMode::Standard
         } else if let Some(baseline) = parent_fork_baseline {
             let reparse_cached_file = matching_cached_fork_state.is_some_and(|state| {

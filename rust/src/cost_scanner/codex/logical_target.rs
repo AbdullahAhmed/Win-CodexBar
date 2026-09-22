@@ -79,48 +79,60 @@ pub(super) fn defer_codex_locally_inferred_candidates(
 }
 
 /// Order one bounded work set so every uniquely identified parent is parsed
-/// before its children. The sort is stable for unrelated candidates and falls
-/// back to discovery order for duplicate identities or dependency cycles.
+/// before its children. Duplicate identities, cycles, and every dependent
+/// candidate are marked unsafe so parsing cannot accept or infer a baseline
+/// from ambiguous lineage.
 pub(super) fn order_codex_candidates_by_lineage(candidates: &mut Vec<CodexPreparedCandidate>) {
-    if candidates.len() < 2 {
+    if candidates.is_empty() {
         return;
     }
 
-    let mut session_owners = HashMap::<String, Option<usize>>::new();
+    let mut session_owners = HashMap::<String, Vec<usize>>::new();
     for (index, candidate) in candidates.iter().enumerate() {
         let Some(session_id) = candidate.session_metadata.session_id.as_ref() else {
             continue;
         };
         session_owners
             .entry(session_id.clone())
-            .and_modify(|owner| *owner = None)
-            .or_insert(Some(index));
+            .or_default()
+            .push(index);
     }
-    let parent_indices = candidates
-        .iter()
-        .map(|candidate| {
-            candidate
-                .session_metadata
-                .forked_from_id
-                .as_ref()
-                .and_then(|parent_id| session_owners.get(parent_id))
-                .copied()
-                .flatten()
-        })
-        .collect::<Vec<_>>();
+    let mut unsafe_lineage = vec![false; candidates.len()];
+    for owners in session_owners.values().filter(|owners| owners.len() > 1) {
+        for &index in owners {
+            unsafe_lineage[index] = true;
+        }
+    }
+    let mut parent_indices = vec![None; candidates.len()];
+    for (index, candidate) in candidates.iter().enumerate() {
+        let Some(parent_id) = candidate.session_metadata.forked_from_id.as_ref() else {
+            continue;
+        };
+        match session_owners.get(parent_id).map(Vec::as_slice) {
+            Some([parent_index]) => parent_indices[index] = Some(*parent_index),
+            Some([]) | None => {}
+            Some(_) => unsafe_lineage[index] = true,
+        }
+    }
+
     let mut remaining = candidates.drain(..).map(Some).collect::<Vec<_>>();
     let mut ordered = Vec::with_capacity(remaining.len());
+    let mut completed = vec![false; remaining.len()];
 
     loop {
         let mut progressed = false;
         for index in 0..remaining.len() {
-            if remaining[index].is_none() {
+            if remaining[index].is_none() || unsafe_lineage[index] {
                 continue;
             }
-            let parent_is_ready =
-                parent_indices[index].is_none_or(|parent_index| remaining[parent_index].is_none());
+            let parent_is_ready = parent_indices[index].is_none_or(|parent_index| {
+                completed[parent_index] && !unsafe_lineage[parent_index]
+            });
             if parent_is_ready {
-                ordered.push(remaining[index].take().expect("candidate checked above"));
+                let mut candidate = remaining[index].take().expect("candidate checked above");
+                candidate.lineage_disposition = CodexLineageDisposition::Ready;
+                ordered.push(candidate);
+                completed[index] = true;
                 progressed = true;
             }
         }
@@ -129,7 +141,10 @@ pub(super) fn order_codex_candidates_by_lineage(candidates: &mut Vec<CodexPrepar
         }
     }
 
-    ordered.extend(remaining.into_iter().flatten());
+    for mut candidate in remaining.into_iter().flatten() {
+        candidate.lineage_disposition = CodexLineageDisposition::AmbiguousOrCyclic;
+        ordered.push(candidate);
+    }
     candidates.extend(ordered);
 }
 

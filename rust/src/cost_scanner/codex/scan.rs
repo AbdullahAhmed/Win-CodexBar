@@ -228,6 +228,7 @@ pub(super) fn scan_codex_detailed_with_cache(
             session_metadata: JsonlScanner::read_codex_session_metadata(&candidate.path)
                 .unwrap_or_default(),
             path: candidate.path,
+            lineage_disposition: CodexLineageDisposition::Ready,
         });
     }
     let mut unprocessed = Vec::new();
@@ -259,7 +260,7 @@ pub(super) fn scan_codex_detailed_with_cache(
             cancel,
             &mut stats,
             Some(allowance),
-            Some(&candidate.session_metadata),
+            Some(candidate),
         );
         bytes_read_this_refresh = bytes_read_this_refresh.saturating_add(outcome.bytes_read.max(0));
         stats.codex_bytes_read = stats
