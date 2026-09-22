@@ -87,19 +87,37 @@ impl CostUsagePricing {
         cache_creation_input_tokens: i32,
         output_tokens: i32,
     ) -> f64 {
+        Self::claude_cost_usd_u64_from_resolution(
+            resolution,
+            u64::try_from(input_tokens).unwrap_or(0),
+            u64::try_from(cache_read_input_tokens).unwrap_or(0),
+            u64::try_from(cache_creation_input_tokens).unwrap_or(0),
+            u64::try_from(output_tokens).unwrap_or(0),
+        )
+    }
+
+    /// Calculate cost from a resolved Claude pricing source without narrowing
+    /// untrusted local-history counters to the API-oriented signed type.
+    pub(crate) fn claude_cost_usd_u64_from_resolution(
+        resolution: ClaudePricingResolution,
+        input_tokens: u64,
+        cache_read_input_tokens: u64,
+        cache_creation_input_tokens: u64,
+        output_tokens: u64,
+    ) -> f64 {
         match resolution {
             ClaudePricingResolution::BuiltIn(pricing) => {
                 fn tiered(
-                    tokens: i32,
+                    tokens: u64,
                     base: f64,
                     above: Option<f64>,
                     threshold: Option<i32>,
                 ) -> f64 {
-                    let tokens = tokens.max(0);
                     match (threshold, above) {
                         (Some(thresh), Some(above_rate)) => {
+                            let thresh = u64::try_from(thresh).unwrap_or(0);
                             let below = tokens.min(thresh);
-                            let over = (tokens - thresh).max(0);
+                            let over = tokens.saturating_sub(thresh);
                             (below as f64) * base + (over as f64) * above_rate
                         }
                         _ => (tokens as f64) * base,
@@ -131,14 +149,54 @@ impl CostUsagePricing {
             ClaudePricingResolution::ModelsDev {
                 pricing,
                 threshold_tokens,
-            } => claude_routed_pricing::cost_usd_from_pricing_with_threshold(
-                pricing,
-                threshold_tokens,
-                input_tokens,
-                cache_read_input_tokens,
-                cache_creation_input_tokens,
-                output_tokens,
-            ),
+            } => {
+                let use_tier = threshold_tokens.is_some_and(|threshold| {
+                    input_tokens
+                        .checked_add(cache_read_input_tokens)
+                        .and_then(|value| value.checked_add(cache_creation_input_tokens))
+                        .is_none_or(|total| total > threshold)
+                });
+                let pick = |base: f64, above: Option<f64>| {
+                    if use_tier {
+                        above.unwrap_or(base)
+                    } else {
+                        base
+                    }
+                };
+                let input_rate = pick(
+                    pricing.input_cost_per_token,
+                    pricing.input_cost_per_token_above_threshold,
+                );
+                let cache_read_rate = if use_tier {
+                    pricing
+                        .cache_read_input_cost_per_token_above_threshold
+                        .or(pricing.cache_read_input_cost_per_token)
+                        .unwrap_or(input_rate)
+                } else {
+                    pricing
+                        .cache_read_input_cost_per_token
+                        .unwrap_or(input_rate)
+                };
+                let cache_write_rate = if use_tier {
+                    pricing
+                        .cache_write_input_cost_per_token_above_threshold
+                        .or(pricing.cache_write_input_cost_per_token)
+                        .unwrap_or(input_rate)
+                } else {
+                    pricing
+                        .cache_write_input_cost_per_token
+                        .unwrap_or(input_rate)
+                };
+                let output_rate = pick(
+                    pricing.output_cost_per_token,
+                    pricing.output_cost_per_token_above_threshold,
+                );
+
+                (input_tokens as f64) * input_rate
+                    + (cache_read_input_tokens as f64) * cache_read_rate
+                    + (cache_creation_input_tokens as f64) * cache_write_rate
+                    + (output_tokens as f64) * output_rate
+            }
         }
     }
 
