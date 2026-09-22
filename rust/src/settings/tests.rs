@@ -1090,6 +1090,33 @@ fn retired_provider_config_is_ignored_until_explicit_save() {
     );
 }
 
+#[test]
+fn provider_aliases_are_canonicalized_at_the_load_boundary() {
+    let settings: Settings = serde_json::from_str(
+        r#"{
+            "enabled_providers": ["openai", "ClAuDe", "not-a-provider"],
+            "provider_metrics": {
+                "openai": "weekly",
+                "CoDeX": "session",
+                "not-a-provider": "weekly"
+            },
+            "float_bar_provider_ids": ["OPENAI", "codex", "ClAuDe", "unknown"]
+        }"#,
+    )
+    .expect("load settings containing provider aliases");
+
+    assert_eq!(
+        settings.enabled_providers,
+        HashSet::from(["claude".to_string(), "codex".to_string()])
+    );
+    assert_eq!(
+        settings.provider_metrics.get("codex"),
+        Some(&MetricPreference::Session)
+    );
+    assert_eq!(settings.provider_metrics.len(), 1);
+    assert_eq!(settings.float_bar_provider_ids, ["codex", "claude"]);
+}
+
 /// Default `Settings` should serialize WITHOUT a `provider_configs`
 /// field (empty map skipped).
 #[test]
