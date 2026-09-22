@@ -224,6 +224,8 @@ fn cookie_source_provider(provider_id: &str) -> Option<codexbar::core::ProviderI
         "notion" => ProviderId::Notion,
         "grok" => ProviderId::Grok,
         "replicate" => ProviderId::Replicate,
+        "helmcode" => ProviderId::Helmcode,
+        "typesafe" => ProviderId::TypeSafe,
         _ => return None,
     })
 }
@@ -325,6 +327,8 @@ fn workspace_provider(provider_id: &str) -> Option<codexbar::core::ProviderId> {
         "opencodego" => ProviderId::OpenCodeGo,
         "zed" => ProviderId::Zed,
         "xai" => ProviderId::Xai,
+        "v0" => ProviderId::V0,
+        "helmcode" => ProviderId::Helmcode,
         _ => return None,
     })
 }
@@ -742,6 +746,38 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
                 "manual",
                 "",
                 "Paste a Cookie header from https://replicate.com/account/billing.",
+                None,
+            ),
+        ],
+        "helmcode" => vec![
+            cookie_option(
+                lang,
+                "auto",
+                "Automatically imports the signed-in Helmcode or NaN Builders browser session.",
+                "",
+                None,
+            ),
+            cookie_option(
+                lang,
+                "manual",
+                "",
+                "Paste a Cookie header and select the tenant in the workspace field.",
+                None,
+            ),
+        ],
+        "typesafe" => vec![
+            cookie_option(
+                lang,
+                "auto",
+                "Automatically imports the signed-in TypeSafe console session.",
+                "",
+                None,
+            ),
+            cookie_option(
+                lang,
+                "manual",
+                "",
+                "Paste a Cookie header from the TypeSafe billing page.",
                 None,
             ),
         ],

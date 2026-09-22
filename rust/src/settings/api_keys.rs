@@ -364,6 +364,17 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             dashboard_url: Some("https://huggingface.co/settings/billing"),
         },
         ProviderConfigInfo {
+            id: ProviderId::V0,
+            name: "v0",
+            requires_api_key: true,
+            api_key_env_var: Some("V0_API_KEY"),
+            api_key_help: Some(
+                "Add a v0 Platform API key. An optional scope can use the provider workspace field or V0_SCOPE.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://v0.app/chat/settings/billing"),
+        },
+        ProviderConfigInfo {
             id: ProviderId::Fireworks,
             name: "Fireworks",
             requires_api_key: true,

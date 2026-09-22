@@ -47,6 +47,7 @@ struct ZeroGpuSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct IdentitySnapshot {
+    user_id: Option<String>,
     name: Option<String>,
     email: Option<String>,
     plan: Option<String>,
@@ -173,8 +174,72 @@ impl HuggingFaceProvider {
         let billing = parse_billing(billing?)?;
         let identity = identity.and_then(|value| parse_identity(&value));
         let zerogpu = zerogpu.and_then(|value| parse_zerogpu(&value));
+        let balance = match identity
+            .as_ref()
+            .and_then(|identity| identity.user_id.as_deref())
+        {
+            Some(user_id) => self.fetch_optional_wallet(user_id).await,
+            None => None,
+        };
 
-        Ok(build_result(billing, identity, zerogpu))
+        Ok(build_result(billing, identity, zerogpu, balance))
+    }
+
+    async fn fetch_optional_wallet(&self, expected_user_id: &str) -> Option<f64> {
+        let cookie = crate::providers::browser_cookie_header(&["huggingface.co"]).ok()?;
+        let billing = self
+            .fetch_cookie_text(
+                "https://huggingface.co/settings/billing",
+                &cookie,
+                "text/html",
+            )
+            .await
+            .ok()?;
+        let candidate = parse_wallet_balance(&billing).ok()?;
+        let whoami = self
+            .fetch_cookie_text(WHOAMI_URL, &cookie, "application/json")
+            .await
+            .ok()?;
+        let profile: Value = serde_json::from_str(&whoami).ok()?;
+        let observed_user_id = profile
+            .get("type")
+            .and_then(Value::as_str)
+            .filter(|kind| *kind == "user")
+            .and_then(|_| profile.get("id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        (observed_user_id == expected_user_id).then_some(candidate)
+    }
+
+    async fn fetch_cookie_text(
+        &self,
+        url: &str,
+        cookie: &str,
+        accept: &str,
+    ) -> Result<String, ProviderError> {
+        let response = tokio::time::timeout(
+            OPTIONAL_TIMEOUT,
+            self.client
+                .get(url)
+                .header(reqwest::header::COOKIE, cookie)
+                .header(reqwest::header::ACCEPT, accept)
+                .send(),
+        )
+        .await
+        .map_err(|_| ProviderError::Timeout)??;
+        if !response.status().is_success() {
+            return Err(classify_status(response.status()));
+        }
+        let bytes = response.bytes().await?;
+        if bytes.len() > MAX_RESPONSE_BYTES {
+            return Err(ProviderError::Parse(
+                "Hugging Face returned an oversized wallet response.".to_string(),
+            ));
+        }
+        String::from_utf8(bytes.to_vec()).map_err(|_| {
+            ProviderError::Parse("Hugging Face returned invalid wallet text.".to_string())
+        })
     }
 
     async fn fetch_optional_json(&self, url: Url, token: &str) -> Option<Value> {
@@ -400,17 +465,23 @@ fn parse_timestamp(value: &Value) -> Option<DateTime<Utc>> {
 }
 
 fn parse_identity(value: &Value) -> Option<IdentitySnapshot> {
+    let user_id = (value.get("type").and_then(Value::as_str) == Some("user"))
+        .then(|| safe_text(value.get("id").and_then(Value::as_str)))
+        .flatten();
     let name = safe_text(value.get("name").and_then(Value::as_str));
     let email = safe_text(value.get("email").and_then(Value::as_str));
     let plan = value
         .get("isPro")
         .and_then(Value::as_bool)
         .map(|is_pro| if is_pro { "Pro" } else { "Free" }.to_string());
-    (name.is_some() || email.is_some() || plan.is_some()).then_some(IdentitySnapshot {
-        name,
-        email,
-        plan,
-    })
+    (user_id.is_some() || name.is_some() || email.is_some() || plan.is_some()).then_some(
+        IdentitySnapshot {
+            user_id,
+            name,
+            email,
+            plan,
+        },
+    )
 }
 
 fn safe_text(value: Option<&str>) -> Option<String> {
@@ -421,10 +492,116 @@ fn safe_text(value: Option<&str>) -> Option<String> {
     Some(value.to_string())
 }
 
+fn parse_wallet_balance(html: &str) -> Result<f64, ProviderError> {
+    let mut current = Vec::new();
+    let mut legacy = Vec::new();
+    let mut rest = html;
+    while let Some(index) = rest.find("data-props") {
+        rest = &rest[index + "data-props".len()..];
+        let trimmed = rest.trim_start();
+        let Some(after_equals) = trimmed.strip_prefix('=') else {
+            continue;
+        };
+        let after_equals = after_equals.trim_start();
+        let Some(quote) = after_equals
+            .chars()
+            .next()
+            .filter(|value| matches!(value, '\'' | '"'))
+        else {
+            continue;
+        };
+        let payload = &after_equals[quote.len_utf8()..];
+        let Some(end) = payload.find(quote) else {
+            break;
+        };
+        let decoded = decode_html_entities(&payload[..end])?;
+        rest = &payload[end + quote.len_utf8()..];
+        let Ok(value) = serde_json::from_str::<Value>(&decoded) else {
+            continue;
+        };
+        let Some(object) = value.as_object() else {
+            continue;
+        };
+        if let Some(entity) = object.get("entity").and_then(Value::as_object)
+            && entity.contains_key("currentBalanceUsd")
+        {
+            if entity.get("type").and_then(Value::as_str) != Some("user") {
+                return Err(invalid_wallet("wallet entity type"));
+            }
+            current.push(wallet_number(
+                entity.get("currentBalanceUsd"),
+                "currentBalanceUsd",
+            )?);
+        }
+        if object.contains_key("invoiceCreditsCents") {
+            let cents = wallet_number(object.get("invoiceCreditsCents"), "invoiceCreditsCents")?;
+            if cents.fract() != 0.0 {
+                return Err(invalid_wallet("invoiceCreditsCents"));
+            }
+            legacy.push(cents / 100.0);
+        }
+    }
+    match (current.as_slice(), legacy.as_slice()) {
+        ([balance], _) => Ok(*balance),
+        ([], [balance]) => Ok(*balance),
+        ([], _) => Err(invalid_wallet("missing or ambiguous legacy wallet")),
+        _ => Err(invalid_wallet("ambiguous current wallet")),
+    }
+}
+
+fn wallet_number(value: Option<&Value>, field: &str) -> Result<f64, ProviderError> {
+    value
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .ok_or_else(|| invalid_wallet(field))
+}
+
+fn invalid_wallet(field: &str) -> ProviderError {
+    ProviderError::Parse(format!("Hugging Face wallet field '{field}' was invalid."))
+}
+
+fn decode_html_entities(raw: &str) -> Result<String, ProviderError> {
+    let mut output = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(index) = rest.find('&') {
+        output.push_str(&rest[..index]);
+        rest = &rest[index + 1..];
+        let Some(end) = rest.find(';') else {
+            return Err(invalid_wallet("HTML entity"));
+        };
+        let entity = &rest[..end];
+        let decoded = match entity {
+            "amp" => '&',
+            "apos" => '\'',
+            "gt" => '>',
+            "lt" => '<',
+            "nbsp" => '\u{00a0}',
+            "quot" => '"',
+            value if value.starts_with("#x") || value.starts_with("#X") => {
+                u32::from_str_radix(&value[2..], 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                    .ok_or_else(|| invalid_wallet("HTML entity"))?
+            }
+            value if value.starts_with('#') => value[1..]
+                .parse::<u32>()
+                .ok()
+                .and_then(char::from_u32)
+                .ok_or_else(|| invalid_wallet("HTML entity"))?,
+            _ => return Err(invalid_wallet("HTML entity")),
+        };
+        output.push(decoded);
+        rest = &rest[end + 1..];
+    }
+    output.push_str(rest);
+    Ok(output)
+}
+
 fn build_result(
     billing: BillingSnapshot,
     identity: Option<IdentitySnapshot>,
     zerogpu: Option<ZeroGpuSnapshot>,
+    balance: Option<f64>,
 ) -> ProviderFetchResult {
     let mut result = ProviderFetchResult::new(
         UsageSnapshot::new(RateWindow::informational("Hugging Face billing"))
@@ -436,6 +613,9 @@ fn build_result(
     let mut cost = CostSnapshot::new(billing.billable_usd, "USD", "Current month");
     if let Some(limit) = billing.limit_usd {
         cost = cost.with_limit(limit);
+    }
+    if let Some(balance) = balance {
+        cost = cost.with_balance(balance);
     }
     result = result.with_cost(cost);
 
@@ -461,6 +641,9 @@ fn build_result(
     }
     if let Some(requests) = billing.requests {
         details.push(("inference-requests", "Requests", requests.to_string()));
+    }
+    if let Some(balance) = balance {
+        details.push(("prepaid-balance", "Prepaid balance", format_usd(balance)));
     }
 
     let mut rows: Vec<Option<ProviderDisplayDetail>> = details
@@ -751,6 +934,7 @@ mod tests {
                 total_minutes: 1500.0,
                 resets_at: None,
             }),
+            None,
         );
         assert_eq!(result.source_label, "api");
         assert_eq!(result.cost.as_ref().and_then(|cost| cost.limit), Some(10.0));
@@ -758,5 +942,22 @@ mod tests {
         assert!(result.usage.primary.is_informational);
         assert!(result.usage.secondary.is_none());
         assert!(!result.pace_authoritative);
+    }
+
+    #[test]
+    fn wallet_parser_prefers_unique_current_balance_and_supports_legacy_cents() {
+        let current = r#"<div data-props="{&quot;entity&quot;:{&quot;type&quot;:&quot;user&quot;,&quot;currentBalanceUsd&quot;:12.5}}">"#;
+        assert_eq!(parse_wallet_balance(current).unwrap(), 12.5);
+
+        let legacy = r#"<div data-props='{"invoiceCreditsCents":725}'>"#;
+        assert_eq!(parse_wallet_balance(legacy).unwrap(), 7.25);
+    }
+
+    #[test]
+    fn wallet_parser_rejects_ambiguous_or_non_user_balances() {
+        let ambiguous = r#"<div data-props='{"entity":{"type":"user","currentBalanceUsd":1}}'><div data-props='{"entity":{"type":"user","currentBalanceUsd":2}}'>"#;
+        assert!(parse_wallet_balance(ambiguous).is_err());
+        let organization = r#"<div data-props='{"entity":{"type":"org","currentBalanceUsd":1}}'>"#;
+        assert!(parse_wallet_balance(organization).is_err());
     }
 }

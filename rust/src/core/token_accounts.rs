@@ -361,6 +361,9 @@ impl TokenAccountSupport {
             | ProviderId::ElevenLabs
             | ProviderId::Deepgram
             | ProviderId::Groq
+            | ProviderId::Helmcode
+            | ProviderId::V0
+            | ProviderId::TypeSafe
             | ProviderId::LLMProxy
             | ProviderId::Chutes
             | ProviderId::LiteLLM

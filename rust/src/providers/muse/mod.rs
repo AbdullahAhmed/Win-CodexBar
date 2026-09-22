@@ -267,11 +267,29 @@ fn parse_response(body: &[u8]) -> Result<ProviderFetchResult, ProviderError> {
         ));
     }
 
-    let usage = object(
-        root.get("subs_usage")
-            .ok_or_else(|| parse_failure("missing subs_usage"))?,
-        "subs_usage",
-    )?;
+    let plan = optional_text(root.get("subs_tier_name"), "subs_tier_name")?;
+    let email = optional_text(root.get("user_email"), "user_email")?;
+    let Some(raw_usage) = root.get("subs_usage").filter(|value| !value.is_null()) else {
+        let mut usage = UsageSnapshot::new(RateWindow::informational(
+            "Subscription active; quota was not included in this login response",
+        ))
+        .with_login_method("Muse login");
+        if let Some(email) = email {
+            usage = usage.with_email(email);
+        }
+        let mut result = ProviderFetchResult::new(usage, "oauth")
+            .with_non_authoritative_pace()
+            .with_display_detail(ProviderDisplayDetail::new(
+                "quota",
+                "Quota",
+                "Not included in this login response",
+            ));
+        if let Some(plan) = plan {
+            result = result.with_display_detail(ProviderDisplayDetail::new("plan", "Plan", plan));
+        }
+        return Ok(result);
+    };
+    let usage = object(raw_usage, "subs_usage")?;
     let window = object(
         usage
             .get("window")
@@ -305,9 +323,6 @@ fn parse_response(body: &[u8]) -> Result<ProviderFetchResult, ProviderError> {
     )?;
     let primary_reset = parse_reset(window.get("resets_at"))?;
     let weekly_reset = parse_reset(weekly.get("resets_at"))?;
-    let plan = optional_text(root.get("subs_tier_name"), "subs_tier_name")?;
-    let email = optional_text(root.get("user_email"), "user_email")?;
-
     let primary = RateWindow::with_details(
         primary_percent.clamp(0.0, 100.0),
         Some(duration),
@@ -604,9 +619,36 @@ mod tests {
     }
 
     #[test]
+    fn active_windowless_subscription_preserves_identity_without_inventing_quota() {
+        let payload = serde_json::json!({
+            "require_payment": false,
+            "is_subs_active": true,
+            "subs_tier_name": "Pro",
+            "user_email": "muse@example.com"
+        });
+        let result = parse_response(&serde_json::to_vec(&payload).unwrap()).unwrap();
+
+        assert_eq!(result.usage.primary.used_percent, 0.0);
+        assert!(result.usage.primary.window_minutes.is_none());
+        assert_eq!(
+            result.usage.account_email.as_deref(),
+            Some("muse@example.com")
+        );
+        assert!(!result.pace_authoritative);
+        assert!(result.display_details().iter().any(|row| {
+            row.title() == "Quota" && row.value() == "Not included in this login response"
+        }));
+        assert!(
+            result
+                .display_details()
+                .iter()
+                .any(|row| row.title() == "Plan" && row.value() == "Pro")
+        );
+    }
+
+    #[test]
     fn malformed_required_fields_fail_closed_without_echoing_payload() {
         for payload in [
-            serde_json::json!({"is_subs_active": true}),
             serde_json::json!({"is_subs_active": true, "subs_usage": {"window": {}, "weekly": {}}}),
             serde_json::json!({"require_payment": "yes", "is_subs_active": true}),
             serde_json::json!({"require_payment": false, "is_subs_active": true, "subs_usage": {"window": {"window_duration_mins": "300"}, "weekly": {"used_percent": 1}}}),
