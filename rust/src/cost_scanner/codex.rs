@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::{CodexForkAccountingState, CodexSessionLineage};
+use crate::core::{CodexForkAccountingState, CodexSessionLineage, CodexSessionMetadata};
 
 mod cache_days;
 mod logical_target;
@@ -204,6 +204,11 @@ struct CodexScanCandidate {
     mtime_unix_ms: i64,
 }
 
+struct CodexPreparedCandidate {
+    path: PathBuf,
+    session_metadata: CodexSessionMetadata,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct CodexFileScanOutcome {
     bytes_read: i64,
@@ -381,7 +386,8 @@ impl CostScanner {
         cancel: Option<&AtomicBool>,
         stats: &mut CostScanStats,
     ) {
-        let _ = self.parse_codex_file_bounded(path, range, summary, cache, cancel, stats, None);
+        let _ =
+            self.parse_codex_file_bounded(path, range, summary, cache, cancel, stats, None, None);
     }
 
     #[allow(
@@ -397,11 +403,14 @@ impl CostScanner {
         cancel: Option<&AtomicBool>,
         stats: &mut CostScanStats,
         max_bytes_to_read: Option<i64>,
+        prepared_session_metadata: Option<&CodexSessionMetadata>,
     ) -> CodexFileScanOutcome {
         if is_cancelled(cancel) {
             return CodexFileScanOutcome::default();
         }
-        stats.files_seen = stats.files_seen.saturating_add(1);
+        if prepared_session_metadata.is_none() {
+            stats.files_seen = stats.files_seen.saturating_add(1);
+        }
 
         let metadata = match fs::metadata(path) {
             Ok(metadata) => metadata,
@@ -461,10 +470,14 @@ impl CostScanner {
             };
         }
 
-        stats.codex_metadata_read_paths.push(path_key.clone());
-        stats.codex_read_receipt.metadata_reads =
-            stats.codex_read_receipt.metadata_reads.saturating_add(1);
-        let session_metadata = JsonlScanner::read_codex_session_metadata(path).unwrap_or_default();
+        let session_metadata = if let Some(prepared) = prepared_session_metadata {
+            prepared.clone()
+        } else {
+            stats.codex_metadata_read_paths.push(path_key.clone());
+            stats.codex_read_receipt.metadata_reads =
+                stats.codex_read_receipt.metadata_reads.saturating_add(1);
+            JsonlScanner::read_codex_session_metadata(path).unwrap_or_default()
+        };
         let cached_identity_matches = cached
             .as_ref()
             .is_some_and(|entry| entry.mtime_unix_ms == mtime_ms && entry.size == size);

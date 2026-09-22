@@ -310,7 +310,7 @@ fn copied_prefix_subagent_prefers_validated_parent_baseline() {
     let sessions = root.path().join("sessions");
     let cache_root = root.path().join("cache");
     let base = Utc::now() - Duration::hours(1);
-    write_codex_fork_session_fixture(
+    let parent = write_codex_fork_session_fixture(
         &sessions,
         "parent.jsonl",
         "parent-id",
@@ -335,12 +335,16 @@ fn copied_prefix_subagent_prefers_validated_parent_baseline() {
         .unwrap();
     let mut options = CostScanOptions::app_driven();
     options.prefer_newest_codex_sessions_first = false;
+    let parent_size = std::fs::metadata(&parent).unwrap().len();
+    let child_size = std::fs::metadata(&child).unwrap().len();
+    options.codex_max_session_file_bytes =
+        i64::try_from(parent_size.max(child_size)).expect("fixture size fits i64");
     let scanner = CostScanner::new(7)
         .with_options(options)
         .with_cache_root(&cache_root)
         .with_sessions_dirs(vec![sessions]);
 
-    let (_, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+    let (_, stats, cache) = scanner.scan_codex_detailed_with_cache(None);
     let state = cache.files[&child.to_string_lossy().to_string()]
         .codex_fork_accounting_state
         .as_ref()
@@ -348,6 +352,153 @@ fn copied_prefix_subagent_prefers_validated_parent_baseline() {
 
     assert_eq!(state.inherited_totals.as_ref().unwrap().input, 1_000);
     assert!(!state.locally_resolved);
+    assert_eq!(stats.files_seen, 2);
+    assert_eq!(stats.codex_read_receipt.metadata_reads, 2);
+    assert_eq!(stats.codex_read_receipt.history_reads, 2);
+    assert_eq!(
+        stats.codex_bytes_read,
+        parent_size.saturating_add(child_size),
+        "one bounded parse per candidate must enforce the per-file allowance"
+    );
+    assert_eq!(
+        stats.codex_history_read_paths,
+        vec![
+            parent.to_string_lossy().to_string(),
+            child.to_string_lossy().to_string(),
+        ]
+    );
+}
+
+#[test]
+fn candidate_limit_counts_each_child_parent_candidate_once() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let base = Utc::now() - Duration::hours(1);
+    let parent = write_codex_fork_session_fixture(
+        &sessions,
+        "parent.jsonl",
+        "parent-id",
+        None,
+        base,
+        base,
+        &[1_000],
+    );
+    let child = write_copied_prefix_subagent_fixture(
+        &sessions,
+        "child.jsonl",
+        "parent-id",
+        base + Duration::seconds(10),
+        true,
+    );
+    let now = std::time::SystemTime::now();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&child)
+        .unwrap()
+        .set_modified(now - std::time::Duration::from_secs(20))
+        .unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&parent)
+        .unwrap()
+        .set_modified(now - std::time::Duration::from_secs(10))
+        .unwrap();
+    let mut options = CostScanOptions::app_driven();
+    options.prefer_newest_codex_sessions_first = false;
+    options.codex_candidate_limit = 1;
+    let scanner = CostScanner::new(7)
+        .with_options(options)
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+
+    let (_, stats, cache) = scanner.scan_codex_detailed_with_cache(None);
+
+    assert_eq!(stats.files_seen, 1);
+    assert_eq!(stats.codex_read_receipt.metadata_reads, 1);
+    assert_eq!(stats.codex_read_receipt.history_reads, 1);
+    assert_eq!(
+        stats.codex_metadata_read_paths,
+        vec![child.to_string_lossy().to_string()]
+    );
+    assert_eq!(
+        cache.codex_pending_paths,
+        vec![parent.to_string_lossy().to_string()]
+    );
+}
+
+#[test]
+fn cold_scan_orders_multi_level_parent_chain_before_children() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let base = Utc::now() - Duration::hours(1);
+    let ancestor = write_codex_fork_session_fixture(
+        &sessions,
+        "ancestor.jsonl",
+        "ancestor-id",
+        None,
+        base,
+        base,
+        &[1_000],
+    );
+    let parent = write_codex_fork_session_fixture(
+        &sessions,
+        "parent.jsonl",
+        "parent-id",
+        Some("ancestor-id"),
+        base + Duration::seconds(10),
+        base + Duration::seconds(10),
+        &[1_500],
+    );
+    let child = write_codex_fork_session_fixture(
+        &sessions,
+        "child.jsonl",
+        "child-id",
+        Some("parent-id"),
+        base + Duration::seconds(20),
+        base + Duration::seconds(20),
+        &[2_000],
+    );
+    let now = std::time::SystemTime::now();
+    for (path, age) in [(&child, 30), (&parent, 20), (&ancestor, 10)] {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(now - std::time::Duration::from_secs(age))
+            .unwrap();
+    }
+    let mut options = CostScanOptions::app_driven();
+    options.prefer_newest_codex_sessions_first = false;
+    let scanner = CostScanner::new(7)
+        .with_options(options)
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+
+    let (_, stats, cache) = scanner.scan_codex_detailed_with_cache(None);
+
+    assert_eq!(stats.files_seen, 3);
+    assert_eq!(stats.codex_read_receipt.metadata_reads, 3);
+    assert_eq!(stats.codex_read_receipt.history_reads, 3);
+    assert_eq!(
+        stats.codex_history_read_paths,
+        vec![
+            ancestor.to_string_lossy().to_string(),
+            parent.to_string_lossy().to_string(),
+            child.to_string_lossy().to_string(),
+        ]
+    );
+    let parent_state = cache.files[&parent.to_string_lossy().to_string()]
+        .codex_fork_accounting_state
+        .as_ref()
+        .unwrap();
+    let child_state = cache.files[&child.to_string_lossy().to_string()]
+        .codex_fork_accounting_state
+        .as_ref()
+        .unwrap();
+    assert_eq!(parent_state.inherited_totals.as_ref().unwrap().input, 1_000);
+    assert_eq!(child_state.inherited_totals.as_ref().unwrap().input, 1_500);
 }
 
 fn assert_cached_inference_is_replaced_when_parent_appears(

@@ -78,6 +78,61 @@ pub(super) fn defer_codex_locally_inferred_candidates(
     candidates.extend(other);
 }
 
+/// Order one bounded work set so every uniquely identified parent is parsed
+/// before its children. The sort is stable for unrelated candidates and falls
+/// back to discovery order for duplicate identities or dependency cycles.
+pub(super) fn order_codex_candidates_by_lineage(candidates: &mut Vec<CodexPreparedCandidate>) {
+    if candidates.len() < 2 {
+        return;
+    }
+
+    let mut session_owners = HashMap::<String, Option<usize>>::new();
+    for (index, candidate) in candidates.iter().enumerate() {
+        let Some(session_id) = candidate.session_metadata.session_id.as_ref() else {
+            continue;
+        };
+        session_owners
+            .entry(session_id.clone())
+            .and_modify(|owner| *owner = None)
+            .or_insert(Some(index));
+    }
+    let parent_indices = candidates
+        .iter()
+        .map(|candidate| {
+            candidate
+                .session_metadata
+                .forked_from_id
+                .as_ref()
+                .and_then(|parent_id| session_owners.get(parent_id))
+                .copied()
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    let mut remaining = candidates.drain(..).map(Some).collect::<Vec<_>>();
+    let mut ordered = Vec::with_capacity(remaining.len());
+
+    loop {
+        let mut progressed = false;
+        for index in 0..remaining.len() {
+            if remaining[index].is_none() {
+                continue;
+            }
+            let parent_is_ready =
+                parent_indices[index].is_none_or(|parent_index| remaining[parent_index].is_none());
+            if parent_is_ready {
+                ordered.push(remaining[index].take().expect("candidate checked above"));
+                progressed = true;
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+
+    ordered.extend(remaining.into_iter().flatten());
+    candidates.extend(ordered);
+}
+
 /// Give paths already in the durable queue their saved turn before newly
 /// discovered dirty paths. The scanner appends unfinished paths after this
 /// pass, making the queue a round-robin cursor instead of a newest-first loop.
