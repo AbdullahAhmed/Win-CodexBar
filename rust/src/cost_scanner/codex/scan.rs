@@ -197,6 +197,7 @@ pub(super) fn scan_codex_detailed_with_cache(
     let mut bytes_read_this_refresh = 0_i64;
     let mut pending_next = cache.codex_pending_paths.clone();
     let pending_paths_before_pass = cache.codex_pending_paths.clone();
+    let mut invalidated_unsafe_lineage = false;
     prioritize_codex_pending_candidates(&mut candidates, &pending_paths_before_pass);
     defer_codex_locally_inferred_candidates(&mut candidates, &cache);
     if discovery_complete && !is_cancelled(cancel) {
@@ -236,7 +237,17 @@ pub(super) fn scan_codex_detailed_with_cache(
         unprocessed.extend(work_queue.drain(..).map(|candidate| candidate.path));
         unprocessed.extend(cancelled_during_preparation);
     } else {
-        order_codex_candidates_by_lineage(&mut work_queue);
+        let unsafe_cached_paths = order_codex_candidates_by_lineage(&cache, &mut work_queue);
+        invalidated_unsafe_lineage = !unsafe_cached_paths.is_empty();
+        if invalidated_unsafe_lineage {
+            cache.previous_report = None;
+        }
+        invalidate_codex_unsafe_lineage(&mut cache, &unsafe_cached_paths);
+        for path in unsafe_cached_paths {
+            if !pending_next.contains(&path) {
+                pending_next.push(path);
+            }
+        }
     }
 
     let mut incomplete_processed = Vec::new();
@@ -369,7 +380,7 @@ pub(super) fn scan_codex_detailed_with_cache(
             // the range so unchanged files stay on the cache fast path.
             cache.scan_since_key = Some(scan_range.scan_since_key.clone());
             cache.scan_until_key = Some(scan_range.scan_until_key.clone());
-        } else if cache.previous_report.is_none() {
+        } else if cache.previous_report.is_none() && !invalidated_unsafe_lineage {
             cache.previous_report = established_report_before_scan;
         }
         if !is_cancelled(cancel) {

@@ -78,18 +78,77 @@ pub(super) fn defer_codex_locally_inferred_candidates(
     candidates.extend(other);
 }
 
-/// Order one bounded work set so every uniquely identified parent is parsed
-/// before its children. Duplicate identities, cycles, and every dependent
-/// candidate are marked unsafe so parsing cannot accept or infer a baseline
-/// from ambiguous lineage.
-pub(super) fn order_codex_candidates_by_lineage(candidates: &mut Vec<CodexPreparedCandidate>) {
+struct CodexLineageNode {
+    path: String,
+    session_id: Option<String>,
+    parent_id: Option<String>,
+    candidate_index: Option<usize>,
+    may_infer_missing_parent: bool,
+    may_author_parent: bool,
+    initially_unsafe: bool,
+}
+
+/// Order one bounded work set against both its admitted metadata and the
+/// persisted cache graph. The returned cache paths became structurally unsafe
+/// and must be invalidated even when the candidate limit deferred them.
+pub(super) fn order_codex_candidates_by_lineage(
+    cache: &CostUsageCache,
+    candidates: &mut Vec<CodexPreparedCandidate>,
+) -> Vec<String> {
     if candidates.is_empty() {
-        return;
+        return Vec::new();
+    }
+
+    let candidate_paths = candidates
+        .iter()
+        .map(|candidate| candidate.path.to_string_lossy().to_string())
+        .collect::<HashSet<_>>();
+    let mut cached_paths = cache
+        .files
+        .keys()
+        .filter(|path| !candidate_paths.contains(*path))
+        .cloned()
+        .collect::<Vec<_>>();
+    cached_paths.sort();
+
+    let mut nodes = Vec::with_capacity(cached_paths.len() + candidates.len());
+    for path in cached_paths {
+        let usage = &cache.files[&path];
+        let uses_parent = super::codex_usage_uses_parent(usage);
+        let locally_inferred = super::codex_fork_uses_local_inference(usage);
+        nodes.push(CodexLineageNode {
+            path,
+            session_id: usage.codex_session_id.clone(),
+            parent_id: uses_parent
+                .then(|| usage.codex_forked_from_id.clone())
+                .flatten(),
+            candidate_index: None,
+            may_infer_missing_parent: locally_inferred,
+            may_author_parent: !locally_inferred && !usage.codex_unresolved_fork_parent,
+            initially_unsafe: usage.codex_unresolved_fork_parent,
+        });
+    }
+    let mut candidate_node_indices = Vec::with_capacity(candidates.len());
+    for (candidate_index, candidate) in candidates.iter().enumerate() {
+        let uses_parent = candidate.session_metadata.lineage.uses_parent_baseline()
+            || candidate.session_metadata.forked_from_id.is_some();
+        nodes.push(CodexLineageNode {
+            path: candidate.path.to_string_lossy().to_string(),
+            session_id: candidate.session_metadata.session_id.clone(),
+            parent_id: uses_parent
+                .then(|| candidate.session_metadata.forked_from_id.clone())
+                .flatten(),
+            candidate_index: Some(candidate_index),
+            may_infer_missing_parent: candidate.session_metadata.is_subagent,
+            may_author_parent: true,
+            initially_unsafe: false,
+        });
+        candidate_node_indices.push(nodes.len() - 1);
     }
 
     let mut session_owners = HashMap::<String, Vec<usize>>::new();
-    for (index, candidate) in candidates.iter().enumerate() {
-        let Some(session_id) = candidate.session_metadata.session_id.as_ref() else {
+    for (index, node) in nodes.iter().enumerate() {
+        let Some(session_id) = node.session_id.as_ref() else {
             continue;
         };
         session_owners
@@ -97,42 +156,47 @@ pub(super) fn order_codex_candidates_by_lineage(candidates: &mut Vec<CodexPrepar
             .or_default()
             .push(index);
     }
-    let mut unsafe_lineage = vec![false; candidates.len()];
+    let mut unsafe_lineage = nodes
+        .iter()
+        .map(|node| node.initially_unsafe)
+        .collect::<Vec<_>>();
     for owners in session_owners.values().filter(|owners| owners.len() > 1) {
         for &index in owners {
             unsafe_lineage[index] = true;
         }
     }
-    let mut parent_indices = vec![None; candidates.len()];
-    for (index, candidate) in candidates.iter().enumerate() {
-        let Some(parent_id) = candidate.session_metadata.forked_from_id.as_ref() else {
+    let mut parent_indices = vec![None; nodes.len()];
+    for (index, node) in nodes.iter().enumerate() {
+        let Some(parent_id) = node.parent_id.as_ref() else {
             continue;
         };
         match session_owners.get(parent_id).map(Vec::as_slice) {
             Some([parent_index]) => parent_indices[index] = Some(*parent_index),
-            Some([]) | None => {}
+            Some([]) | None if node.may_infer_missing_parent => {}
+            Some([]) | None => unsafe_lineage[index] = true,
             Some(_) => unsafe_lineage[index] = true,
         }
     }
 
-    let mut remaining = candidates.drain(..).map(Some).collect::<Vec<_>>();
-    let mut ordered = Vec::with_capacity(remaining.len());
-    let mut completed = vec![false; remaining.len()];
+    let mut completed = vec![false; nodes.len()];
+    let mut ordered_indices = Vec::with_capacity(candidates.len());
 
     loop {
         let mut progressed = false;
-        for index in 0..remaining.len() {
-            if remaining[index].is_none() || unsafe_lineage[index] {
+        for index in 0..nodes.len() {
+            if completed[index] || unsafe_lineage[index] {
                 continue;
             }
             let parent_is_ready = parent_indices[index].is_none_or(|parent_index| {
-                completed[parent_index] && !unsafe_lineage[parent_index]
+                completed[parent_index]
+                    && !unsafe_lineage[parent_index]
+                    && nodes[parent_index].may_author_parent
             });
             if parent_is_ready {
-                let mut candidate = remaining[index].take().expect("candidate checked above");
-                candidate.lineage_disposition = CodexLineageDisposition::Ready;
-                ordered.push(candidate);
                 completed[index] = true;
+                if let Some(candidate_index) = nodes[index].candidate_index {
+                    ordered_indices.push(candidate_index);
+                }
                 progressed = true;
             }
         }
@@ -141,11 +205,58 @@ pub(super) fn order_codex_candidates_by_lineage(candidates: &mut Vec<CodexPrepar
         }
     }
 
-    for mut candidate in remaining.into_iter().flatten() {
-        candidate.lineage_disposition = CodexLineageDisposition::AmbiguousOrCyclic;
-        ordered.push(candidate);
+    for index in 0..nodes.len() {
+        if !completed[index] {
+            unsafe_lineage[index] = true;
+            if let Some(candidate_index) = nodes[index].candidate_index {
+                ordered_indices.push(candidate_index);
+            }
+        }
     }
-    candidates.extend(ordered);
+
+    let mut remaining = candidates.drain(..).map(Some).collect::<Vec<_>>();
+    for candidate_index in ordered_indices {
+        let node_index = candidate_node_indices[candidate_index];
+        let mut candidate = remaining[candidate_index]
+            .take()
+            .expect("candidate is ordered once");
+        candidate.lineage_disposition = if unsafe_lineage[node_index] {
+            CodexLineageDisposition::AmbiguousOrCyclic
+        } else {
+            CodexLineageDisposition::Ready
+        };
+        candidates.push(candidate);
+    }
+
+    nodes
+        .iter()
+        .zip(unsafe_lineage)
+        .filter(|(node, unsafe_lineage)| {
+            *unsafe_lineage
+                && cache
+                    .files
+                    .get(&node.path)
+                    .is_some_and(|usage| !usage.codex_unresolved_fork_parent)
+        })
+        .map(|(node, _)| node.path.clone())
+        .collect()
+}
+
+pub(super) fn invalidate_codex_unsafe_lineage(cache: &mut CostUsageCache, paths: &[String]) {
+    for path in paths {
+        let Some(usage) = cache.files.get_mut(path) else {
+            continue;
+        };
+        usage.days.clear();
+        usage.parsed_bytes = Some(0);
+        usage.codex_scan_target_size = None;
+        usage.last_model = None;
+        usage.last_totals = None;
+        usage.codex_token_timestamps_monotonic = None;
+        usage.codex_last_token_timestamp = None;
+        usage.codex_fork_accounting_state = None;
+        usage.codex_unresolved_fork_parent = true;
+    }
 }
 
 /// Give paths already in the durable queue their saved turn before newly

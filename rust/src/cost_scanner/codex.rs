@@ -95,31 +95,42 @@ fn summary_from_cached_report(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CodexParentResolution {
+    Absent,
+    Safe(crate::core::CodexTotals),
+    Unsafe,
+}
+
+fn codex_usage_uses_parent(usage: &CostUsageFileUsage) -> bool {
+    usage.codex_lineage.uses_parent_baseline()
+        || (matches!(usage.codex_lineage, CodexSessionLineage::Root)
+            && usage.codex_forked_from_id.is_some())
+}
+
 fn codex_fork_parent_is_safe(cache: &CostUsageCache, usage: &CostUsageFileUsage) -> bool {
     let locally_resolved = usage
         .codex_fork_accounting_state
         .as_ref()
         .is_some_and(|state| state.locally_resolved);
-    let uses_parent_baseline = usage.codex_lineage.uses_parent_baseline()
-        || (matches!(usage.codex_lineage, CodexSessionLineage::Root)
-            && usage.codex_forked_from_id.is_some());
-    if !uses_parent_baseline {
+    if !codex_usage_uses_parent(usage) {
         return true;
     }
-    let parent_is_available = usage
-        .codex_forked_from_id
-        .as_deref()
-        .is_some_and(|parent_id| {
-            codex_parent_baseline(cache, parent_id, usage.codex_fork_timestamp.as_deref()).is_some()
-        });
+    let parent_resolution =
+        usage
+            .codex_forked_from_id
+            .as_deref()
+            .map_or(CodexParentResolution::Unsafe, |parent_id| {
+                codex_parent_resolution(cache, parent_id, usage.codex_fork_timestamp.as_deref())
+            });
 
-    // Local inference is safe only while no validated parent is available.
-    // Once the parent enters the cache, force the child through baseline
-    // replacement instead of accepting its unchanged-file fast path.
+    // Local inference is safe only while the parent is genuinely absent.
+    // An owner that is ambiguous, stale, locally inferred, cyclic, or
+    // transitively unsafe must fail closed instead of looking absent.
     if locally_resolved {
-        !parent_is_available
+        matches!(parent_resolution, CodexParentResolution::Absent)
     } else {
-        parent_is_available
+        matches!(parent_resolution, CodexParentResolution::Safe(_))
     }
 }
 
@@ -130,51 +141,101 @@ fn codex_fork_uses_local_inference(usage: &CostUsageFileUsage) -> bool {
         .is_some_and(|state| state.locally_resolved)
 }
 
-/// Return a parent cumulative baseline only when exactly one cached session
-/// identity is current, complete, timestamp-ordered, and safe to trust.
-fn codex_parent_baseline(
+/// Resolve one parent identity through the persisted cache graph. Absence is
+/// deliberately distinct from ambiguity or transitive unsafety so copied
+/// prefixes may infer only when no owner exists at all.
+fn codex_parent_resolution(
     cache: &CostUsageCache,
     parent_session_id: &str,
     child_fork_timestamp: Option<&str>,
+) -> CodexParentResolution {
+    codex_parent_resolution_inner(
+        cache,
+        parent_session_id,
+        child_fork_timestamp,
+        &mut HashSet::new(),
+    )
+}
+
+fn codex_parent_resolution_inner(
+    cache: &CostUsageCache,
+    parent_session_id: &str,
+    child_fork_timestamp: Option<&str>,
+    visiting: &mut HashSet<String>,
+) -> CodexParentResolution {
+    let mut owners = cache
+        .files
+        .iter()
+        .filter(|(_, usage)| usage.codex_session_id.as_deref() == Some(parent_session_id));
+    let Some((path_key, usage)) = owners.next() else {
+        return CodexParentResolution::Absent;
+    };
+    if owners.next().is_some() || !visiting.insert(path_key.clone()) {
+        return CodexParentResolution::Unsafe;
+    }
+
+    let resolution =
+        codex_parent_owner_baseline(cache, path_key, usage, child_fork_timestamp, visiting)
+            .map_or(CodexParentResolution::Unsafe, CodexParentResolution::Safe);
+    visiting.remove(path_key);
+    resolution
+}
+
+fn codex_parent_owner_baseline(
+    cache: &CostUsageCache,
+    path_key: &str,
+    usage: &CostUsageFileUsage,
+    child_fork_timestamp: Option<&str>,
+    visiting: &mut HashSet<String>,
 ) -> Option<crate::core::CodexTotals> {
-    let mut baseline = None;
-    for (path_key, usage) in &cache.files {
-        if usage.codex_session_id.as_deref() != Some(parent_session_id) {
-            continue;
-        }
-        if usage.codex_unresolved_fork_parent
-            || usage.codex_token_timestamps_monotonic != Some(true)
-        {
-            return None;
-        }
-        let metadata = fs::metadata(path_key).ok()?;
-        if let (Some(expected), Some(actual)) = (
-            usage.codex_file_identity.as_ref(),
-            JsonlScanner::codex_file_identity(Path::new(path_key), &metadata),
-        ) && expected != &actual
-        {
-            return None;
-        }
-        #[allow(clippy::cast_possible_wrap, reason = "session file sizes fit i64")]
-        let size = metadata.len().min(i64::MAX as u64) as i64;
-        if usage.mtime_unix_ms != system_time_to_unix_ms(metadata.modified().ok())
-            || usage.size != size
-            || usage.parsed_bytes.unwrap_or(0) < size
-        {
-            return None;
-        }
-        let last_totals = usage.last_totals.clone()?;
-        let last_token_timestamp = usage.codex_last_token_timestamp.as_deref()?;
-        let child_fork_timestamp = child_fork_timestamp?;
-        if !JsonlScanner::codex_timestamp_at_or_before(last_token_timestamp, child_fork_timestamp) {
-            return None;
-        }
-        if baseline.replace(last_totals).is_some() {
-            // Duplicate identities make the dependency ambiguous.
-            return None;
+    if usage.codex_unresolved_fork_parent
+        || usage.codex_token_timestamps_monotonic != Some(true)
+        || codex_fork_uses_local_inference(usage)
+    {
+        return None;
+    }
+
+    if codex_usage_uses_parent(usage) {
+        let parent_id = usage.codex_forked_from_id.as_deref()?;
+        let inherited = usage
+            .codex_fork_accounting_state
+            .as_ref()?
+            .inherited_totals
+            .as_ref()?;
+        match codex_parent_resolution_inner(
+            cache,
+            parent_id,
+            usage.codex_fork_timestamp.as_deref(),
+            visiting,
+        ) {
+            CodexParentResolution::Safe(baseline) if &baseline == inherited => {}
+            CodexParentResolution::Absent
+            | CodexParentResolution::Safe(_)
+            | CodexParentResolution::Unsafe => return None,
         }
     }
-    baseline
+
+    let metadata = fs::metadata(path_key).ok()?;
+    if let (Some(expected), Some(actual)) = (
+        usage.codex_file_identity.as_ref(),
+        JsonlScanner::codex_file_identity(Path::new(path_key), &metadata),
+    ) && expected != &actual
+    {
+        return None;
+    }
+    #[allow(clippy::cast_possible_wrap, reason = "session file sizes fit i64")]
+    let size = metadata.len().min(i64::MAX as u64) as i64;
+    if usage.mtime_unix_ms != system_time_to_unix_ms(metadata.modified().ok())
+        || usage.size != size
+        || usage.parsed_bytes.unwrap_or(0) < size
+    {
+        return None;
+    }
+    let last_totals = usage.last_totals.clone()?;
+    let last_token_timestamp = usage.codex_last_token_timestamp.as_deref()?;
+    let child_fork_timestamp = child_fork_timestamp?;
+    JsonlScanner::codex_timestamp_at_or_before(last_token_timestamp, child_fork_timestamp)
+        .then_some(last_totals)
 }
 
 fn is_codex_path_in_scan_window(
@@ -565,11 +626,11 @@ impl CostScanner {
         let matching_cached_fork_state = cached_fork_accounting_state
             .as_ref()
             .filter(|_| cached_fork_state_matches);
-        let parent_fork_baseline = is_fork
+        let parent_resolution = is_fork
             .then_some(codex_forked_from_id.as_deref())
             .flatten()
-            .and_then(|parent_id| {
-                codex_parent_baseline(cache, parent_id, codex_fork_timestamp.as_deref())
+            .map_or(CodexParentResolution::Unsafe, |parent_id| {
+                codex_parent_resolution(cache, parent_id, codex_fork_timestamp.as_deref())
             });
         let paginated_continuation = is_fork
             && codex_forked_from_id.is_some()
@@ -582,15 +643,15 @@ impl CostScanner {
             CodexAccountingMode::Unresolved
         } else if !is_fork {
             CodexAccountingMode::Standard
-        } else if let Some(baseline) = parent_fork_baseline {
+        } else if let CodexParentResolution::Safe(baseline) = &parent_resolution {
             let reparse_cached_file = matching_cached_fork_state.is_some_and(|state| {
-                state.locally_resolved || state.inherited_totals.as_ref() != Some(&baseline)
+                state.locally_resolved || state.inherited_totals.as_ref() != Some(baseline)
             });
             let cached_parent_state = matching_cached_fork_state.filter(|state| {
-                !state.locally_resolved && state.inherited_totals.as_ref() == Some(&baseline)
+                !state.locally_resolved && state.inherited_totals.as_ref() == Some(baseline)
             });
             CodexAccountingMode::Baseline {
-                baseline,
+                baseline: baseline.clone(),
                 paginated_continuation,
                 remaining_inherited_totals: cached_parent_state
                     .and_then(|state| state.remaining_inherited_totals.clone()),
@@ -598,7 +659,8 @@ impl CostScanner {
                     replaces_cached_state: reparse_cached_file,
                 },
             }
-        } else if let Some(state) = matching_cached_fork_state
+        } else if matches!(&parent_resolution, CodexParentResolution::Absent)
+            && let Some(state) = matching_cached_fork_state
             && let Some(baseline) = state.inherited_totals.clone()
         {
             CodexAccountingMode::Baseline {
@@ -611,7 +673,9 @@ impl CostScanner {
                     CodexBaselineProvenance::CachedValidatedParent
                 },
             }
-        } else if session_metadata.is_subagent {
+        } else if matches!(&parent_resolution, CodexParentResolution::Absent)
+            && session_metadata.is_subagent
+        {
             CodexAccountingMode::InferSubagent {
                 start_ordinal: session_metadata.subagent_history_start_ordinal,
             }
