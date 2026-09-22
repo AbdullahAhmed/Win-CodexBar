@@ -19,6 +19,7 @@ const tauriMocks = vi.hoisted(() => ({
   getLocaleStrings: vi.fn(),
   setUiLanguage: vi.fn(),
   getDeepSeekPricingStatus: vi.fn().mockResolvedValue(null),
+  claudeReconciliationState: vi.fn().mockResolvedValue(null),
 }));
 
 const eventMocks = vi.hoisted(() => ({
@@ -232,6 +233,7 @@ function renderPopOut(
 describe("PopOutPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    tauriMocks.claudeReconciliationState.mockResolvedValue(null);
     tauriMocks.refreshProviders.mockResolvedValue(undefined);
     tauriMocks.refreshProvidersIfStale.mockResolvedValue(undefined);
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());

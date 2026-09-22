@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { ClaudeAccount } from "../../../../../types/bridge";
+import type { ClaudeReconciliationSnapshot } from "../../../../../types/bridge";
 import type { Language } from "../../../../../types/bridge";
 import type { LocaleKey } from "../../../../../i18n/keys";
 import {
@@ -12,6 +13,10 @@ import {
   claudeAccountSwitch,
 } from "../../../../../lib/tauri";
 import { ClaudeSwapAccountsSection } from "./ClaudeSwapAccountsSection";
+import {
+  localClaudeReconciliationOutcome,
+  useClaudeReconciliation,
+} from "../../../../../hooks/useClaudeReconciliation";
 
 export function ClaudeAccountsSection({
   t,
@@ -25,7 +30,8 @@ export function ClaudeAccountsSection({
   const [loggingIn, setLoggingIn] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [reconciling, setReconciling] = useState(false);
+  const [operation, setOperation] = useState<{ generation: number; success?: LocaleKey } | null>(null);
+  const { snapshot, accept, reconciling } = useClaudeReconciliation();
   const mounted = useRef(false);
   const load = useCallback(async () => {
     const next = await claudeAccountsList();
@@ -40,27 +46,38 @@ export function ClaudeAccountsSection({
     };
     reload();
     const unlisten = listen("claude-accounts-updated", reload);
-    const unlistenReconciling = listen("claude-accounts-reconciling", () => {
-      if (mounted.current) setReconciling(true);
-    });
-    const unlistenReconciled = listen("claude-accounts-reconciled", () => {
-      if (mounted.current) setReconciling(false);
-    });
     return () => {
       mounted.current = false;
       void unlisten.then(fn => fn());
-      void unlistenReconciling.then(fn => fn()).catch(() => {});
-      void unlistenReconciled.then(fn => fn()).catch(() => {});
     };
   }, [load]);
-  const run = async (operation: () => Promise<void>, success?: LocaleKey) => {
+  useEffect(() => {
+    const outcome = localClaudeReconciliationOutcome(snapshot, operation?.generation ?? null);
+    if (!outcome) return;
+    if (outcome.status === "failed") {
+      setMessage(null);
+      setError(outcome.detail);
+    } else if (operation) {
+      if (operation.success) setMessage(t(operation.success));
+      setError(null);
+    }
+  }, [operation, snapshot, t]);
+  const run = async (
+    action: () => Promise<void | ClaudeReconciliationSnapshot>,
+    success?: LocaleKey,
+  ) => {
     setBusy(true);
     setError(null);
     setMessage(null);
     try {
-      await operation();
+      const result = await action();
       await load();
-      if (mounted.current && success) setMessage(t(success));
+      if (result) {
+        setOperation({ generation: result.generation, success });
+        accept(result);
+      } else if (mounted.current && success) {
+        setMessage(t(success));
+      }
     } catch (e) {
       if (mounted.current) setError(String(e));
     } finally {
