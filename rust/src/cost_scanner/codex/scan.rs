@@ -205,6 +205,7 @@ pub(super) fn scan_codex_detailed_with_cache(
     }
 
     let mut incomplete_processed = Vec::new();
+    let mut locally_inferred_complete_paths = Vec::new();
     for (index, candidate) in candidates.iter().enumerate() {
         if is_cancelled(cancel)
             || index >= candidate_limit
@@ -272,8 +273,75 @@ pub(super) fn scan_codex_detailed_with_cache(
         if !outcome.is_complete || has_unconsumed_tail {
             incomplete_processed.push(key);
             stats.files_deferred = stats.files_deferred.saturating_add(1);
-        } else if let Some(plan) = codex_source_row_plan(&cache, &candidate.path, scan_range) {
-            apply_codex_source_row_plan(&mut cache, &key, plan);
+        } else {
+            if cache
+                .files
+                .get(&key)
+                .is_some_and(codex_fork_uses_local_inference)
+            {
+                locally_inferred_complete_paths.push(candidate.path.clone());
+            }
+            if let Some(plan) = codex_source_row_plan(&cache, &candidate.path, scan_range) {
+                apply_codex_source_row_plan(&mut cache, &key, plan);
+            }
+        }
+    }
+
+    // A child can be visited before its parent during a cold scan. Once the
+    // remaining candidates have populated the cache, replace that temporary
+    // local inference in the same refresh instead of publishing it for one
+    // cycle. Reconciliation still consumes the normal byte budget; work that
+    // no longer fits is queued for the next explicit refresh.
+    for path in locally_inferred_complete_paths {
+        let key = path.to_string_lossy().to_string();
+        let parent_is_now_available = cache.files.get(&key).is_some_and(|usage| {
+            codex_fork_uses_local_inference(usage) && !codex_fork_parent_is_safe(&cache, usage)
+        });
+        if !parent_is_now_available {
+            continue;
+        }
+        let allowance =
+            per_file_limit.min(refresh_byte_limit.saturating_sub(bytes_read_this_refresh));
+        if is_cancelled(cancel) || allowance <= 0 {
+            if !pending_next.contains(&key) {
+                pending_next.push(key);
+            }
+            stats.files_deferred = stats.files_deferred.saturating_add(1);
+            continue;
+        }
+
+        let outcome = scanner.parse_codex_file_bounded(
+            &path,
+            scan_range,
+            &mut summary,
+            &mut cache,
+            cancel,
+            &mut stats,
+            Some(allowance),
+        );
+        bytes_read_this_refresh = bytes_read_this_refresh.saturating_add(outcome.bytes_read.max(0));
+        stats.codex_bytes_read = stats
+            .codex_bytes_read
+            .saturating_add(u64::try_from(outcome.bytes_read.max(0)).unwrap_or(u64::MAX));
+        pending_next.retain(|pending| pending != &key);
+        let observed_size = fs::metadata(&path)
+            .ok()
+            .map(|metadata| {
+                #[allow(
+                    clippy::cast_possible_wrap,
+                    reason = "file sizes are clamped to i64::MAX"
+                )]
+                let size = metadata.len().min(i64::MAX as u64) as i64;
+                size
+            })
+            .unwrap_or(0);
+        let has_unconsumed_tail = cache
+            .files
+            .get(&key)
+            .is_some_and(|usage| codex_logical_target_has_unconsumed_tail(observed_size, usage));
+        if !outcome.is_complete || has_unconsumed_tail {
+            incomplete_processed.push(key);
+            stats.files_deferred = stats.files_deferred.saturating_add(1);
         }
     }
     pending_next.extend(incomplete_processed);
