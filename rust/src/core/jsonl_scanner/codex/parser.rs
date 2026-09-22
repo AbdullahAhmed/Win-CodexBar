@@ -92,6 +92,11 @@ impl ForkBaselineInference {
         }
     }
 
+    fn mark_missing_explicit_ordinal(&mut self) {
+        self.missing_explicit_ordinal = true;
+        self.locally_confirmed = false;
+    }
+
     fn observe_non_token(&mut self, obj: &Value) {
         if obj.get("type").and_then(Value::as_str) == Some("turn_context") && self.inherited_opening
         {
@@ -117,8 +122,7 @@ impl ForkBaselineInference {
         let ordinal = obj.get("ordinal").and_then(Value::as_i64);
 
         if self.explicit_start_ordinal.is_some() && ordinal.is_none() {
-            self.missing_explicit_ordinal = true;
-            self.locally_confirmed = false;
+            self.mark_missing_explicit_ordinal();
             if !self.boundary_open {
                 self.baseline = Some(total);
             }
@@ -338,6 +342,27 @@ impl CodexParserState {
         }
 
         let event_candidate = is_candidate_codex_line(line);
+        if event_candidate
+            && self
+                .fork_baseline_inference
+                .as_ref()
+                .is_some_and(|inference| {
+                    inference.resolved && inference.explicit_start_ordinal.is_some()
+                })
+        {
+            let Ok(obj) = serde_json::from_str::<Value>(line) else {
+                return;
+            };
+            if token_count_payload(&obj).is_some()
+                && obj.get("ordinal").and_then(Value::as_i64).is_none()
+            {
+                self.fork_baseline_inference
+                    .as_mut()
+                    .expect("resolved inference exists")
+                    .mark_missing_explicit_ordinal();
+                return;
+            }
+        }
         let bare_candidate = !event_candidate && line.contains("\"usage\"");
         if !event_candidate && !bare_candidate {
             return;

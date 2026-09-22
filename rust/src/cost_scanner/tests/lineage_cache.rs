@@ -247,6 +247,38 @@ fn missing_ordinal_cannot_complete_zero_usage_subagent_cache() {
 }
 
 #[test]
+fn missing_ordinal_after_local_resolution_keeps_subagent_cache_unresolved() {
+    use std::io::Write as _;
+
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let base = Utc::now() - Duration::hours(1);
+    let child = write_subagent(
+        &sessions,
+        "child.jsonl",
+        "child-id",
+        "missing-parent-id",
+        base,
+    );
+    let mut missing_ordinal = lineage_token_row(base + Duration::seconds(2), 21, 1_060, 10);
+    missing_ordinal.as_object_mut().unwrap().remove("ordinal");
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&child)
+        .unwrap()
+        .write_all(format!("{missing_ordinal}\n").as_bytes())
+        .unwrap();
+    let scanner = bounded_scanner(&sessions, &cache_root);
+
+    let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+
+    assert_eq!(summary.input_tokens, 0);
+    assert_eq!(summary.sessions_count, 0);
+    assert_unresolved(&cache, &child);
+}
+
+#[test]
 fn legacy_cache_without_file_identity_is_reparsed() {
     let root = tempfile::tempdir().unwrap();
     let sessions = root.path().join("sessions");

@@ -185,6 +185,40 @@ fn inferred_fork_keeps_missing_ordinal_unresolved_after_boundary_opens() {
 }
 
 #[test]
+fn inferred_fork_keeps_missing_ordinal_unresolved_after_local_resolution() {
+    let range = CostUsageDayRange::new(
+        NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+        NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+    );
+    let mut state = CodexParserState::from_mode(CodexParseMode::InferSubagent {
+        start_ordinal: Some(10),
+    });
+    let token_line = |ordinal: Option<i64>, total: i64, last: i64| {
+        let mut value = serde_json::json!({
+            "timestamp": "2026-09-22T10:00:00Z",
+            "type": "event_msg",
+            "payload": {"type": "token_count", "info": {
+                "model": "gpt-5.6-sol",
+                "total_token_usage": {"input_tokens": total, "cached_input_tokens": 0, "output_tokens": 0},
+                "last_token_usage": {"input_tokens": last, "cached_input_tokens": 0, "output_tokens": 0}
+            }}
+        });
+        if let Some(ordinal) = ordinal {
+            value["ordinal"] = serde_json::json!(ordinal);
+        }
+        value.to_string()
+    };
+
+    state.process_line(&token_line(Some(9), 100, 0), &range);
+    state.process_line(&token_line(Some(10), 100, 0), &range);
+    state.process_line(&token_line(Some(11), 110, 10), &range);
+    assert!(state.fork_baseline_locally_resolved());
+    state.process_line(&token_line(None, 120, 10), &range);
+
+    assert!(!state.fork_baseline_locally_resolved());
+}
+
+#[test]
 fn codex_token_pipeline_preserves_counts_above_i32_max() {
     let parsed = read_token_totals(&serde_json::json!({
         "input_tokens": 3_000_000_000_i64,
