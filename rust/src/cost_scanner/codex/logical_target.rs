@@ -1,5 +1,221 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum CodexLineageGate {
+    #[default]
+    Eligible,
+    Unsafe,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum CodexLineageDecision {
+    Root,
+    ParentAbsent,
+    ParentReady(crate::core::CodexTotals),
+    Unsafe,
+}
+
+pub(super) struct CodexLineagePlanner<'a> {
+    cache: &'a CostUsageCache,
+}
+
+impl<'a> CodexLineagePlanner<'a> {
+    pub(super) fn new(cache: &'a CostUsageCache) -> Self {
+        Self { cache }
+    }
+
+    pub(super) fn decision_for_scan(
+        &self,
+        uses_parent: bool,
+        gate: CodexLineageGate,
+        parent_id: Option<&str>,
+        fork_timestamp: Option<&str>,
+    ) -> CodexLineageDecision {
+        if gate == CodexLineageGate::Unsafe {
+            return CodexLineageDecision::Unsafe;
+        }
+        if !uses_parent {
+            return CodexLineageDecision::Root;
+        }
+        parent_id.map_or(CodexLineageDecision::Unsafe, |parent_id| {
+            self.resolve_parent(parent_id, fork_timestamp)
+        })
+    }
+
+    pub(super) fn decision_for_usage(&self, usage: &CostUsageFileUsage) -> CodexLineageDecision {
+        if usage.codex_unresolved_fork_parent {
+            return CodexLineageDecision::Unsafe;
+        }
+        if !super::codex_usage_uses_parent(usage) {
+            return CodexLineageDecision::Root;
+        }
+        usage
+            .codex_forked_from_id
+            .as_deref()
+            .map_or(CodexLineageDecision::Unsafe, |parent_id| {
+                self.resolve_parent(parent_id, usage.codex_fork_timestamp.as_deref())
+            })
+    }
+
+    pub(super) fn cached_usage_is_safe(&self, usage: &CostUsageFileUsage) -> bool {
+        let locally_resolved = super::codex_fork_uses_local_inference(usage);
+        match self.decision_for_usage(usage) {
+            CodexLineageDecision::Root => true,
+            CodexLineageDecision::ParentAbsent => locally_resolved,
+            CodexLineageDecision::ParentReady(_) => !locally_resolved,
+            CodexLineageDecision::Unsafe => false,
+        }
+    }
+
+    /// Resolve one parent identity through the persisted graph. Absence is
+    /// distinct from ambiguity and transitive unsafety so local inference is
+    /// allowed only when no owner exists at all.
+    fn resolve_parent(
+        &self,
+        parent_session_id: &str,
+        child_fork_timestamp: Option<&str>,
+    ) -> CodexLineageDecision {
+        self.resolve_parent_inner(parent_session_id, child_fork_timestamp, &mut HashSet::new())
+    }
+
+    fn resolve_parent_inner(
+        &self,
+        parent_session_id: &str,
+        child_fork_timestamp: Option<&str>,
+        visiting: &mut HashSet<String>,
+    ) -> CodexLineageDecision {
+        let mut owners = self
+            .cache
+            .files
+            .iter()
+            .filter(|(_, usage)| usage.codex_session_id.as_deref() == Some(parent_session_id));
+        let Some((path_key, usage)) = owners.next() else {
+            return CodexLineageDecision::ParentAbsent;
+        };
+        if owners.next().is_some() || !visiting.insert(path_key.clone()) {
+            return CodexLineageDecision::Unsafe;
+        }
+
+        let decision = self
+            .parent_owner_baseline(path_key, usage, child_fork_timestamp, visiting)
+            .map_or(
+                CodexLineageDecision::Unsafe,
+                CodexLineageDecision::ParentReady,
+            );
+        visiting.remove(path_key);
+        decision
+    }
+
+    fn parent_owner_baseline(
+        &self,
+        path_key: &str,
+        usage: &CostUsageFileUsage,
+        child_fork_timestamp: Option<&str>,
+        visiting: &mut HashSet<String>,
+    ) -> Option<crate::core::CodexTotals> {
+        if usage.codex_unresolved_fork_parent
+            || usage.codex_token_timestamps_monotonic != Some(true)
+            || super::codex_fork_uses_local_inference(usage)
+        {
+            return None;
+        }
+
+        if super::codex_usage_uses_parent(usage) {
+            let parent_id = usage.codex_forked_from_id.as_deref()?;
+            let inherited = usage
+                .codex_fork_accounting_state
+                .as_ref()?
+                .inherited_totals
+                .as_ref()?;
+            match self.resolve_parent_inner(
+                parent_id,
+                usage.codex_fork_timestamp.as_deref(),
+                visiting,
+            ) {
+                CodexLineageDecision::ParentReady(baseline) if &baseline == inherited => {}
+                CodexLineageDecision::Root
+                | CodexLineageDecision::ParentAbsent
+                | CodexLineageDecision::ParentReady(_)
+                | CodexLineageDecision::Unsafe => return None,
+            }
+        }
+
+        let metadata = fs::metadata(path_key).ok()?;
+        let expected_identity = usage.codex_file_identity.as_ref()?;
+        let actual_identity = JsonlScanner::codex_file_identity(Path::new(path_key), &metadata)?;
+        if expected_identity != &actual_identity {
+            return None;
+        }
+        #[allow(clippy::cast_possible_wrap, reason = "session file sizes fit i64")]
+        let size = metadata.len().min(i64::MAX as u64) as i64;
+        if usage.mtime_unix_ms != system_time_to_unix_ms(metadata.modified().ok())
+            || usage.size != size
+            || usage.parsed_bytes.unwrap_or(0) < size
+        {
+            return None;
+        }
+        let last_totals = usage.last_totals.clone()?;
+        let last_token_timestamp = usage.codex_last_token_timestamp.as_deref()?;
+        let child_fork_timestamp = child_fork_timestamp?;
+        JsonlScanner::codex_timestamp_at_or_before(last_token_timestamp, child_fork_timestamp)
+            .then_some(last_totals)
+    }
+}
+
+impl CodexLineageDecision {
+    pub(super) fn accounting_mode(
+        &self,
+        matching_cached_state: Option<&CodexForkAccountingState>,
+        metadata: &CodexSessionMetadata,
+        paginated_continuation: bool,
+    ) -> CodexAccountingMode {
+        match self {
+            Self::Root => CodexAccountingMode::Standard,
+            Self::Unsafe => CodexAccountingMode::Unresolved,
+            Self::ParentReady(baseline) => {
+                let replaces_cached_state = matching_cached_state.is_some_and(|state| {
+                    state.locally_resolved || state.inherited_totals.as_ref() != Some(baseline)
+                });
+                let cached_parent_state = matching_cached_state.filter(|state| {
+                    !state.locally_resolved && state.inherited_totals.as_ref() == Some(baseline)
+                });
+                CodexAccountingMode::Baseline {
+                    baseline: baseline.clone(),
+                    paginated_continuation,
+                    remaining_inherited_totals: cached_parent_state
+                        .and_then(|state| state.remaining_inherited_totals.clone()),
+                    provenance: CodexBaselineProvenance::ValidatedParent {
+                        replaces_cached_state,
+                    },
+                }
+            }
+            Self::ParentAbsent => {
+                if let Some(state) = matching_cached_state
+                    && let Some(baseline) = state.inherited_totals.clone()
+                {
+                    return CodexAccountingMode::Baseline {
+                        baseline,
+                        paginated_continuation,
+                        remaining_inherited_totals: state.remaining_inherited_totals.clone(),
+                        provenance: if state.locally_resolved {
+                            CodexBaselineProvenance::CachedLocalInference
+                        } else {
+                            CodexBaselineProvenance::CachedValidatedParent
+                        },
+                    };
+                }
+                if metadata.is_subagent {
+                    CodexAccountingMode::InferSubagent {
+                        start_ordinal: metadata.subagent_history_start_ordinal,
+                    }
+                } else {
+                    CodexAccountingMode::Unresolved
+                }
+            }
+        }
+    }
+}
+
 pub(super) fn cached_codex_file_is_fresh(
     cache: &CostUsageCache,
     entry: &CostUsageFileUsage,
@@ -16,6 +232,12 @@ pub(super) fn cached_codex_file_is_fresh(
         && super::codex_fork_parent_is_safe(cache, entry)
 }
 
+pub(super) fn codex_file_identity_matches(expected: Option<&str>, actual: Option<&str>) -> bool {
+    expected
+        .zip(actual)
+        .is_some_and(|(expected, actual)| expected == actual)
+}
+
 pub(super) fn cached_codex_file_is_complete_for_range(
     cache: &CostUsageCache,
     path_key: &str,
@@ -26,14 +248,10 @@ pub(super) fn cached_codex_file_is_complete_for_range(
             let Ok(metadata) = fs::metadata(path_key) else {
                 return false;
             };
-            let identity_matches = match (
-                usage.codex_file_identity.as_ref(),
-                JsonlScanner::codex_file_identity(Path::new(path_key), &metadata).as_ref(),
-            ) {
-                (Some(expected), Some(actual)) => expected == actual,
-                (Some(_), None) => false,
-                (None, _) => true,
-            };
+            let identity_matches = codex_file_identity_matches(
+                usage.codex_file_identity.as_deref(),
+                JsonlScanner::codex_file_identity(Path::new(path_key), &metadata).as_deref(),
+            );
             #[allow(clippy::cast_possible_wrap, reason = "session file sizes fit i64")]
             let size = metadata.len().min(i64::MAX as u64) as i64;
             identity_matches
@@ -91,7 +309,7 @@ struct CodexLineageNode {
 /// Order one bounded work set against both its admitted metadata and the
 /// persisted cache graph. The returned cache paths became structurally unsafe
 /// and must be invalidated even when the candidate limit deferred them.
-pub(super) fn order_codex_candidates_by_lineage(
+pub(super) fn plan_codex_candidates_by_lineage(
     cache: &CostUsageCache,
     candidates: &mut Vec<CodexPreparedCandidate>,
 ) -> Vec<String> {
@@ -156,13 +374,19 @@ pub(super) fn order_codex_candidates_by_lineage(
             .or_default()
             .push(index);
     }
-    let mut unsafe_lineage = nodes
+    let mut lineage_gates = nodes
         .iter()
-        .map(|node| node.initially_unsafe)
+        .map(|node| {
+            if node.initially_unsafe {
+                CodexLineageGate::Unsafe
+            } else {
+                CodexLineageGate::Eligible
+            }
+        })
         .collect::<Vec<_>>();
     for owners in session_owners.values().filter(|owners| owners.len() > 1) {
         for &index in owners {
-            unsafe_lineage[index] = true;
+            lineage_gates[index] = CodexLineageGate::Unsafe;
         }
     }
     let mut parent_indices = vec![None; nodes.len()];
@@ -173,8 +397,8 @@ pub(super) fn order_codex_candidates_by_lineage(
         match session_owners.get(parent_id).map(Vec::as_slice) {
             Some([parent_index]) => parent_indices[index] = Some(*parent_index),
             Some([]) | None if node.may_infer_missing_parent => {}
-            Some([]) | None => unsafe_lineage[index] = true,
-            Some(_) => unsafe_lineage[index] = true,
+            Some([]) | None => lineage_gates[index] = CodexLineageGate::Unsafe,
+            Some(_) => lineage_gates[index] = CodexLineageGate::Unsafe,
         }
     }
 
@@ -184,12 +408,12 @@ pub(super) fn order_codex_candidates_by_lineage(
     loop {
         let mut progressed = false;
         for index in 0..nodes.len() {
-            if completed[index] || unsafe_lineage[index] {
+            if completed[index] || lineage_gates[index] == CodexLineageGate::Unsafe {
                 continue;
             }
             let parent_is_ready = parent_indices[index].is_none_or(|parent_index| {
                 completed[parent_index]
-                    && !unsafe_lineage[parent_index]
+                    && lineage_gates[parent_index] == CodexLineageGate::Eligible
                     && nodes[parent_index].may_author_parent
             });
             if parent_is_ready {
@@ -207,7 +431,7 @@ pub(super) fn order_codex_candidates_by_lineage(
 
     for index in 0..nodes.len() {
         if !completed[index] {
-            unsafe_lineage[index] = true;
+            lineage_gates[index] = CodexLineageGate::Unsafe;
             if let Some(candidate_index) = nodes[index].candidate_index {
                 ordered_indices.push(candidate_index);
             }
@@ -220,19 +444,15 @@ pub(super) fn order_codex_candidates_by_lineage(
         let mut candidate = remaining[candidate_index]
             .take()
             .expect("candidate is ordered once");
-        candidate.lineage_disposition = if unsafe_lineage[node_index] {
-            CodexLineageDisposition::AmbiguousOrCyclic
-        } else {
-            CodexLineageDisposition::Ready
-        };
+        candidate.lineage_gate = lineage_gates[node_index];
         candidates.push(candidate);
     }
 
     nodes
         .iter()
-        .zip(unsafe_lineage)
-        .filter(|(node, unsafe_lineage)| {
-            *unsafe_lineage
+        .zip(lineage_gates)
+        .filter(|(node, gate)| {
+            *gate == CodexLineageGate::Unsafe
                 && cache
                     .files
                     .get(&node.path)

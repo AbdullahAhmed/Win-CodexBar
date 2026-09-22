@@ -95,13 +95,6 @@ fn summary_from_cached_report(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum CodexParentResolution {
-    Absent,
-    Safe(crate::core::CodexTotals),
-    Unsafe,
-}
-
 fn codex_usage_uses_parent(usage: &CostUsageFileUsage) -> bool {
     usage.codex_lineage.uses_parent_baseline()
         || (matches!(usage.codex_lineage, CodexSessionLineage::Root)
@@ -109,29 +102,7 @@ fn codex_usage_uses_parent(usage: &CostUsageFileUsage) -> bool {
 }
 
 fn codex_fork_parent_is_safe(cache: &CostUsageCache, usage: &CostUsageFileUsage) -> bool {
-    let locally_resolved = usage
-        .codex_fork_accounting_state
-        .as_ref()
-        .is_some_and(|state| state.locally_resolved);
-    if !codex_usage_uses_parent(usage) {
-        return true;
-    }
-    let parent_resolution =
-        usage
-            .codex_forked_from_id
-            .as_deref()
-            .map_or(CodexParentResolution::Unsafe, |parent_id| {
-                codex_parent_resolution(cache, parent_id, usage.codex_fork_timestamp.as_deref())
-            });
-
-    // Local inference is safe only while the parent is genuinely absent.
-    // An owner that is ambiguous, stale, locally inferred, cyclic, or
-    // transitively unsafe must fail closed instead of looking absent.
-    if locally_resolved {
-        matches!(parent_resolution, CodexParentResolution::Absent)
-    } else {
-        matches!(parent_resolution, CodexParentResolution::Safe(_))
-    }
+    CodexLineagePlanner::new(cache).cached_usage_is_safe(usage)
 }
 
 fn codex_fork_uses_local_inference(usage: &CostUsageFileUsage) -> bool {
@@ -139,103 +110,6 @@ fn codex_fork_uses_local_inference(usage: &CostUsageFileUsage) -> bool {
         .codex_fork_accounting_state
         .as_ref()
         .is_some_and(|state| state.locally_resolved)
-}
-
-/// Resolve one parent identity through the persisted cache graph. Absence is
-/// deliberately distinct from ambiguity or transitive unsafety so copied
-/// prefixes may infer only when no owner exists at all.
-fn codex_parent_resolution(
-    cache: &CostUsageCache,
-    parent_session_id: &str,
-    child_fork_timestamp: Option<&str>,
-) -> CodexParentResolution {
-    codex_parent_resolution_inner(
-        cache,
-        parent_session_id,
-        child_fork_timestamp,
-        &mut HashSet::new(),
-    )
-}
-
-fn codex_parent_resolution_inner(
-    cache: &CostUsageCache,
-    parent_session_id: &str,
-    child_fork_timestamp: Option<&str>,
-    visiting: &mut HashSet<String>,
-) -> CodexParentResolution {
-    let mut owners = cache
-        .files
-        .iter()
-        .filter(|(_, usage)| usage.codex_session_id.as_deref() == Some(parent_session_id));
-    let Some((path_key, usage)) = owners.next() else {
-        return CodexParentResolution::Absent;
-    };
-    if owners.next().is_some() || !visiting.insert(path_key.clone()) {
-        return CodexParentResolution::Unsafe;
-    }
-
-    let resolution =
-        codex_parent_owner_baseline(cache, path_key, usage, child_fork_timestamp, visiting)
-            .map_or(CodexParentResolution::Unsafe, CodexParentResolution::Safe);
-    visiting.remove(path_key);
-    resolution
-}
-
-fn codex_parent_owner_baseline(
-    cache: &CostUsageCache,
-    path_key: &str,
-    usage: &CostUsageFileUsage,
-    child_fork_timestamp: Option<&str>,
-    visiting: &mut HashSet<String>,
-) -> Option<crate::core::CodexTotals> {
-    if usage.codex_unresolved_fork_parent
-        || usage.codex_token_timestamps_monotonic != Some(true)
-        || codex_fork_uses_local_inference(usage)
-    {
-        return None;
-    }
-
-    if codex_usage_uses_parent(usage) {
-        let parent_id = usage.codex_forked_from_id.as_deref()?;
-        let inherited = usage
-            .codex_fork_accounting_state
-            .as_ref()?
-            .inherited_totals
-            .as_ref()?;
-        match codex_parent_resolution_inner(
-            cache,
-            parent_id,
-            usage.codex_fork_timestamp.as_deref(),
-            visiting,
-        ) {
-            CodexParentResolution::Safe(baseline) if &baseline == inherited => {}
-            CodexParentResolution::Absent
-            | CodexParentResolution::Safe(_)
-            | CodexParentResolution::Unsafe => return None,
-        }
-    }
-
-    let metadata = fs::metadata(path_key).ok()?;
-    if let (Some(expected), Some(actual)) = (
-        usage.codex_file_identity.as_ref(),
-        JsonlScanner::codex_file_identity(Path::new(path_key), &metadata),
-    ) && expected != &actual
-    {
-        return None;
-    }
-    #[allow(clippy::cast_possible_wrap, reason = "session file sizes fit i64")]
-    let size = metadata.len().min(i64::MAX as u64) as i64;
-    if usage.mtime_unix_ms != system_time_to_unix_ms(metadata.modified().ok())
-        || usage.size != size
-        || usage.parsed_bytes.unwrap_or(0) < size
-    {
-        return None;
-    }
-    let last_totals = usage.last_totals.clone()?;
-    let last_token_timestamp = usage.codex_last_token_timestamp.as_deref()?;
-    let child_fork_timestamp = child_fork_timestamp?;
-    JsonlScanner::codex_timestamp_at_or_before(last_token_timestamp, child_fork_timestamp)
-        .then_some(last_totals)
 }
 
 fn is_codex_path_in_scan_window(
@@ -268,14 +142,7 @@ struct CodexScanCandidate {
 struct CodexPreparedCandidate {
     path: PathBuf,
     session_metadata: CodexSessionMetadata,
-    lineage_disposition: CodexLineageDisposition,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum CodexLineageDisposition {
-    #[default]
-    Ready,
-    AmbiguousOrCyclic,
+    lineage_gate: CodexLineageGate,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -511,21 +378,19 @@ impl CostScanner {
         let cache_entry_is_fresh = |entry: &CostUsageFileUsage| {
             cached_codex_file_is_fresh(cache, entry, cache_covers_range, mtime_ms, size)
         };
-        let identity_matches_cached = |entry: &CostUsageFileUsage| match (
-            entry.codex_file_identity.as_ref(),
-            file_identity.as_ref(),
-        ) {
-            (Some(expected), Some(actual)) => expected == actual,
-            _ => false,
+        let identity_matches_cached = |entry: &CostUsageFileUsage| {
+            codex_file_identity_matches(
+                entry.codex_file_identity.as_deref(),
+                file_identity.as_deref(),
+            )
         };
 
         // The compact cache is authoritative for an unchanged file. Do this
         // before reading even the bounded metadata prefix; raw token history
         // is only needed after freshness fails or a fork needs reconciliation.
         if let Some(entry) = cached.as_ref()
-            && prepared_candidate.is_none_or(|candidate| {
-                candidate.lineage_disposition == CodexLineageDisposition::Ready
-            })
+            && prepared_candidate
+                .is_none_or(|candidate| candidate.lineage_gate == CodexLineageGate::Eligible)
             && cache_entry_is_fresh(entry)
             && identity_matches_cached(entry)
         {
@@ -550,9 +415,9 @@ impl CostScanner {
                 stats.codex_read_receipt.metadata_reads.saturating_add(1);
             JsonlScanner::read_codex_session_metadata(path).unwrap_or_default()
         };
-        let cached_identity_matches = cached
-            .as_ref()
-            .is_some_and(|entry| entry.mtime_unix_ms == mtime_ms && entry.size == size);
+        // Cached lineage metadata belongs to a physical file, not merely a
+        // path/size/mtime tuple. Missing identity evidence fails closed.
+        let cached_identity_matches = cached.as_ref().is_some_and(identity_matches_cached);
         let codex_session_id = session_metadata.session_id.clone().or_else(|| {
             cached_identity_matches
                 .then(|| cached.as_ref()?.codex_session_id.clone())
@@ -626,62 +491,25 @@ impl CostScanner {
         let matching_cached_fork_state = cached_fork_accounting_state
             .as_ref()
             .filter(|_| cached_fork_state_matches);
-        let parent_resolution = is_fork
-            .then_some(codex_forked_from_id.as_deref())
-            .flatten()
-            .map_or(CodexParentResolution::Unsafe, |parent_id| {
-                codex_parent_resolution(cache, parent_id, codex_fork_timestamp.as_deref())
-            });
         let paginated_continuation = is_fork
             && codex_forked_from_id.is_some()
             && history_base_thread_id
                 .as_deref()
                 .is_some_and(|history_base| Some(history_base) != codex_forked_from_id.as_deref());
-        let accounting_mode = if prepared_candidate.is_some_and(|candidate| {
-            candidate.lineage_disposition == CodexLineageDisposition::AmbiguousOrCyclic
-        }) {
-            CodexAccountingMode::Unresolved
-        } else if !is_fork {
-            CodexAccountingMode::Standard
-        } else if let CodexParentResolution::Safe(baseline) = &parent_resolution {
-            let reparse_cached_file = matching_cached_fork_state.is_some_and(|state| {
-                state.locally_resolved || state.inherited_totals.as_ref() != Some(baseline)
-            });
-            let cached_parent_state = matching_cached_fork_state.filter(|state| {
-                !state.locally_resolved && state.inherited_totals.as_ref() == Some(baseline)
-            });
-            CodexAccountingMode::Baseline {
-                baseline: baseline.clone(),
-                paginated_continuation,
-                remaining_inherited_totals: cached_parent_state
-                    .and_then(|state| state.remaining_inherited_totals.clone()),
-                provenance: CodexBaselineProvenance::ValidatedParent {
-                    replaces_cached_state: reparse_cached_file,
-                },
-            }
-        } else if matches!(&parent_resolution, CodexParentResolution::Absent)
-            && let Some(state) = matching_cached_fork_state
-            && let Some(baseline) = state.inherited_totals.clone()
-        {
-            CodexAccountingMode::Baseline {
-                baseline,
-                paginated_continuation,
-                remaining_inherited_totals: state.remaining_inherited_totals.clone(),
-                provenance: if state.locally_resolved {
-                    CodexBaselineProvenance::CachedLocalInference
-                } else {
-                    CodexBaselineProvenance::CachedValidatedParent
-                },
-            }
-        } else if matches!(&parent_resolution, CodexParentResolution::Absent)
-            && session_metadata.is_subagent
-        {
-            CodexAccountingMode::InferSubagent {
-                start_ordinal: session_metadata.subagent_history_start_ordinal,
-            }
-        } else {
-            CodexAccountingMode::Unresolved
-        };
+        let lineage_gate = prepared_candidate
+            .map(|candidate| candidate.lineage_gate)
+            .unwrap_or_default();
+        let lineage_decision = CodexLineagePlanner::new(cache).decision_for_scan(
+            is_fork,
+            lineage_gate,
+            codex_forked_from_id.as_deref(),
+            codex_fork_timestamp.as_deref(),
+        );
+        let accounting_mode = lineage_decision.accounting_mode(
+            matching_cached_fork_state,
+            &session_metadata,
+            paginated_continuation,
+        );
 
         if accounting_mode.is_unresolved() {
             cache.files.insert(
@@ -714,7 +542,7 @@ impl CostScanner {
 
         if let Some(entry) = &cached
             && cached_codex_file_is_fresh(cache, entry, cache_covers_range, mtime_ms, size)
-            && (entry.codex_file_identity.is_none() || identity_matches_cached(entry))
+            && identity_matches_cached(entry)
             && !cached_identity_changed
             && !accounting_mode.requires_cached_reparse()
         {
@@ -723,11 +551,6 @@ impl CostScanner {
             if has_tokens {
                 summary.total_cost_usd += session_cost;
                 summary.sessions_count += 1;
-            }
-            if entry.codex_file_identity != file_identity {
-                let mut refreshed = entry.clone();
-                refreshed.codex_file_identity = file_identity.clone();
-                cache.files.insert(path_key.clone(), refreshed);
             }
             stats.files_skipped = stats.files_skipped.saturating_add(1);
             return CodexFileScanOutcome {

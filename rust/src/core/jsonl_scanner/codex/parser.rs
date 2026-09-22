@@ -58,6 +58,7 @@ struct ForkBaselineInference {
     baseline: Option<CodexTotals>,
     boundary_open: bool,
     inherited_opening: bool,
+    missing_explicit_ordinal: bool,
     locally_confirmed: bool,
     resolved: bool,
 }
@@ -79,8 +80,15 @@ impl ForkBaselineInference {
             }),
             boundary_open: false,
             inherited_opening: false,
-            locally_confirmed: explicit_start_ordinal.is_some(),
+            missing_explicit_ordinal: false,
+            locally_confirmed: false,
             resolved: false,
+        }
+    }
+
+    fn confirm_local_resolution(&mut self) {
+        if !self.missing_explicit_ordinal {
+            self.locally_confirmed = true;
         }
     }
 
@@ -108,13 +116,19 @@ impl ForkBaselineInference {
         let last = read_token_totals(last_usage);
         let ordinal = obj.get("ordinal").and_then(Value::as_i64);
 
+        if self.explicit_start_ordinal.is_some() && ordinal.is_none() {
+            self.missing_explicit_ordinal = true;
+            self.locally_confirmed = false;
+            if !self.boundary_open {
+                self.baseline = Some(total);
+            }
+            return ForkBaselineDecision::SkipCopiedPrefix;
+        }
+
         if let Some(start) = self.explicit_start_ordinal
             && !self.boundary_open
         {
-            let Some(ordinal) = ordinal else {
-                self.baseline = Some(total);
-                return ForkBaselineDecision::SkipCopiedPrefix;
-            };
+            let ordinal = ordinal.expect("missing explicit ordinals return above");
             if ordinal < start {
                 self.baseline = Some(total);
                 return ForkBaselineDecision::SkipCopiedPrefix;
@@ -124,7 +138,7 @@ impl ForkBaselineInference {
             if totals_contain_usage(&total) && !totals_contain_usage(&last) {
                 self.baseline = Some(total);
                 self.inherited_opening = true;
-                self.locally_confirmed = true;
+                self.confirm_local_resolution();
             }
             return ForkBaselineDecision::SkipCopiedPrefix;
         } else if !self.boundary_open {
@@ -152,13 +166,13 @@ impl ForkBaselineInference {
             totals_contain_usage(&baseline) && total == last && totals_at_least(&total, &baseline);
         if copied_snapshot {
             self.baseline = Some(total);
-            self.locally_confirmed = true;
+            self.confirm_local_resolution();
             return ForkBaselineDecision::SkipCopiedPrefix;
         }
 
         let owned_baseline = totals_delta(&last, &total);
         self.baseline = Some(owned_baseline.clone());
-        self.locally_confirmed = true;
+        self.confirm_local_resolution();
         self.resolved = true;
         ForkBaselineDecision::ProcessWithBaseline(owned_baseline)
     }

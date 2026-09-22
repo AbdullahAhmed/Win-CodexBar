@@ -63,6 +63,52 @@ fn lineage_token_row(
     })
 }
 
+fn write_missing_ordinal_subagent(
+    sessions_root: &Path,
+    name: &str,
+    base: DateTime<Utc>,
+    include_owned_usage: bool,
+) -> PathBuf {
+    let day = base.with_timezone(&Local).date_naive();
+    let day_dir = sessions_root
+        .join(day.format("%Y").to_string())
+        .join(day.format("%m").to_string())
+        .join(day.format("%d").to_string());
+    std::fs::create_dir_all(&day_dir).unwrap();
+    let path = day_dir.join(name);
+    let mut missing_ordinal = lineage_token_row(base, 11, 100, 0);
+    missing_ordinal.as_object_mut().unwrap().remove("ordinal");
+    let tail = if include_owned_usage {
+        lineage_token_row(base, 12, 120, 10)
+    } else {
+        lineage_token_row(base, 12, 100, 0)
+    };
+    let rows = [
+        serde_json::json!({
+            "type": "session_meta", "ordinal": 0, "timestamp": base.to_rfc3339(),
+            "payload": {
+                "id": "child-id",
+                "forked_from_id": "absent-parent-id",
+                "subagent_history_start_ordinal": 10,
+                "thread_source": "subagent",
+                "source": {"subagent": {"thread_spawn": {"parent_thread_id": "absent-parent-id"}}}
+            }
+        }),
+        lineage_token_row(base, 9, 100, 0),
+        lineage_token_row(base, 10, 100, 0),
+        missing_ordinal,
+        tail,
+    ];
+    let body = rows
+        .into_iter()
+        .map(|row| row.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
 fn bounded_scanner(sessions: &Path, cache_root: &Path) -> CostScanner {
     let mut options = CostScanOptions::app_driven();
     options.codex_candidate_limit = 1;
@@ -89,6 +135,155 @@ fn assert_unresolved(cache: &CostUsageCache, path: &Path) {
     assert!(usage.codex_unresolved_fork_parent);
     assert!(usage.days.is_empty());
     assert!(usage.codex_fork_accounting_state.is_none());
+}
+
+#[test]
+fn replaced_parent_with_same_path_size_and_mtime_cannot_author_lineage() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let base = Utc::now() - Duration::hours(1);
+    let parent = write_codex_fork_session_fixture(
+        &sessions,
+        "parent.jsonl",
+        "parent-id",
+        None,
+        base,
+        base,
+        &[1_000],
+    );
+    let child = write_subagent(
+        &sessions,
+        "child.jsonl",
+        "child-id",
+        "parent-id",
+        base + Duration::seconds(10),
+    );
+    let scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+    let (_, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+    let parent_key = parent.to_string_lossy().to_string();
+    let child_usage = &cache.files[&child.to_string_lossy().to_string()];
+    assert!(matches!(
+        CodexLineagePlanner::new(&cache).decision_for_usage(child_usage),
+        CodexLineageDecision::ParentReady(_)
+    ));
+
+    let old_identity = cache.files[&parent_key]
+        .codex_file_identity
+        .clone()
+        .expect("parent identity persisted");
+    let old_metadata = std::fs::metadata(&parent).unwrap();
+    let old_mtime = old_metadata.modified().unwrap();
+    let old_size = old_metadata.len();
+    let rotated = parent.with_extension("old");
+    std::fs::rename(&parent, &rotated).unwrap();
+    let replacement = write_codex_fork_session_fixture(
+        &sessions,
+        "parent.jsonl",
+        "parent-id",
+        None,
+        base,
+        base,
+        &[2_000],
+    );
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&replacement)
+        .unwrap()
+        .set_modified(old_mtime)
+        .unwrap();
+    let replacement_metadata = std::fs::metadata(&replacement).unwrap();
+    assert_eq!(replacement_metadata.len(), old_size);
+    let replacement_identity =
+        JsonlScanner::codex_file_identity(&replacement, &replacement_metadata)
+            .expect("replacement identity available");
+    assert_ne!(replacement_identity, old_identity);
+
+    assert_eq!(
+        CodexLineagePlanner::new(&cache).decision_for_usage(child_usage),
+        CodexLineageDecision::Unsafe
+    );
+}
+
+#[test]
+fn missing_explicit_ordinal_keeps_subagent_cache_unresolved() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let base = Utc::now() - Duration::hours(1);
+    let child = write_missing_ordinal_subagent(&sessions, "child.jsonl", base, true);
+    let scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+
+    let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+
+    assert_eq!(summary.input_tokens, 0);
+    assert_eq!(summary.sessions_count, 0);
+    assert_unresolved(&cache, &child);
+}
+
+#[test]
+fn missing_ordinal_cannot_complete_zero_usage_subagent_cache() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let base = Utc::now() - Duration::hours(1);
+    let child = write_missing_ordinal_subagent(&sessions, "child.jsonl", base, false);
+    let scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+
+    let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+
+    assert_eq!(summary.input_tokens, 0);
+    assert_eq!(summary.sessions_count, 0);
+    assert_unresolved(&cache, &child);
+}
+
+#[test]
+fn legacy_cache_without_file_identity_is_reparsed() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let base = Utc::now() - Duration::hours(1);
+    let session = write_codex_fork_session_fixture(
+        &sessions,
+        "session.jsonl",
+        "root-session-id",
+        None,
+        base,
+        base,
+        &[1_000],
+    );
+    let scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+
+    let (_, _, _) = scanner.scan_codex_detailed_with_cache(None);
+    let session_key = session.to_string_lossy().to_string();
+    let mut legacy_cache = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+    legacy_cache
+        .files
+        .get_mut(&session_key)
+        .unwrap()
+        .codex_file_identity = None;
+    JsonlScanner::save_cache(ProviderId::Codex, &mut legacy_cache, Some(&cache_root));
+
+    let (_, stats, refreshed_cache) = scanner.scan_codex_detailed_with_cache(None);
+
+    assert!(stats.codex_history_read_paths.contains(&session_key));
+    assert!(
+        refreshed_cache.files[&session_key]
+            .codex_file_identity
+            .is_some()
+    );
 }
 
 #[test]
