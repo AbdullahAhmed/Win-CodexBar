@@ -16,16 +16,23 @@ use reconciliation::*;
 #[derive(Debug)]
 enum CodexAccountingMode {
     Standard,
-    ValidatedBaseline {
+    Baseline {
         baseline: crate::core::CodexTotals,
         paginated_continuation: bool,
         remaining_inherited_totals: Option<crate::core::CodexTotals>,
-        locally_resolved: bool,
+        provenance: CodexBaselineProvenance,
     },
     InferSubagent {
         start_ordinal: Option<i64>,
     },
     Unresolved,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexBaselineProvenance {
+    ValidatedParent { replaces_cached_state: bool },
+    CachedValidatedParent,
+    CachedLocalInference,
 }
 
 impl CodexAccountingMode {
@@ -40,8 +47,20 @@ impl CodexAccountingMode {
     fn locally_resolved(&self) -> bool {
         matches!(
             self,
-            Self::ValidatedBaseline {
-                locally_resolved: true,
+            Self::Baseline {
+                provenance: CodexBaselineProvenance::CachedLocalInference,
+                ..
+            }
+        )
+    }
+
+    fn requires_cached_reparse(&self) -> bool {
+        matches!(
+            self,
+            Self::Baseline {
+                provenance: CodexBaselineProvenance::ValidatedParent {
+                    replaces_cached_state: true
+                },
                 ..
             }
         )
@@ -508,17 +527,12 @@ impl CostScanner {
         let matching_cached_fork_state = cached_fork_accounting_state
             .as_ref()
             .filter(|_| cached_fork_state_matches);
-        let cached_fork_baseline =
-            matching_cached_fork_state.and_then(|state| state.inherited_totals.clone());
         let parent_fork_baseline = is_fork
             .then_some(codex_forked_from_id.as_deref())
             .flatten()
             .and_then(|parent_id| {
                 codex_parent_baseline(cache, parent_id, codex_fork_timestamp.as_deref())
             });
-        let fork_baseline = cached_fork_baseline.or(parent_fork_baseline);
-        let remaining_inherited_totals =
-            matching_cached_fork_state.and_then(|state| state.remaining_inherited_totals.clone());
         let paginated_continuation = is_fork
             && codex_forked_from_id.is_some()
             && history_base_thread_id
@@ -526,13 +540,34 @@ impl CostScanner {
                 .is_some_and(|history_base| Some(history_base) != codex_forked_from_id.as_deref());
         let accounting_mode = if !is_fork {
             CodexAccountingMode::Standard
-        } else if let Some(baseline) = fork_baseline {
-            CodexAccountingMode::ValidatedBaseline {
+        } else if let Some(baseline) = parent_fork_baseline {
+            let reparse_cached_file = matching_cached_fork_state.is_some_and(|state| {
+                state.locally_resolved || state.inherited_totals.as_ref() != Some(&baseline)
+            });
+            let cached_parent_state = matching_cached_fork_state.filter(|state| {
+                !state.locally_resolved && state.inherited_totals.as_ref() == Some(&baseline)
+            });
+            CodexAccountingMode::Baseline {
                 baseline,
                 paginated_continuation,
-                remaining_inherited_totals,
-                locally_resolved: matching_cached_fork_state
-                    .is_some_and(|state| state.locally_resolved),
+                remaining_inherited_totals: cached_parent_state
+                    .and_then(|state| state.remaining_inherited_totals.clone()),
+                provenance: CodexBaselineProvenance::ValidatedParent {
+                    replaces_cached_state: reparse_cached_file,
+                },
+            }
+        } else if let Some(state) = matching_cached_fork_state
+            && let Some(baseline) = state.inherited_totals.clone()
+        {
+            CodexAccountingMode::Baseline {
+                baseline,
+                paginated_continuation,
+                remaining_inherited_totals: state.remaining_inherited_totals.clone(),
+                provenance: if state.locally_resolved {
+                    CodexBaselineProvenance::CachedLocalInference
+                } else {
+                    CodexBaselineProvenance::CachedValidatedParent
+                },
             }
         } else if session_metadata.is_subagent {
             CodexAccountingMode::InferSubagent {
@@ -575,6 +610,7 @@ impl CostScanner {
             && cached_codex_file_is_fresh(cache, entry, cache_covers_range, mtime_ms, size)
             && (entry.codex_file_identity.is_none() || identity_matches_cached(entry))
             && !cached_identity_changed
+            && !accounting_mode.requires_cached_reparse()
         {
             let (session_cost, has_tokens) =
                 add_codex_days_map_to_summary(summary, &entry.days, range);
@@ -680,9 +716,13 @@ impl CostScanner {
             }
         }
 
-        let parse_target_size = cached
-            .as_ref()
-            .and_then(|entry| codex_resumable_scan_target_size(size, entry));
+        let parse_target_size = (!accounting_mode.requires_cached_reparse())
+            .then(|| {
+                cached
+                    .as_ref()
+                    .and_then(|entry| codex_resumable_scan_target_size(size, entry))
+            })
+            .flatten();
         let parse_result = match match &accounting_mode {
             CodexAccountingMode::Standard => JsonlScanner::parse_codex_file_with_state_bounded(
                 path,
@@ -695,7 +735,7 @@ impl CostScanner {
                 cancel,
                 max_bytes_to_read,
             ),
-            CodexAccountingMode::ValidatedBaseline {
+            CodexAccountingMode::Baseline {
                 baseline,
                 paginated_continuation,
                 remaining_inherited_totals,

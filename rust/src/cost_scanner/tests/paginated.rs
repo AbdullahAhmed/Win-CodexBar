@@ -344,6 +344,65 @@ fn copied_prefix_subagent_prefers_validated_parent_baseline() {
 }
 
 #[test]
+fn copied_prefix_subagent_replaces_cached_inference_when_parent_appears() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let base = Utc::now() - Duration::hours(1);
+    let child = write_copied_prefix_subagent_fixture(
+        &sessions,
+        "child.jsonl",
+        "parent-id",
+        base + Duration::seconds(10),
+        true,
+    );
+    let mut options = CostScanOptions::app_driven();
+    options.prefer_newest_codex_sessions_first = false;
+    let scanner = CostScanner::new(7)
+        .with_options(options)
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+
+    let (_, _, inferred_cache) = scanner.scan_codex_detailed_with_cache(None);
+    let inferred_state = inferred_cache.files[&child.to_string_lossy().to_string()]
+        .codex_fork_accounting_state
+        .as_ref()
+        .unwrap();
+    assert!(inferred_state.locally_resolved);
+    assert_eq!(
+        inferred_state.inherited_totals.as_ref().unwrap().input,
+        5_000
+    );
+
+    write_codex_fork_session_fixture(
+        &sessions,
+        "parent.jsonl",
+        "parent-id",
+        None,
+        base,
+        base,
+        &[1_000],
+    );
+
+    let (_, stats, validated_cache) = scanner.scan_codex_detailed_with_cache(None);
+    let validated_state = validated_cache.files[&child.to_string_lossy().to_string()]
+        .codex_fork_accounting_state
+        .as_ref()
+        .unwrap();
+    assert!(!validated_state.locally_resolved);
+    assert_eq!(
+        validated_state.inherited_totals.as_ref().unwrap().input,
+        1_000
+    );
+    assert!(
+        stats
+            .codex_history_read_paths
+            .contains(&child.to_string_lossy().to_string()),
+        "the unchanged child must be reparsed when baseline provenance changes"
+    );
+}
+
+#[test]
 fn paginated_continuation_raises_inherited_baseline_from_total_last() {
     let root = tempfile::tempdir().unwrap();
     let sessions = root.path().join("sessions");
