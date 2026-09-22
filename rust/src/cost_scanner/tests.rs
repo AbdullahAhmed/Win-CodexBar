@@ -395,7 +395,7 @@ fn counts_claude_usage_once_across_duplicate_records() {
     assert_eq!(record.output, 50);
     assert_eq!(record.cache_create, 10);
     assert_eq!(record.cache_read, 20);
-    assert!(record.cost > 0.0);
+    assert!(record.cost.is_some_and(|cost| cost > 0.0));
 
     let cutoff = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .unwrap()
@@ -552,9 +552,17 @@ fn shared_claude_reader_excludes_vertex_rows_but_keeps_anthropic_usage() {
     let anthropic = format!(
         r#"{{"type":"assistant","timestamp":"{timestamp}","requestId":"req_anthropic","message":{{"id":"msg_anthropic","model":"claude-sonnet-4-6","usage":{{"input_tokens":10,"output_tokens":5}}}}}}"#
     );
-    let vertex = format!(
-        r#"{{"type":"assistant","timestamp":"{timestamp}","requestId":"req_vrtx_123","message":{{"id":"msg_vrtx_123","model":"claude-sonnet-4-6","usage":{{"input_tokens":1000,"output_tokens":500}}}}}}"#
-    );
+    let vertex = serde_json::json!({
+        "type": "assistant",
+        "timestamp": timestamp,
+        "requestId": "req_vrtx_123",
+        "message": {
+            "id": "msg_vrtx_123",
+            "model": "claude-sonnet-4-6",
+            "usage": {"input_tokens": u64::MAX, "output_tokens": u64::MAX}
+        }
+    })
+    .to_string();
     std::fs::write(&path, format!("{anthropic}\n{vertex}\n")).unwrap();
 
     let cutoff = Utc::now() - Duration::days(30);
@@ -567,6 +575,86 @@ fn shared_claude_reader_excludes_vertex_rows_but_keeps_anthropic_usage() {
     assert_eq!(counted, 1);
     assert_eq!(records, vec![(10, 5)]);
     let _removed = std::fs::remove_file(&path);
+}
+
+#[test]
+fn oversized_claude_history_preserves_independent_components_and_fails_closed() {
+    let first: ClaudeEvent = serde_json::from_str(&format!(
+        r#"{{"type":"assistant","timestamp":"2026-09-20T12:00:00Z","requestId":"req_overflow_1","message":{{"id":"msg_overflow_1","model":"claude-sonnet-4-6","usage":{{"input_tokens":{},"output_tokens":2}}}}}}"#,
+        u64::MAX
+    ))
+    .unwrap();
+    let second: ClaudeEvent = serde_json::from_str(
+        r#"{"type":"assistant","timestamp":"2026-09-20T12:01:00Z","requestId":"req_overflow_2","message":{"id":"msg_overflow_2","model":"claude-sonnet-4-6","usage":{"input_tokens":1,"output_tokens":3}}}"#,
+    )
+    .unwrap();
+    let first = claude_usage_record_from_event(&first).expect("first usage row");
+    let second = claude_usage_record_from_event(&second).expect("second usage row");
+    let mut summary = CostSummary::default();
+
+    assert!(add_claude_record_to_summary(&mut summary, &first));
+    assert!(!add_claude_record_to_summary(&mut summary, &second));
+    assert_eq!(summary.input_tokens, u64::MAX);
+    assert_eq!(summary.output_tokens, 5);
+    assert!(summary.total_cost_usd.is_finite());
+
+    finalize_claude_summary(
+        &mut summary,
+        true,
+        ClaudeFileScanResult {
+            counted: 2,
+            aggregation_failures: 1,
+            ..ClaudeFileScanResult::default()
+        },
+        false,
+    );
+    assert!(!summary.history_coverage_established);
+    assert!(!summary.known_zero);
+}
+
+#[test]
+fn oversized_single_claude_row_keeps_cost_but_marks_combined_quota_tokens_unknown() {
+    let event: ClaudeEvent = serde_json::from_str(&format!(
+        r#"{{"type":"assistant","timestamp":"2026-09-20T12:00:00Z","requestId":"req_combined_overflow","message":{{"id":"msg_combined_overflow","model":"claude-sonnet-4-6","usage":{{"input_tokens":{},"output_tokens":1}}}}}}"#,
+        u64::MAX
+    ))
+    .unwrap();
+    let record = claude_usage_record_from_event(&event).expect("usage row");
+    let quota = quota_history_record_from_usage(&record).expect("timestamped quota row");
+
+    assert!(record.cost.is_some_and(f64::is_finite));
+    assert_eq!(quota.tokens, None);
+    assert!(!quota.tokens_are_complete);
+    assert!(quota.cost_usd.is_some_and(f64::is_finite));
+    assert!(quota.cost_is_complete);
+}
+
+#[test]
+fn nonfinite_claude_price_is_unknown_instead_of_zero() {
+    let snapshot = crate::core::ModelsDevPricingSnapshot::from_catalog_json_for_tests(
+        r#"{
+            "anthropic": {"models": {"claude-test-extreme-price": {
+                "id": "claude-test-extreme-price", "cost": {"input": 1e308, "output": 1}
+            }}}
+        }"#,
+    )
+    .expect("pricing fixture");
+    let mut pricing = ClaudeScanPricingResolver::with_snapshot(snapshot);
+    let event: ClaudeEvent = serde_json::from_str(&format!(
+        r#"{{"type":"assistant","timestamp":"2026-09-20T12:00:00Z","requestId":"req_nonfinite","message":{{"id":"msg_nonfinite","model":"claude-test-extreme-price","usage":{{"input_tokens":{},"output_tokens":1}}}}}}"#,
+        u64::MAX
+    ))
+    .unwrap();
+    let record =
+        claude_usage_record_from_event_with_pricing(&event, &mut pricing).expect("usage row");
+    let mut summary = CostSummary::default();
+
+    assert_eq!(record.cost, None);
+    assert!(!add_claude_record_to_summary(&mut summary, &record));
+    assert_eq!(summary.input_tokens, u64::MAX);
+    assert_eq!(summary.output_tokens, 1);
+    assert_eq!(summary.total_cost_usd, 0.0);
+    assert!(!summary.known_zero);
 }
 
 fn claude_transcript_line(

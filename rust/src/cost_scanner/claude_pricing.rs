@@ -139,29 +139,113 @@ impl ClaudeScanPricingResolver {
         let cache_create_1h = cache_create_1h.min(cache_create);
         let cache_create_5m = cache_create.saturating_sub(cache_create_1h);
 
-        #[allow(
-            clippy::cast_possible_truncation,
-            reason = "clamped to i32::MAX before casting"
-        )]
-        let clamp = |value: u64| value.min(i32::MAX as u64) as i32;
-
         let resolved = self.resolve(model);
         let billable = resolved.or_else(|| self.resolve(FALLBACK_CLAUDE_MODEL));
         let base = billable
-            .map(|pricing| {
-                CostUsagePricing::claude_cost_usd_from_resolution(
-                    pricing,
-                    clamp(input),
-                    clamp(cache_read),
-                    clamp(cache_create_5m),
-                    clamp(output),
-                )
-            })
+            .map(|pricing| claude_cost_usd_u64(pricing, input, cache_read, cache_create_5m, output))
             .unwrap_or(0.0);
         let input_rate = billable
             .map(CostUsagePricing::claude_input_cost_per_token_from_resolution)
             .unwrap_or(0.0);
 
         base + (cache_create_1h as f64) * input_rate * 2.0
+    }
+}
+
+/// Price transcript counters without narrowing them to `i32`. Local history is
+/// untrusted input and can contain values far above the API's ordinary range;
+/// narrowing those values silently understates spend before aggregation gets a
+/// chance to mark non-finite results unavailable.
+fn claude_cost_usd_u64(
+    resolution: ClaudePricingResolution,
+    input: u64,
+    cache_read: u64,
+    cache_write: u64,
+    output: u64,
+) -> f64 {
+    match resolution {
+        ClaudePricingResolution::BuiltIn(pricing) => {
+            let tiered = |tokens: u64, base: f64, above: Option<f64>| {
+                let Some(threshold) = pricing.threshold_tokens.map(|value| value.max(0) as u64)
+                else {
+                    return (tokens as f64) * base;
+                };
+                let Some(above) = above else {
+                    return (tokens as f64) * base;
+                };
+                let below = tokens.min(threshold);
+                let over = tokens.saturating_sub(threshold);
+                (below as f64) * base + (over as f64) * above
+            };
+
+            tiered(
+                input,
+                pricing.input_cost_per_token,
+                pricing.input_cost_per_token_above_threshold,
+            ) + tiered(
+                cache_read,
+                pricing.cache_read_input_cost_per_token,
+                pricing.cache_read_input_cost_per_token_above_threshold,
+            ) + tiered(
+                cache_write,
+                pricing.cache_creation_input_cost_per_token,
+                pricing.cache_creation_input_cost_per_token_above_threshold,
+            ) + tiered(
+                output,
+                pricing.output_cost_per_token,
+                pricing.output_cost_per_token_above_threshold,
+            )
+        }
+        ClaudePricingResolution::ModelsDev {
+            pricing,
+            threshold_tokens,
+        } => {
+            let use_tier = threshold_tokens.is_some_and(|threshold| {
+                input
+                    .checked_add(cache_read)
+                    .and_then(|value| value.checked_add(cache_write))
+                    .is_none_or(|total| total > threshold)
+            });
+            let pick = |base: f64, above: Option<f64>| {
+                if use_tier {
+                    above.unwrap_or(base)
+                } else {
+                    base
+                }
+            };
+            let input_rate = pick(
+                pricing.input_cost_per_token,
+                pricing.input_cost_per_token_above_threshold,
+            );
+            let cache_read_rate = if use_tier {
+                pricing
+                    .cache_read_input_cost_per_token_above_threshold
+                    .or(pricing.cache_read_input_cost_per_token)
+                    .unwrap_or(input_rate)
+            } else {
+                pricing
+                    .cache_read_input_cost_per_token
+                    .unwrap_or(input_rate)
+            };
+            let cache_write_rate = if use_tier {
+                pricing
+                    .cache_write_input_cost_per_token_above_threshold
+                    .or(pricing.cache_write_input_cost_per_token)
+                    .unwrap_or(input_rate)
+            } else {
+                pricing
+                    .cache_write_input_cost_per_token
+                    .unwrap_or(input_rate)
+            };
+            let output_rate = pick(
+                pricing.output_cost_per_token,
+                pricing.output_cost_per_token_above_threshold,
+            );
+
+            (input as f64) * input_rate
+                + (cache_read as f64) * cache_read_rate
+                + (cache_write as f64) * cache_write_rate
+                + (output as f64) * output_rate
+        }
     }
 }

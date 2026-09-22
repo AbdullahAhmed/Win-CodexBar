@@ -435,7 +435,9 @@ struct ClaudeUsageRecord {
     output: u64,
     cache_create: u64,
     cache_read: u64,
-    cost: f64,
+    /// `None` means pricing was unavailable or produced a non-finite value.
+    /// Keep that distinct from a real zero-dollar row.
+    cost: Option<f64>,
 }
 
 /// Exact Claude request rows retained for quota-window projection.
@@ -468,6 +470,7 @@ struct ClaudeFileScanResult {
     malformed_lines: u32,
     incomplete_requests: u32,
     read_failures: u32,
+    aggregation_failures: u32,
 }
 
 impl ClaudeFileScanResult {
@@ -478,10 +481,16 @@ impl ClaudeFileScanResult {
             .incomplete_requests
             .saturating_add(other.incomplete_requests);
         self.read_failures = self.read_failures.saturating_add(other.read_failures);
+        self.aggregation_failures = self
+            .aggregation_failures
+            .saturating_add(other.aggregation_failures);
     }
 
     fn is_complete(self) -> bool {
-        self.malformed_lines == 0 && self.incomplete_requests == 0 && self.read_failures == 0
+        self.malformed_lines == 0
+            && self.incomplete_requests == 0
+            && self.read_failures == 0
+            && self.aggregation_failures == 0
     }
 }
 
@@ -591,16 +600,21 @@ impl CostScanner {
             let mut seen = HashSet::new();
             let mut pricing = ClaudeScanPricingResolver::default();
             let mut handle_file = |path: &Path| {
-                let file_result = scan_claude_file_with_pricing(
+                let mut aggregation_complete = true;
+                let mut file_result = scan_claude_file_with_pricing(
                     path,
                     &cutoff,
                     &mut seen,
                     cancel,
                     &mut pricing,
                     |record| {
-                        add_claude_record_to_summary(&mut summary, record);
+                        aggregation_complete &= add_claude_record_to_summary(&mut summary, record);
                     },
                 );
+                if !aggregation_complete {
+                    file_result.aggregation_failures =
+                        file_result.aggregation_failures.saturating_add(1);
+                }
                 if file_result.counted > 0 {
                     summary.sessions_count += 1;
                 }
@@ -667,7 +681,8 @@ impl CostScanner {
             let mut pricing = ClaudeScanPricingResolver::default();
             self.walk_claude_files(&projects_dir, &cutoff, cancel, &mut |path| {
                 let mut file_has_usage = false;
-                let file_result = scan_claude_file_with_pricing(
+                let mut aggregation_complete = true;
+                let mut file_result = scan_claude_file_with_pricing(
                     path,
                     &cutoff,
                     &mut seen,
@@ -675,9 +690,11 @@ impl CostScanner {
                     &mut pricing,
                     |record| {
                         file_has_usage = true;
-                        add_claude_record_to_summary(&mut summary, record);
-                        add_claude_record_to_daily_costs(&mut daily_cost, record);
-                        add_claude_record_to_daily_tokens(&mut daily_tokens, record);
+                        aggregation_complete &= add_claude_record_to_summary(&mut summary, record);
+                        aggregation_complete &=
+                            add_claude_record_to_daily_costs(&mut daily_cost, record);
+                        aggregation_complete &=
+                            add_claude_record_to_daily_tokens(&mut daily_tokens, record);
                         if let Some(quota_record) = quota_history_record_from_usage(record) {
                             quota_records.push(quota_record);
                         } else {
@@ -685,6 +702,10 @@ impl CostScanner {
                         }
                     },
                 );
+                if !aggregation_complete {
+                    file_result.aggregation_failures =
+                        file_result.aggregation_failures.saturating_add(1);
+                }
                 if file_has_usage {
                     summary.sessions_count += 1;
                 }
@@ -1007,7 +1028,7 @@ fn claude_usage_record_from_event_with_pricing(
 
     let cache_create_1h = usage.one_hour_cache_creation_tokens(cache_create);
     let pricing_known = pricing.is_known(model);
-    let cost = pricing.cost_usd_with_cache_ttl(
+    let computed_cost = pricing.cost_usd_with_cache_ttl(
         model,
         input,
         cache_create,
@@ -1015,6 +1036,7 @@ fn claude_usage_record_from_event_with_pricing(
         cache_read,
         output,
     );
+    let cost = computed_cost.is_finite().then_some(computed_cost);
 
     Some(ClaudeUsageRecord {
         model: model.to_string(),
@@ -1033,25 +1055,52 @@ fn claude_usage_record_from_event_with_pricing(
     })
 }
 
-fn add_claude_record_to_summary(summary: &mut CostSummary, record: &ClaudeUsageRecord) {
+fn add_claude_record_to_summary(summary: &mut CostSummary, record: &ClaudeUsageRecord) -> bool {
     if !record.pricing_known {
         summary.unknown_models.insert(record.model.clone());
     }
 
-    summary.input_tokens += record.input;
-    summary.output_tokens += record.output;
-    summary.cached_tokens += record.cache_create + record.cache_read;
-    summary.total_cost_usd += record.cost;
+    let mut complete = checked_add_assign(&mut summary.input_tokens, record.input);
+    complete &= checked_add_assign(&mut summary.output_tokens, record.output);
+    let cached = record.cache_create.checked_add(record.cache_read);
+    complete &= cached.is_some_and(|value| checked_add_assign(&mut summary.cached_tokens, value));
 
-    *summary.by_model.entry(record.model.clone()).or_insert(0.0) += record.cost;
+    if let Some(cost) = record.cost {
+        complete &= checked_add_finite(&mut summary.total_cost_usd, cost);
+        complete &= checked_add_finite(
+            summary.by_model.entry(record.model.clone()).or_insert(0.0),
+            cost,
+        );
+    } else {
+        complete = false;
+    }
 
     let model_tokens = summary
         .by_model_tokens
         .entry(record.model.clone())
         .or_default();
-    model_tokens.input_tokens += record.input;
-    model_tokens.output_tokens += record.output;
-    model_tokens.cached_tokens += record.cache_create + record.cache_read;
+    complete &= checked_add_assign(&mut model_tokens.input_tokens, record.input);
+    complete &= checked_add_assign(&mut model_tokens.output_tokens, record.output);
+    complete &=
+        cached.is_some_and(|value| checked_add_assign(&mut model_tokens.cached_tokens, value));
+    complete
+}
+
+fn checked_add_assign(total: &mut u64, value: u64) -> bool {
+    let Some(sum) = total.checked_add(value) else {
+        return false;
+    };
+    *total = sum;
+    true
+}
+
+fn checked_add_finite(total: &mut f64, value: f64) -> bool {
+    let sum = *total + value;
+    if !value.is_finite() || !sum.is_finite() {
+        return false;
+    }
+    *total = sum;
+    true
 }
 
 fn quota_history_record_from_usage(record: &ClaudeUsageRecord) -> Option<ClaudeQuotaHistoryRecord> {
@@ -1080,9 +1129,9 @@ fn quota_history_record_from_usage(record: &ClaudeUsageRecord) -> Option<ClaudeQ
     Some(ClaudeQuotaHistoryRecord {
         timestamp,
         tokens,
-        cost_usd: record.cost.is_finite().then_some(record.cost),
+        cost_usd: record.cost,
         tokens_are_complete: tokens.is_some(),
-        cost_is_complete: record.pricing_known && record.cost.is_finite() && record.cost >= 0.0,
+        cost_is_complete: record.pricing_known && record.cost.is_some_and(|cost| cost >= 0.0),
         dedup_key,
         attribution: ClaudeHistoryAttribution::Unavailable,
     })
@@ -1094,9 +1143,9 @@ fn quota_history_record_from_usage(record: &ClaudeUsageRecord) -> Option<ClaudeQ
 fn add_claude_record_to_daily_costs(
     daily_costs: &mut HashMap<String, Option<f64>>,
     record: &ClaudeUsageRecord,
-) {
+) -> bool {
     let Some(timestamp) = record.timestamp else {
-        return;
+        return true;
     };
     let date_str = timestamp
         .with_timezone(&Local)
@@ -1104,8 +1153,18 @@ fn add_claude_record_to_daily_costs(
         .format("%Y-%m-%d")
         .to_string();
     if let Some(cost) = daily_costs.get_mut(&date_str) {
-        *cost = Some(cost.unwrap_or(0.0) + record.cost);
+        let Some(record_cost) = record.cost else {
+            *cost = None;
+            return false;
+        };
+        let sum = cost.unwrap_or(0.0) + record_cost;
+        if !sum.is_finite() {
+            *cost = None;
+            return false;
+        }
+        *cost = Some(sum);
     }
+    true
 }
 
 /// Check if any cost usage sources are available
@@ -1294,6 +1353,7 @@ pub fn get_daily_token_history(provider: &str, days: u32) -> (Vec<(String, u64)>
                 let cutoff = Utc::now() - Duration::days(days as i64);
                 let mut seen = HashSet::new();
                 let mut pricing = ClaudeScanPricingResolver::default();
+                let mut aggregation_complete = true;
                 let mut handle_file = |path: &Path| {
                     for_each_claude_usage_record_with_pricing(
                         path,
@@ -1302,11 +1362,17 @@ pub fn get_daily_token_history(provider: &str, days: u32) -> (Vec<(String, u64)>
                         None,
                         &mut pricing,
                         |record| {
-                            add_claude_record_to_daily_tokens(&mut daily_tokens, record);
+                            aggregation_complete &=
+                                add_claude_record_to_daily_tokens(&mut daily_tokens, record);
                         },
                     );
                 };
                 scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file);
+                if !aggregation_complete {
+                    covered_days.clear();
+                } else {
+                    covered_days.extend(daily_tokens.keys().cloned());
+                }
             }
         }
         "pi" => {
@@ -1330,7 +1396,9 @@ pub fn get_daily_token_history(provider: &str, days: u32) -> (Vec<(String, u64)>
     // Codex only: the bounded catch-up may not have reached the requested
     // depth yet. Incomplete = history exists but the oldest quarter of the
     // window has no scanned day.
-    let incomplete = if provider == "pi" {
+    let incomplete = if provider == "claude" {
+        covered_days.is_empty()
+    } else if provider == "pi" {
         // Pi scans are bounded filesystem walks, so a complete parse covers
         // the requested window even when the roots contain no sessions.
         covered_days.is_empty()
@@ -1349,9 +1417,9 @@ pub fn get_daily_token_history(provider: &str, days: u32) -> (Vec<(String, u64)>
 fn add_claude_record_to_daily_tokens(
     daily_tokens: &mut HashMap<String, u64>,
     record: &ClaudeUsageRecord,
-) {
+) -> bool {
     let Some(timestamp) = record.timestamp else {
-        return;
+        return true;
     };
     let date_str = timestamp
         .with_timezone(&Local)
@@ -1359,6 +1427,10 @@ fn add_claude_record_to_daily_tokens(
         .format("%Y-%m-%d")
         .to_string();
     if let Some(slot) = daily_tokens.get_mut(&date_str) {
-        *slot += record.input + record.output;
+        let Some(tokens) = record.input.checked_add(record.output) else {
+            return false;
+        };
+        return checked_add_assign(slot, tokens);
     }
+    true
 }
