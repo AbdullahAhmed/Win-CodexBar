@@ -1,3 +1,8 @@
+use super::provider_refresh::{
+    ProviderRefreshCompletion, ProviderRefreshReservation, complete_provider_refresh,
+    reserve_provider_refresh,
+};
+use super::warning_identity::WarningIdentity;
 use super::*;
 use chrono::{Local, Utc};
 use codexbar::core::HookUsageWindow;
@@ -285,15 +290,6 @@ pub(crate) fn provider_fetch_timeout(id: ProviderId, ctx: &FetchContext) -> std:
     provider_timeout.max(context_timeout.min(MAX_CONTEXT_FETCH_TIMEOUT))
 }
 
-pub(crate) fn is_provider_cache_fresh(
-    updated_at: Option<std::time::Instant>,
-    stale_after: std::time::Duration,
-) -> bool {
-    updated_at
-        .map(|updated| updated.elapsed() <= stale_after)
-        .unwrap_or(false)
-}
-
 pub(crate) fn upsert_provider_cache(
     cache: &mut Vec<ProviderUsageSnapshot>,
     snapshot: ProviderUsageSnapshot,
@@ -351,11 +347,19 @@ pub(crate) fn is_current_provider_refresh_generation(guard: &AppState, generatio
 
 /// Core refresh logic, usable from both the Tauri command and tray menu actions.
 pub(crate) async fn do_refresh_providers(app: &tauri::AppHandle) -> Result<(), String> {
+    do_refresh_providers_with_outcome(app).await.map(|_| ())
+}
+
+pub(crate) async fn do_refresh_providers_with_outcome(
+    app: &tauri::AppHandle,
+) -> Result<ProviderRefreshOutcome, String> {
     do_refresh_providers_with_policy(app, true, RefreshScope::AllEnabled).await
 }
 
 pub(crate) async fn do_refresh_providers_if_stale(app: &tauri::AppHandle) -> Result<(), String> {
-    do_refresh_providers_with_policy(app, false, RefreshScope::AllEnabled).await
+    do_refresh_providers_with_policy(app, false, RefreshScope::AllEnabled)
+        .await
+        .map(|_| ())
 }
 
 /// Refresh only enabled providers with the opt-in exact-session watcher. This
@@ -364,14 +368,16 @@ pub(crate) async fn do_refresh_providers_if_stale(app: &tauri::AppHandle) -> Res
 pub(crate) async fn do_refresh_auto_resume_providers_if_stale(
     app: &tauri::AppHandle,
 ) -> Result<(), String> {
-    do_refresh_providers_with_policy(app, false, RefreshScope::AutoResume).await
+    do_refresh_providers_with_policy(app, false, RefreshScope::AutoResume)
+        .await
+        .map(|_| ())
 }
 
 async fn do_refresh_providers_with_policy(
     app: &tauri::AppHandle,
     force: bool,
     scope: RefreshScope,
-) -> Result<(), String> {
+) -> Result<ProviderRefreshOutcome, String> {
     let state = app.state::<Mutex<AppState>>();
     let expected_generation = state
         .lock()
@@ -381,16 +387,20 @@ async fn do_refresh_providers_with_policy(
     let enabled_ids = settings.get_enabled_provider_ids();
     let refresh_ids = scope.provider_ids(&settings, &enabled_ids);
     if refresh_ids.is_empty() {
-        return Ok(());
+        return Ok(ProviderRefreshOutcome::Skipped {
+            reason: ProviderRefreshSkipReason::NoEnabledProviders,
+        });
     }
 
     let inputs = ProviderRefreshInputs::load(settings, enabled_ids);
-    let Some(generation) =
-        begin_provider_refresh(&state, force, &refresh_ids, expected_generation)?
-    else {
-        // Settings or account identity changed while inputs were loading, or a
-        // newer batch already owns the refresh. Discard this input snapshot.
-        return Ok(());
+    let generation = match begin_provider_refresh(&state, force, &refresh_ids, expected_generation)?
+    {
+        ProviderRefreshReservation::Reserved { generation } => generation,
+        ProviderRefreshReservation::Skipped(reason) => {
+            // Settings or account identity changed while inputs were loading,
+            // another batch owns the refresh, or the cache is already fresh.
+            return Ok(ProviderRefreshOutcome::Skipped { reason });
+        }
     };
 
     // Ensure cache only contains currently enabled providers for this generation.
@@ -419,17 +429,23 @@ async fn do_refresh_providers_with_policy(
     );
     await_provider_refreshes(handles).await;
 
-    let Some(error_count) = finish_provider_refresh(&state, generation)? else {
-        // Superseded by a newer generation (or invalidate). Do not clear UI
-        // "refreshing" for a dead batch or stamp tray from incomplete work.
-        return Ok(());
+    let error_count = match finish_provider_refresh(&state, generation)? {
+        ProviderRefreshCompletion::Published { error_count } => error_count,
+        ProviderRefreshCompletion::Superseded { current_generation } => {
+            // Superseded by a newer generation (or invalidate). Do not clear UI
+            // "refreshing" for dead work or stamp tray from incomplete work.
+            return Ok(ProviderRefreshOutcome::Superseded {
+                generation,
+                current_generation,
+            });
+        }
     };
     update_tray_and_notifications(app, &state, &inputs.settings, &inputs.token_accounts)?;
 
     events::emit_refresh_complete(app, enabled_count, error_count);
     crate::auto_refresh::schedule_refresh_enrichment(&inputs.settings);
 
-    Ok(())
+    Ok(ProviderRefreshOutcome::Published { generation })
 }
 
 fn begin_provider_refresh(
@@ -437,58 +453,14 @@ fn begin_provider_refresh(
     force: bool,
     provider_ids: &[ProviderId],
     expected_generation: u64,
-) -> Result<Option<u64>, String> {
+) -> Result<ProviderRefreshReservation, String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
-    reserve_provider_refresh(&mut guard, force, provider_ids, expected_generation)
-}
-
-fn reserve_provider_refresh(
-    guard: &mut AppState,
-    force: bool,
-    provider_ids: &[ProviderId],
-    expected_generation: u64,
-) -> Result<Option<u64>, String> {
-    if guard.is_refreshing {
-        return Ok(None);
-    }
-    if guard.provider_refresh_generation != expected_generation {
-        return Ok(None);
-    }
-    if provider_cache_can_skip_refresh(guard, force, provider_ids) {
-        return Ok(None);
-    }
-
-    guard.provider_refresh_generation = guard.provider_refresh_generation.wrapping_add(1);
-    let generation = guard.provider_refresh_generation;
-    guard.is_refreshing = true;
-    guard.provider_refresh_started_at = Some(std::time::Instant::now());
-    Ok(Some(generation))
-}
-
-fn provider_cache_can_skip_refresh(
-    guard: &AppState,
-    force: bool,
-    provider_ids: &[ProviderId],
-) -> bool {
-    let cache_has_all = provider_ids.iter().all(|id| {
-        guard
-            .provider_cache
-            .iter()
-            .any(|snapshot| snapshot.provider_id == id.cli_name())
-    });
-    // Proof-harness seed: pin the synthetic snapshot for the whole run so a
-    // periodic auto-refresh cannot overwrite seeded capture conditions.
-    if !force && crate::proof_harness::seed_usage_json_active() && cache_has_all {
-        return true;
-    }
-    !force
-        && cache_has_all
-        && provider_ids.iter().all(|id| {
-            is_provider_cache_fresh(
-                guard.provider_cache_updated_at_by_provider.get(id).copied(),
-                PROVIDER_CACHE_STALE_AFTER,
-            )
-        })
+    Ok(reserve_provider_refresh(
+        &mut guard,
+        force,
+        provider_ids,
+        expected_generation,
+    ))
 }
 
 struct ProviderRefreshInputs {
@@ -960,23 +932,9 @@ async fn await_provider_refreshes(handles: Vec<tokio::task::JoinHandle<()>>) {
 fn finish_provider_refresh(
     state: &tauri::State<'_, Mutex<AppState>>,
     generation: u64,
-) -> Result<Option<usize>, String> {
+) -> Result<ProviderRefreshCompletion, String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
-    if !is_current_provider_refresh_generation(&guard, generation) {
-        // A newer begin or invalidate owns the lock/generation. Do not clear
-        // is_refreshing — that would race a live successor batch.
-        return Ok(None);
-    }
-    guard.is_refreshing = false;
-    guard.provider_refresh_started_at = None;
-    guard.provider_cache_updated_at = Some(std::time::Instant::now());
-    Ok(Some(
-        guard
-            .provider_cache
-            .iter()
-            .filter(|s| s.error.is_some())
-            .count(),
-    ))
+    Ok(complete_provider_refresh(&mut guard, generation))
 }
 
 fn update_tray_and_notifications(
@@ -1011,7 +969,14 @@ fn notify_usage_thresholds(
                     .get(&provider)
                     .and_then(ProviderAccountData::active_account)
                     .map(|account| account.id);
-                let account = quota_notification_account_identity(snapshot, token_account_id);
+                let warning_identity = WarningIdentity::new(
+                    provider,
+                    &snapshot.source_label,
+                    snapshot.account_email.as_deref(),
+                    snapshot.account_organization.as_deref(),
+                    token_account_id,
+                );
+                let account = warning_identity.threshold_key();
                 // Skip all session consumers for synthetic/no-session
                 // placeholders (e.g. Claude OAuth five_hour: null).
                 if guard.notification_manager.check_session_lane(
@@ -1092,28 +1057,18 @@ fn quota_notification_account_identity(
     snapshot: &ProviderUsageSnapshot,
     token_account_id: Option<uuid::Uuid>,
 ) -> String {
-    if let Some(id) = token_account_id {
-        return format!("token-account:{}", id.as_hyphenated());
-    }
-    if let Some(email) = snapshot
-        .account_email
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        return email.to_ascii_lowercase();
-    }
-    if let Some(org) = snapshot
-        .account_organization
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        return format!("org:{}", org.to_ascii_lowercase());
-    }
-    // Do not fall back to plan_name/login_method — those are display tiers and
-    // flicker across refreshes, re-arming still-hot windows for a new identity.
-    String::new()
+    ProviderId::from_cli_name(&snapshot.provider_id)
+        .map(|provider| {
+            WarningIdentity::new(
+                provider,
+                &snapshot.source_label,
+                snapshot.account_email.as_deref(),
+                snapshot.account_organization.as_deref(),
+                token_account_id,
+            )
+            .threshold_key()
+        })
+        .unwrap_or_default()
 }
 
 fn notify_predictive_pace(
@@ -1133,12 +1088,14 @@ fn notify_predictive_pace(
         .get(&provider)
         .and_then(ProviderAccountData::active_account)
         .map(|account| account.id);
-    let Some(identity) = predictive_warning_identity(
+    let warning_identity = WarningIdentity::new(
         provider,
         &snapshot.source_label,
         snapshot.account_email.as_deref(),
+        None,
         token_account_id,
-    ) else {
+    );
+    let Some(identity) = warning_identity.predictive_key() else {
         return;
     };
     let observed_at = chrono::DateTime::parse_from_rfc3339(&snapshot.updated_at)
@@ -1187,26 +1144,6 @@ fn notify_predictive_pace(
             settings,
         );
     }
-}
-
-fn predictive_warning_identity(
-    provider: ProviderId,
-    source_label: &str,
-    account_email: Option<&str>,
-    token_account_id: Option<uuid::Uuid>,
-) -> Option<String> {
-    if !matches!(provider, ProviderId::Claude | ProviderId::Codex) {
-        return None;
-    }
-    if let Some(id) = token_account_id {
-        return Some(format!("token-account:{}", id.as_hyphenated()));
-    }
-    let source = source_label.trim().to_ascii_lowercase();
-    let account = account_email?.trim().to_ascii_lowercase();
-    if source.is_empty() || account.is_empty() {
-        return None;
-    }
-    Some(format!("{source}:{account}"))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1282,54 +1219,6 @@ pub fn get_cached_providers(
 mod predictive_warning_tests {
     use super::*;
 
-    #[test]
-    fn predictive_warning_identity_keeps_claude_sources_and_token_accounts_separate() {
-        let account_id = uuid::Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
-
-        assert_eq!(
-            predictive_warning_identity(
-                ProviderId::Claude,
-                "cli",
-                Some("Person@Example.com"),
-                None,
-            )
-            .as_deref(),
-            Some("cli:person@example.com")
-        );
-        assert_eq!(
-            predictive_warning_identity(
-                ProviderId::Claude,
-                "oauth",
-                Some("Person@Example.com"),
-                None,
-            )
-            .as_deref(),
-            Some("oauth:person@example.com")
-        );
-        assert_eq!(
-            predictive_warning_identity(
-                ProviderId::Claude,
-                "oauth",
-                Some("Person@Example.com"),
-                Some(account_id),
-            )
-            .as_deref(),
-            Some("token-account:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
-        );
-    }
-
-    #[test]
-    fn predictive_warning_identity_skips_unidentified_accounts() {
-        assert_eq!(
-            predictive_warning_identity(ProviderId::Claude, "oauth", None, None),
-            None
-        );
-        assert_eq!(
-            predictive_warning_identity(ProviderId::Codex, "cli", Some("  "), None),
-            None
-        );
-    }
-
     fn empty_snapshot() -> ProviderUsageSnapshot {
         let metadata = codexbar::core::instantiate_provider(ProviderId::Claude)
             .metadata()
@@ -1366,11 +1255,18 @@ mod predictive_warning_tests {
         );
 
         snapshot.account_organization = None;
-        // plan_name/login_method is not a stable ownership key — fall through to "".
-        assert_eq!(quota_notification_account_identity(&snapshot, None), "");
+        snapshot.source_label = "oauth".to_string();
+        assert_eq!(
+            quota_notification_account_identity(&snapshot, None),
+            "claude:oauth:unknown"
+        );
 
         snapshot.plan_name = None;
-        assert_eq!(quota_notification_account_identity(&snapshot, None), "");
+        snapshot.source_label = "cli (reduced fidelity)".to_string();
+        assert_eq!(
+            quota_notification_account_identity(&snapshot, None),
+            "claude:cli:unknown"
+        );
     }
 
     /// The forecast scope key and the notification identity must never disagree.
@@ -1529,39 +1425,5 @@ mod reset_backfill_tests {
         let mut fresh = codex_snapshot(win(30.0, None));
         codex_reset_backfill(&mut fresh, None);
         assert!(fresh.primary.resets_at.is_none());
-    }
-}
-
-#[cfg(test)]
-mod refresh_generation_tests {
-    use super::*;
-
-    #[test]
-    fn stale_inputs_cannot_reserve_a_new_generation_after_invalidation() {
-        let mut state = AppState::new();
-        let expected_generation = state.provider_refresh_generation;
-
-        invalidate_account_usage(&mut state, ProviderId::Codex);
-
-        assert_eq!(
-            reserve_provider_refresh(&mut state, true, &[ProviderId::Codex], expected_generation,)
-                .expect("reservation should not fail"),
-            None
-        );
-        assert!(!state.is_refreshing);
-    }
-
-    #[test]
-    fn a_matching_generation_reserves_the_next_refresh_generation() {
-        let mut state = AppState::new();
-        let expected_generation = state.provider_refresh_generation;
-
-        let generation =
-            reserve_provider_refresh(&mut state, true, &[ProviderId::Codex], expected_generation)
-                .expect("reservation should succeed")
-                .expect("refresh should be reserved");
-
-        assert_eq!(generation, expected_generation.wrapping_add(1));
-        assert!(state.is_refreshing);
     }
 }
