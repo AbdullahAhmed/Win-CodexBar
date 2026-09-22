@@ -181,7 +181,7 @@ fn parse_billing(value: &Value) -> Result<Billing, ProviderError> {
                 .ok_or_else(|| parse_failure("billing.data.balance"))?;
             let total = finite_number(balance.get("total"), "billing.data.balance.total")?;
             let remaining =
-                finite_number(balance.get("remaining"), "billing.data.balance.remaining")?;
+                nonnegative_number(balance.get("remaining"), "billing.data.balance.remaining")?;
             if total < 0.0 {
                 return Err(parse_failure(
                     "billing.data.balance.total must not be negative",
@@ -196,7 +196,7 @@ fn parse_billing(value: &Value) -> Result<Billing, ProviderError> {
                 .filter(|value| !value.is_null())
                 .and_then(Value::as_object)
                 .map(|on_demand| {
-                    finite_number(on_demand.get("balance"), "billing.data.onDemand.balance")
+                    nonnegative_number(on_demand.get("balance"), "billing.data.onDemand.balance")
                 })
                 .transpose()?;
             Ok(Billing {
@@ -220,7 +220,8 @@ fn parse_quota(value: &Value, field: &str) -> Result<Quota, ProviderError> {
     if limit < 0.0 {
         return Err(parse_failure(format!("{field}.limit must not be negative")));
     }
-    let remaining = optional_number(object.get("remaining"), &format!("{field}.remaining"))?;
+    let remaining =
+        optional_nonnegative_number(object.get("remaining"), &format!("{field}.remaining"))?;
     Ok(Quota {
         used_percent: remaining.and_then(|remaining| percent(limit - remaining, limit)),
         resets_at: parse_reset(object.get("reset"))?,
@@ -290,10 +291,21 @@ fn finite_number(value: Option<&Value>, field: &str) -> Result<f64, ProviderErro
         .ok_or_else(|| parse_failure(field))
 }
 
-fn optional_number(value: Option<&Value>, field: &str) -> Result<Option<f64>, ProviderError> {
+fn nonnegative_number(value: Option<&Value>, field: &str) -> Result<f64, ProviderError> {
+    let value = finite_number(value, field)?;
+    if value < 0.0 {
+        return Err(parse_failure(format!("{field} must not be negative")));
+    }
+    Ok(value)
+}
+
+fn optional_nonnegative_number(
+    value: Option<&Value>,
+    field: &str,
+) -> Result<Option<f64>, ProviderError> {
     match value {
         None | Some(Value::Null) => Ok(None),
-        Some(value) => finite_number(Some(value), field).map(Some),
+        Some(value) => nonnegative_number(Some(value), field).map(Some),
     }
 }
 
@@ -315,15 +327,20 @@ fn parse_reset(value: Option<&Value>) -> Result<Option<chrono::DateTime<Utc>>, P
     if raw <= 0.0 {
         return Ok(None);
     }
-    let seconds = if raw >= 1_000_000_000_000.0 {
-        raw / 1000.0
-    } else {
-        raw
-    };
-    let seconds = format!("{:.0}", seconds.trunc())
+    if raw.fract() != 0.0 {
+        return Err(parse_failure(
+            "reset must use integral seconds or milliseconds",
+        ));
+    }
+    let raw = format!("{raw:.0}")
         .parse::<i64>()
         .map_err(|_| parse_failure("reset"))?;
-    Ok(Utc.timestamp_opt(seconds, 0).single())
+    let (seconds, nanos) = if raw >= 1_000_000_000_000 {
+        (raw / 1000, ((raw % 1000) as u32) * 1_000_000)
+    } else {
+        (raw, 0)
+    };
+    Ok(Utc.timestamp_opt(seconds, nanos).single())
 }
 
 fn percent(used: f64, limit: f64) -> Option<f64> {
@@ -367,5 +384,44 @@ mod tests {
         assert!(parse_billing(&json!({"billingType": "future", "data": {}})).is_err());
         assert!(parse_quota(&json!({"limit": -1}), "rate").is_err());
         assert!(parse_reset(Some(&json!(1e30))).is_err());
+    }
+
+    #[test]
+    fn rejects_negative_balances_in_every_response_shape() {
+        assert!(
+            parse_billing(&json!({
+                "billingType": "token",
+                "data": {"balance": {"total": 100, "remaining": -1}}
+            }))
+            .is_err()
+        );
+        assert!(
+            parse_billing(&json!({
+                "billingType": "token",
+                "data": {
+                    "balance": {"total": 100, "remaining": 75},
+                    "onDemand": {"balance": -1}
+                }
+            }))
+            .is_err()
+        );
+        assert!(
+            parse_billing(&json!({
+                "billingType": "legacy",
+                "data": {"limit": 100, "remaining": -1}
+            }))
+            .is_err()
+        );
+        assert!(parse_quota(&json!({"limit": 100, "remaining": -1}), "rate").is_err());
+    }
+
+    #[test]
+    fn rejects_fractional_resets_and_preserves_integral_milliseconds() {
+        assert!(parse_reset(Some(&json!(1_800_000_000.5))).is_err());
+        let reset = parse_reset(Some(&json!(1_800_000_000_500_i64)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(reset.timestamp(), 1_800_000_000);
+        assert_eq!(reset.timestamp_subsec_millis(), 500);
     }
 }

@@ -187,19 +187,17 @@ impl HuggingFaceProvider {
 
     async fn fetch_optional_wallet(&self, expected_user_id: &str) -> Option<f64> {
         let cookie = crate::providers::browser_cookie_header(&["huggingface.co"]).ok()?;
-        let billing = self
-            .fetch_cookie_text(
+        let (billing, whoami) = tokio::join!(
+            self.fetch_cookie_text(
                 "https://huggingface.co/settings/billing",
                 &cookie,
                 "text/html",
-            )
-            .await
-            .ok()?;
+            ),
+            self.fetch_cookie_text(WHOAMI_URL, &cookie, "application/json"),
+        );
+        let billing = billing.ok()?;
+        let whoami = whoami.ok()?;
         let candidate = parse_wallet_balance(&billing).ok()?;
-        let whoami = self
-            .fetch_cookie_text(WHOAMI_URL, &cookie, "application/json")
-            .await
-            .ok()?;
         let profile: Value = serde_json::from_str(&whoami).ok()?;
         let observed_user_id = profile
             .get("type")
@@ -218,28 +216,24 @@ impl HuggingFaceProvider {
         cookie: &str,
         accept: &str,
     ) -> Result<String, ProviderError> {
-        let response = tokio::time::timeout(
-            OPTIONAL_TIMEOUT,
-            self.client
+        tokio::time::timeout(OPTIONAL_TIMEOUT, async {
+            let response = self
+                .client
                 .get(url)
                 .header(reqwest::header::COOKIE, cookie)
                 .header(reqwest::header::ACCEPT, accept)
-                .send(),
-        )
-        .await
-        .map_err(|_| ProviderError::Timeout)??;
-        if !response.status().is_success() {
-            return Err(classify_status(response.status()));
-        }
-        let bytes = response.bytes().await?;
-        if bytes.len() > MAX_RESPONSE_BYTES {
-            return Err(ProviderError::Parse(
-                "Hugging Face returned an oversized wallet response.".to_string(),
-            ));
-        }
-        String::from_utf8(bytes.to_vec()).map_err(|_| {
-            ProviderError::Parse("Hugging Face returned invalid wallet text.".to_string())
+                .send()
+                .await?;
+            if !response.status().is_success() {
+                return Err(classify_status(response.status()));
+            }
+            let body = read_bounded_body(response, "wallet response").await?;
+            String::from_utf8(body).map_err(|_| {
+                ProviderError::Parse("Hugging Face returned invalid wallet text.".to_string())
+            })
         })
+        .await
+        .map_err(|_| ProviderError::Timeout)?
     }
 
     async fn fetch_optional_json(&self, url: Url, token: &str) -> Option<Value> {
@@ -269,21 +263,7 @@ impl HuggingFaceProvider {
                 return Err(classify_status(status));
             }
 
-            let mut body = Vec::new();
-            let mut stream = response.bytes_stream();
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(|_| {
-                    ProviderError::Parse(
-                        "Hugging Face returned an unreadable JSON body.".to_string(),
-                    )
-                })?;
-                body.extend_from_slice(&chunk);
-                if body.len() > MAX_RESPONSE_BYTES {
-                    return Err(ProviderError::Parse(
-                        "Hugging Face returned an oversized JSON body.".to_string(),
-                    ));
-                }
-            }
+            let body = read_bounded_body(response, "JSON body").await?;
             serde_json::from_slice(&body).map_err(|_| {
                 ProviderError::Parse("Hugging Face returned invalid JSON.".to_string())
             })
@@ -291,6 +271,28 @@ impl HuggingFaceProvider {
         .await
         .map_err(|_| ProviderError::Timeout)?
     }
+}
+
+async fn read_bounded_body(
+    response: reqwest::Response,
+    response_kind: &str,
+) -> Result<Vec<u8>, ProviderError> {
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| {
+            ProviderError::Parse(format!(
+                "Hugging Face returned an unreadable {response_kind}."
+            ))
+        })?;
+        if chunk.len() > MAX_RESPONSE_BYTES.saturating_sub(body.len()) {
+            return Err(ProviderError::Parse(format!(
+                "Hugging Face returned an oversized {response_kind}."
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 impl Default for HuggingFaceProvider {

@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use futures::{StreamExt, stream};
 use reqwest::{Client, StatusCode, redirect::Policy};
 use serde_json::Value;
 use std::time::Duration;
@@ -14,7 +15,9 @@ use crate::core::{
 const BILLING_URL: &str = "https://console.typesafe.ai/settings/billing";
 const ORIGIN: &str = "https://console.typesafe.ai";
 const MAX_CHUNKS: usize = 60;
+const CHUNK_SCAN_CONCURRENCY: usize = 6;
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Debug, Clone, PartialEq)]
 struct Credit {
@@ -55,7 +58,7 @@ impl TypeSafeProvider {
             },
             client: crate::core::credentialed_http_client_builder()
                 .redirect(Policy::none())
-                .timeout(Duration::from_secs(8))
+                .timeout(REQUEST_TIMEOUT)
                 .build()
                 .unwrap_or_else(|_| Client::new()),
         }
@@ -89,24 +92,40 @@ impl TypeSafeProvider {
     }
 
     async fn discover_action(&self, cookie: &str, page: &str) -> Result<String, ProviderError> {
-        for url in extract_chunk_urls(page).into_iter().take(MAX_CHUNKS) {
-            let chunk = self.get(&url, cookie, "application/javascript").await?;
-            if let Some(found) = find_action_id(&chunk) {
-                return Ok(found);
+        let mut chunks = stream::iter(extract_chunk_urls(page))
+            .map(|url| async move { self.get(&url, cookie, "application/javascript").await })
+            .buffer_unordered(CHUNK_SCAN_CONCURRENCY);
+        let mut first_error = None;
+        while let Some(result) = chunks.next().await {
+            match result {
+                Ok(chunk) => {
+                    if let Some(found) = find_action_id(&chunk) {
+                        return Ok(found);
+                    }
+                }
+                Err(error) if first_error.is_none() => first_error = Some(error),
+                Err(_) => {}
             }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
         }
         Err(parse_failure("action id not found"))
     }
 
     async fn get(&self, url: &str, cookie: &str, accept: &str) -> Result<String, ProviderError> {
-        let response = self
-            .client
-            .get(url)
-            .header("Cookie", cookie)
-            .header("Accept", accept)
-            .send()
-            .await?;
-        read_response(response).await
+        tokio::time::timeout(REQUEST_TIMEOUT, async {
+            let response = self
+                .client
+                .get(url)
+                .header("Cookie", cookie)
+                .header("Accept", accept)
+                .send()
+                .await?;
+            read_response(response).await
+        })
+        .await
+        .map_err(|_| ProviderError::Timeout)?
     }
 
     async fn post_action(
@@ -114,27 +133,31 @@ impl TypeSafeProvider {
         cookie: &str,
         action_id: &str,
     ) -> Result<Option<String>, ProviderError> {
-        let response = self
-            .client
-            .post(BILLING_URL)
-            .header("Cookie", cookie)
-            .header("Origin", ORIGIN)
-            .header("Next-Action", action_id)
-            .header("Accept", "text/x-component")
-            .header("Content-Type", "application/json")
-            .body("[]")
-            .send()
-            .await?;
-        if response.status() == StatusCode::NOT_FOUND
-            && response
-                .headers()
-                .get("x-nextjs-action-not-found")
-                .and_then(|value| value.to_str().ok())
-                == Some("1")
-        {
-            return Ok(None);
-        }
-        read_response(response).await.map(Some)
+        tokio::time::timeout(REQUEST_TIMEOUT, async {
+            let response = self
+                .client
+                .post(BILLING_URL)
+                .header("Cookie", cookie)
+                .header("Origin", ORIGIN)
+                .header("Next-Action", action_id)
+                .header("Accept", "text/x-component")
+                .header("Content-Type", "application/json")
+                .body("[]")
+                .send()
+                .await?;
+            if response.status() == StatusCode::NOT_FOUND
+                && response
+                    .headers()
+                    .get("x-nextjs-action-not-found")
+                    .and_then(|value| value.to_str().ok())
+                    == Some("1")
+            {
+                return Ok(None);
+            }
+            read_response(response).await.map(Some)
+        })
+        .await
+        .map_err(|_| ProviderError::Timeout)?
     }
 }
 
@@ -192,12 +215,16 @@ async fn read_response(response: reqwest::Response) -> Result<String, ProviderEr
             "TypeSafe returned HTTP {status}."
         )));
     }
-    let bytes = response.bytes().await?;
-    if bytes.len() > MAX_BODY_BYTES {
-        return Err(parse_failure("response too large"));
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if chunk.len() > MAX_BODY_BYTES.saturating_sub(body.len()) {
+            return Err(parse_failure("response too large"));
+        }
+        body.extend_from_slice(&chunk);
     }
-    let body =
-        String::from_utf8(bytes.to_vec()).map_err(|_| parse_failure("response was not UTF-8"))?;
+    let body = String::from_utf8(body).map_err(|_| parse_failure("response was not UTF-8"))?;
     if body.contains("\\\"(auth)\\\",{\\\"children\\\":[\\\"login\\\"") {
         return Err(ProviderError::AuthRequired);
     }
@@ -245,7 +272,10 @@ fn extract_chunk_urls(html: &str) -> Vec<String> {
 
 fn find_action_id(chunk: &str) -> Option<String> {
     let marker = chunk.find("getBillingOverviewResult")?;
-    let prefix = &chunk[marker.saturating_sub(200)..marker];
+    let start = (marker.saturating_sub(200)..=marker)
+        .find(|index| chunk.is_char_boundary(*index))
+        .unwrap_or(marker);
+    let prefix = &chunk[start..marker];
     prefix.split('"').rev().find_map(|candidate| {
         (candidate.len() >= 40 && candidate.chars().all(|ch| ch.is_ascii_hexdigit()))
             .then(|| candidate.to_string())
@@ -292,6 +322,9 @@ fn parse_rsc_billing(body: &str) -> Result<Billing, ProviderError> {
                 .and_then(Value::as_str)
                 .and_then(|value| DateTime::parse_from_rfc3339(value).ok())?
                 .with_timezone(&Utc);
+            if expires_at <= Utc::now() {
+                return None;
+            }
             Some(Credit {
                 amount,
                 remaining,
@@ -433,8 +466,21 @@ mod tests {
     }
 
     #[test]
+    fn action_discovery_handles_multibyte_text_at_scan_boundary() {
+        let id = "b".repeat(40);
+        let chunk = format!(
+            "{}\u{00e9}{}x(\"{id}\")getBillingOverviewResult",
+            "x".repeat(10),
+            "x".repeat(154)
+        );
+        let marker = chunk.find("getBillingOverviewResult").unwrap();
+        assert!(!chunk.is_char_boundary(marker - 200));
+        assert_eq!(find_action_id(&chunk).as_deref(), Some(id.as_str()));
+    }
+
+    #[test]
     fn parses_billing_result_and_skips_expired_or_empty_credits() {
-        let body = r#"1:{"ok":true,"data":{"billing":{"spent":4.5,"balance":10,"cycleLabel":"September","plan":"free_plan","credits":[{"amount":8,"remaining":3,"expiresAt":"2030-01-02T00:00:00Z"},{"amount":1,"remaining":0,"expiresAt":"2030-01-02T00:00:00Z"}]}}}"#;
+        let body = r#"1:{"ok":true,"data":{"billing":{"spent":4.5,"balance":10,"cycleLabel":"September","plan":"free_plan","credits":[{"amount":8,"remaining":3,"expiresAt":"2100-01-02T00:00:00Z"},{"amount":1,"remaining":0,"expiresAt":"2100-01-02T00:00:00Z"},{"amount":5,"remaining":2,"expiresAt":"2000-01-02T00:00:00Z"}]}}}"#;
         let parsed = parse_rsc_billing(body).unwrap();
         assert_eq!(parsed.spent, 4.5);
         assert_eq!(parsed.balance, 10.0);
