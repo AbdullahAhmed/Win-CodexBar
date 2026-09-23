@@ -16,12 +16,14 @@
 //! and suppresses blur-dismiss so the window stays visible for automated
 //! screenshot capture.
 //!
-//! `CODEXBAR_SEED_USAGE_JSON=<abs-path>` additionally seeds one synthetic,
-//! bridge-shaped Codex [`ProviderUsageSnapshot`] into the provider cache at
-//! launch (before the first event/WebView read) and pins it against refresh
-//! eviction for the run. Malformed files log a warning and the shell
-//! continues without seeding — proof runs must never crash on the seed.
+//! `CODEXBAR_SEED_USAGE_JSON=<abs-path>` additionally seeds either the legacy
+//! synthetic Codex [`ProviderUsageSnapshot`] object or, in valid proof mode,
+//! a nonempty array of unique supported provider snapshots. The validated set
+//! is installed before the first event/WebView read and pinned against refresh
+//! eviction. Malformed files log a warning and the shell continues without
+//! seeding — proof runs must never crash on the seed.
 
+use std::collections::HashSet;
 use std::sync::Mutex;
 
 use serde::Serialize;
@@ -256,22 +258,37 @@ pub fn is_proof_mode(app: &AppHandle) -> bool {
 // ── Provider-usage seed (CODEXBAR_SEED_USAGE_JSON) ───────────────────
 
 /// Environment variable pointing at a JSON file with one synthetic,
-/// bridge-shaped `ProviderUsageSnapshot` for the codex provider.
+/// bridge-shaped Codex snapshot or a proof-only array of provider snapshots.
 pub const SEED_USAGE_ENV_VAR: &str = "CODEXBAR_SEED_USAGE_JSON";
 
 /// Whether a seed path was configured at launch. While set, the provider
 /// cache is pinned fresh so the synthetic snapshot is never evicted by an
 /// automatic refresh during a proof/capture run.
 pub fn seed_usage_json_active() -> bool {
-    std::env::var_os(SEED_USAGE_ENV_VAR).is_some()
+    let Some(path) = std::env::var_os(SEED_USAGE_ENV_VAR) else {
+        return false;
+    };
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return true;
+    };
+    if raw.trim_start().starts_with('[') {
+        let proof_config = ProofConfig::from_env();
+        proof_config.as_ref().is_some_and(is_valid_proof_config)
+            && parse_seed_usage_snapshots(&raw, proof_config.as_ref()).is_ok()
+    } else {
+        // Preserve the legacy object's existing pin behavior.
+        true
+    }
 }
 
 /// Read and validate the seed file referenced by `CODEXBAR_SEED_USAGE_JSON`.
 ///
 /// Returns `None` (with a warn, never a crash) when the variable is unset,
-/// the file is unreadable, the JSON is malformed, or the snapshot is not
-/// for the `codex` provider.
-pub fn seed_usage_snapshot_from_env() -> Option<ProviderUsageSnapshot> {
+/// the file is unreadable, or the seed does not satisfy the selected legacy
+/// object or proof-only array contract.
+pub fn seed_usage_snapshots_from_env(
+    proof_config: Option<&ProofConfig>,
+) -> Option<Vec<ProviderUsageSnapshot>> {
     let path = std::env::var_os(SEED_USAGE_ENV_VAR)?;
     let path = std::path::PathBuf::from(path);
     let raw = match std::fs::read_to_string(&path) {
@@ -284,8 +301,8 @@ pub fn seed_usage_snapshot_from_env() -> Option<ProviderUsageSnapshot> {
             return None;
         }
     };
-    match parse_seed_usage_snapshot(&raw) {
-        Ok(snapshot) => Some(snapshot),
+    match parse_seed_usage_snapshots(&raw, proof_config) {
+        Ok(snapshots) => Some(snapshots),
         Err(msg) => {
             tracing::warn!("{SEED_USAGE_ENV_VAR}: {msg} in {}", path.display());
             None
@@ -315,6 +332,58 @@ pub fn parse_seed_usage_snapshot(json: &str) -> Result<ProviderUsageSnapshot, St
         ));
     }
 
+    normalize_seed_snapshot(&mut snapshot);
+
+    Ok(snapshot)
+}
+
+/// Parse legacy Codex objects unchanged, or a provider array when proof mode
+/// has already been validated. Arrays are all-or-nothing and use canonical
+/// provider IDs emitted by the bridge.
+pub fn parse_seed_usage_snapshots(
+    json: &str,
+    proof_config: Option<&ProofConfig>,
+) -> Result<Vec<ProviderUsageSnapshot>, String> {
+    if !json.trim_start().starts_with('[') {
+        return parse_seed_usage_snapshot(json).map(|snapshot| vec![snapshot]);
+    }
+    if !proof_config.is_some_and(is_valid_proof_config) {
+        return Err("provider snapshot arrays require valid proof mode".into());
+    }
+
+    let values: Vec<serde_json::Value> =
+        serde_json::from_str(json).map_err(|e| format!("malformed JSON: {e}"))?;
+    if values.is_empty() {
+        return Err("provider snapshot array must not be empty".into());
+    }
+
+    let mut providers = HashSet::with_capacity(values.len());
+    let mut snapshots = Vec::with_capacity(values.len());
+    for value in values {
+        if json_value_has_non_finite_number(&value) {
+            return Err("provider snapshot contains a non-finite number".into());
+        }
+        let mut snapshot: ProviderUsageSnapshot = serde_json::from_value(value)
+            .map_err(|e| format!("malformed provider snapshot: {e}"))?;
+        if !is_supported_provider_id(&snapshot.provider_id) {
+            return Err(format!(
+                "unsupported snapshot providerId '{}', ignoring",
+                snapshot.provider_id
+            ));
+        }
+        if !providers.insert(snapshot.provider_id.clone()) {
+            return Err(format!(
+                "duplicate snapshot providerId '{}', ignoring",
+                snapshot.provider_id
+            ));
+        }
+        normalize_seed_snapshot(&mut snapshot);
+        snapshots.push(snapshot);
+    }
+    Ok(snapshots)
+}
+
+fn normalize_seed_snapshot(snapshot: &mut ProviderUsageSnapshot) {
     normalize_rate_window(&mut snapshot.primary);
     snapshot.secondary.as_mut().map(normalize_rate_window);
     snapshot.model_specific.as_mut().map(normalize_rate_window);
@@ -327,8 +396,17 @@ pub fn parse_seed_usage_snapshot(json: &str) -> Result<ProviderUsageSnapshot, St
     if snapshot.updated_at.is_empty() {
         snapshot.updated_at = chrono::Utc::now().to_rfc3339();
     }
+}
 
-    Ok(snapshot)
+fn json_value_has_non_finite_number(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Number(number) => {
+            number.as_f64().is_some_and(|value| !value.is_finite())
+        }
+        serde_json::Value::Array(values) => values.iter().any(json_value_has_non_finite_number),
+        serde_json::Value::Object(values) => values.values().any(json_value_has_non_finite_number),
+        _ => false,
+    }
 }
 
 /// Recompute `remaining_percent` from `used_percent` (matching the canonical
@@ -594,4 +672,75 @@ mod tests {
         assert_eq!(cost.period, "month");
         assert_eq!(cost.formatted_used, "$12.50");
     }
+
+    fn valid_proof_config() -> ProofConfig {
+        ProofConfig {
+            target_surface: "trayPanel".into(),
+            settings_tab: None,
+            target_payload: None,
+        }
+    }
+
+    fn seed_snapshot(provider_id: &str, used_percent: f64) -> serde_json::Value {
+        serde_json::json!({
+            "providerId": provider_id,
+            "primary": { "usedPercent": used_percent, "windowMinutes": 300 }
+        })
+    }
+
+    #[test]
+    fn seed_snapshot_arrays_preserve_legacy_codex_object_behavior() {
+        let json = seed_snapshot("codex", 61.0).to_string();
+        let snapshots = parse_seed_usage_snapshots(&json, None).expect("legacy seed parses");
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].provider_id, "codex");
+        assert_eq!(snapshots[0].primary.remaining_percent, 39.0);
+    }
+
+    #[test]
+    fn seed_snapshot_array_normalizes_multiple_supported_providers() {
+        let json = serde_json::json!([seed_snapshot("codex", 61.0), seed_snapshot("claude", 24.0)])
+            .to_string();
+        let snapshots = parse_seed_usage_snapshots(&json, Some(&valid_proof_config()))
+            .expect("supported snapshots parse in proof mode");
+
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].provider_id, "codex");
+        assert_eq!(snapshots[0].primary.remaining_percent, 39.0);
+        assert_eq!(snapshots[1].provider_id, "claude");
+        assert_eq!(snapshots[1].primary.remaining_percent, 76.0);
+        assert!(
+            snapshots
+                .iter()
+                .all(|snapshot| !snapshot.updated_at.is_empty())
+        );
+    }
+
+    #[test]
+    fn seed_snapshot_arrays_reject_empty_unknown_duplicate_and_non_finite_values() {
+        let proof = valid_proof_config();
+        for json in [
+            "[]".to_string(),
+            serde_json::json!([seed_snapshot("unknown-provider", 1.0)]).to_string(),
+            serde_json::json!([seed_snapshot("codex", 1.0), seed_snapshot("codex", 2.0)])
+                .to_string(),
+            r#"[{"providerId":"codex","primary":{"usedPercent":1e400}}]"#.to_string(),
+        ] {
+            assert!(
+                parse_seed_usage_snapshots(&json, Some(&proof)).is_err(),
+                "{json}"
+            );
+        }
+    }
+
+    #[test]
+    fn seed_snapshot_arrays_are_rejected_without_valid_proof_config() {
+        let json = serde_json::json!([seed_snapshot("codex", 10.0)]).to_string();
+        assert!(parse_seed_usage_snapshots(&json, None).is_err());
+    }
+}
+
+fn is_valid_proof_config(config: &ProofConfig) -> bool {
+    SurfaceMode::parse(&config.target_surface)
+        .is_some_and(|mode| proof_payload_is_supported(mode, config.target_payload.as_deref()))
 }
