@@ -204,9 +204,7 @@ impl SettingsUpdate {
     fn apply_general_settings(self, settings: &mut Settings) -> Result<Self, String> {
         if let Some(value) = self.preferred_currency_code.as_deref() {
             let normalized = codexbar::currency::normalize_preferred_currency(value);
-            if !value.trim().eq_ignore_ascii_case("AUTO")
-                && normalized == "AUTO"
-            {
+            if !value.trim().eq_ignore_ascii_case("AUTO") && normalized == "AUTO" {
                 return Err(format!("Unsupported preferred currency: {value}"));
             }
             settings.preferred_currency_code = normalized;

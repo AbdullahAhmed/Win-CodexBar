@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 pub const SUPPORTED_CURRENCY_CODES: &[&str] = &[
-    "USD", "GBP", "EUR", "CZK", "CNY", "JPY", "KRW", "CAD", "AUD", "HKD", "TWD", "SGD",
-    "INR", "CHF", "AED", "TRY",
+    "USD", "GBP", "EUR", "CZK", "CNY", "JPY", "KRW", "CAD", "AUD", "HKD", "TWD", "SGD", "INR",
+    "CHF", "AED", "TRY",
 ];
 
 pub const FALLBACK_RATES: &[(&str, f64)] = &[
@@ -47,9 +47,7 @@ pub fn fallback_rates() -> HashMap<String, f64> {
 /// for currencies the display converter knows how to format.
 pub fn parse_exchange_rates(payload: &[u8]) -> Option<HashMap<String, f64>> {
     let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
-    if value.get("result")?.as_str()? != "success"
-        || value.get("base_code")?.as_str()? != "USD"
-    {
+    if value.get("result")?.as_str()? != "success" || value.get("base_code")?.as_str()? != "USD" {
         return None;
     }
     let rates = value.get("rates")?.as_object()?;
@@ -62,7 +60,10 @@ pub fn parse_exchange_rates(payload: &[u8]) -> Option<HashMap<String, f64>> {
             parsed.insert((*code).to_string(), rate);
         }
     }
-    if parsed.get("USD").is_none_or(|rate| (*rate - 1.0).abs() > f64::EPSILON) {
+    if parsed
+        .get("USD")
+        .is_none_or(|rate| (*rate - 1.0).abs() > f64::EPSILON)
+    {
         return None;
     }
     Some(parsed)
@@ -89,8 +90,16 @@ pub fn convert_amount(
     if source == target {
         return Some(amount);
     }
-    let source_rate = if source == "USD" { 1.0 } else { *rates.get(&source)? };
-    let target_rate = if target == "USD" { 1.0 } else { *rates.get(&target)? };
+    let source_rate = if source == "USD" {
+        1.0
+    } else {
+        *rates.get(&source)?
+    };
+    let target_rate = if target == "USD" {
+        1.0
+    } else {
+        *rates.get(&target)?
+    };
     if !source_rate.is_finite()
         || source_rate <= 0.0
         || !target_rate.is_finite()
@@ -114,7 +123,10 @@ pub async fn fetch_exchange_rates() -> Result<HashMap<String, f64>, String> {
         .await
         .map_err(|error| error.to_string())?;
     if !response.status().is_success() {
-        return Err(format!("Exchange rate service returned HTTP {}", response.status()));
+        return Err(format!(
+            "Exchange rate service returned HTTP {}",
+            response.status()
+        ));
     }
     let payload = response.bytes().await.map_err(|error| error.to_string())?;
     parse_exchange_rates(&payload).ok_or_else(|| "Invalid USD exchange-rate response".to_string())
@@ -144,14 +156,14 @@ mod tests {
         assert!(!rates.contains_key("JPY"));
         assert!(!rates.contains_key("CAD"));
         assert!(!rates.contains_key("BTC"));
-        assert!(parse_exchange_rates(
-            br#"{"result":"error","base_code":"USD","rates":{"USD":1}}"#
-        )
-        .is_none());
-        assert!(parse_exchange_rates(
-            br#"{"result":"success","base_code":"EUR","rates":{"USD":1}}"#
-        )
-        .is_none());
+        assert!(
+            parse_exchange_rates(br#"{"result":"error","base_code":"USD","rates":{"USD":1}}"#)
+                .is_none()
+        );
+        assert!(
+            parse_exchange_rates(br#"{"result":"success","base_code":"EUR","rates":{"USD":1}}"#)
+                .is_none()
+        );
     }
 
     #[test]

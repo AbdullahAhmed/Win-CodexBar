@@ -64,7 +64,9 @@ pub async fn get_currency_rates(
                     state.persisted = Some(entry);
                     crate::tray_bridge::refresh_tray_presentation(&app);
                 }
-                Err(error) => tracing::debug!(%error, "currency rates unavailable; using cached or offline rates"),
+                Err(error) => {
+                    tracing::debug!(%error, "currency rates unavailable; using cached or offline rates")
+                }
             }
         }
     }
@@ -75,9 +77,8 @@ pub async fn get_currency_rates(
 }
 
 pub(crate) fn convert_preferred_amount(amount: f64, source_code: &str) -> Option<(f64, String)> {
-    let preferred = normalize_preferred_currency(
-        &codexbar::settings::Settings::load().preferred_currency_code,
-    );
+    let preferred =
+        normalize_preferred_currency(&codexbar::settings::Settings::load().preferred_currency_code);
     if preferred == "AUTO" {
         return None;
     }
@@ -109,7 +110,10 @@ fn clean_rates(rates: HashMap<String, f64>) -> HashMap<String, f64> {
             clean.insert((*code).to_string(), rate);
         }
     }
-    if clean.get("USD").is_none_or(|rate| (*rate - 1.0).abs() > f64::EPSILON) {
+    if clean
+        .get("USD")
+        .is_none_or(|rate| (*rate - 1.0).abs() > f64::EPSILON)
+    {
         return HashMap::new();
     }
     clean
@@ -157,7 +161,11 @@ mod tests {
         let rates = fallback_rates();
         assert_eq!(rates.len(), FALLBACK_RATES.len());
         for code in SUPPORTED_CURRENCY_CODES {
-            assert!(rates.get(*code).is_some_and(|rate| rate.is_finite() && *rate > 0.0));
+            assert!(
+                rates
+                    .get(*code)
+                    .is_some_and(|rate| rate.is_finite() && *rate > 0.0)
+            );
         }
     }
 
