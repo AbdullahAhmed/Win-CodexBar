@@ -3276,5 +3276,11 @@ fn incomplete_or_buffered_empty_codex_fragment_is_not_marked_complete() {
 }
 
 #[cfg(test)]
+#[path = "tests/copied_prefix.rs"]
+mod copied_prefix;
+#[cfg(test)]
+#[path = "tests/lineage_cache.rs"]
+mod lineage_cache;
+#[cfg(test)]
 #[path = "tests/paginated.rs"]
 mod paginated;

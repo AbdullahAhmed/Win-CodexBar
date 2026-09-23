@@ -197,43 +197,70 @@ pub(super) fn scan_codex_detailed_with_cache(
     let mut bytes_read_this_refresh = 0_i64;
     let mut pending_next = cache.codex_pending_paths.clone();
     let pending_paths_before_pass = cache.codex_pending_paths.clone();
+    let mut invalidated_unsafe_lineage = false;
     prioritize_codex_pending_candidates(&mut candidates, &pending_paths_before_pass);
+    defer_codex_locally_inferred_candidates(&mut candidates, &cache);
     if discovery_complete && !is_cancelled(cancel) {
         pending_next
             .retain(|path| !cached_codex_file_is_complete_for_range(&cache, path, scan_range));
     }
 
-    let mut incomplete_processed = Vec::new();
-    for (index, candidate) in candidates.iter().enumerate() {
-        if is_cancelled(cancel)
-            || index >= candidate_limit
-            || bytes_read_this_refresh >= refresh_byte_limit
-        {
-            for deferred in &candidates[index..] {
-                let key = deferred.path.to_string_lossy().to_string();
-                if !pending_next.contains(&key) {
-                    pending_next.push(key);
-                }
-            }
-            stats.files_deferred = stats.files_deferred.saturating_add(
-                u32::try_from((candidates.len() - index).min(u32::MAX as usize))
-                    .unwrap_or(u32::MAX),
-            );
-            break;
+    // Admit one bounded set, inspect each admitted candidate once, and order
+    // that set by lineage before reading token history. This makes cold
+    // child-before-parent scans parent-first without a second parse pass.
+    let deferred_candidates = candidates.split_off(candidate_limit.min(candidates.len()));
+    let deferred_paths = deferred_candidates
+        .into_iter()
+        .map(|candidate| candidate.path)
+        .collect::<Vec<_>>();
+    let mut work_queue = Vec::with_capacity(candidates.len());
+    let mut cancelled_during_preparation = Vec::new();
+    for candidate in candidates {
+        if is_cancelled(cancel) {
+            cancelled_during_preparation.push(candidate.path);
+            continue;
         }
+        let key = candidate.path.to_string_lossy().to_string();
+        stats.files_seen = stats.files_seen.saturating_add(1);
+        stats.codex_metadata_read_paths.push(key);
+        stats.codex_read_receipt.metadata_reads =
+            stats.codex_read_receipt.metadata_reads.saturating_add(1);
+        work_queue.push(CodexPreparedCandidate {
+            session_metadata: JsonlScanner::read_codex_session_metadata(&candidate.path)
+                .unwrap_or_default(),
+            path: candidate.path,
+            lineage_gate: CodexLineageGate::Eligible,
+            parent_owner_expected: false,
+        });
+    }
+    let mut unprocessed = Vec::new();
+    if !cancelled_during_preparation.is_empty() || is_cancelled(cancel) {
+        unprocessed.extend(work_queue.drain(..).map(|candidate| candidate.path));
+        unprocessed.extend(cancelled_during_preparation);
+    } else {
+        let unsafe_cached_paths =
+            CodexLineagePlanner::plan_candidates_by_lineage(&cache, &mut work_queue);
+        invalidated_unsafe_lineage = !unsafe_cached_paths.is_empty();
+        if invalidated_unsafe_lineage {
+            cache.previous_report = None;
+        }
+        invalidate_codex_unsafe_lineage(&mut cache, &unsafe_cached_paths);
+        for path in unsafe_cached_paths {
+            if !pending_next.contains(&path) {
+                pending_next.push(path);
+            }
+        }
+    }
 
+    let mut incomplete_processed = Vec::new();
+    for (index, candidate) in work_queue.iter().enumerate() {
         let refresh_remaining = refresh_byte_limit.saturating_sub(bytes_read_this_refresh);
         let allowance = per_file_limit.min(refresh_remaining);
-        if allowance <= 0 {
-            for deferred in &candidates[index..] {
-                let key = deferred.path.to_string_lossy().to_string();
-                if !pending_next.contains(&key) {
-                    pending_next.push(key);
-                }
-            }
-            stats.files_deferred = stats.files_deferred.saturating_add(
-                u32::try_from((candidates.len() - index).min(u32::MAX as usize))
-                    .unwrap_or(u32::MAX),
+        if is_cancelled(cancel) || allowance <= 0 {
+            unprocessed.extend(
+                work_queue[index..]
+                    .iter()
+                    .map(|candidate| candidate.path.clone()),
             );
             break;
         }
@@ -246,6 +273,7 @@ pub(super) fn scan_codex_detailed_with_cache(
             cancel,
             &mut stats,
             Some(allowance),
+            Some(candidate),
         );
         bytes_read_this_refresh = bytes_read_this_refresh.saturating_add(outcome.bytes_read.max(0));
         stats.codex_bytes_read = stats
@@ -273,6 +301,16 @@ pub(super) fn scan_codex_detailed_with_cache(
             stats.files_deferred = stats.files_deferred.saturating_add(1);
         } else if let Some(plan) = codex_source_row_plan(&cache, &candidate.path, scan_range) {
             apply_codex_source_row_plan(&mut cache, &key, plan);
+        }
+    }
+    unprocessed.extend(deferred_paths);
+    stats.files_deferred = stats.files_deferred.saturating_add(
+        u32::try_from(unprocessed.len().min(u32::MAX as usize)).unwrap_or(u32::MAX),
+    );
+    for path in unprocessed {
+        let key = path.to_string_lossy().to_string();
+        if !pending_next.contains(&key) {
+            pending_next.push(key);
         }
     }
     pending_next.extend(incomplete_processed);
@@ -344,7 +382,7 @@ pub(super) fn scan_codex_detailed_with_cache(
             // the range so unchanged files stay on the cache fast path.
             cache.scan_since_key = Some(scan_range.scan_since_key.clone());
             cache.scan_until_key = Some(scan_range.scan_until_key.clone());
-        } else if cache.previous_report.is_none() {
+        } else if cache.previous_report.is_none() && !invalidated_unsafe_lineage {
             cache.previous_report = established_report_before_scan;
         }
         if !is_cancelled(cancel) {
