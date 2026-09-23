@@ -2,11 +2,12 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use futures::{StreamExt, stream};
+use futures::stream;
 use reqwest::{Client, StatusCode, redirect::Policy};
 use serde_json::Value;
 use std::time::Duration;
 
+use super::{BoundedBodyError, read_bounded_response};
 use crate::core::{
     CostSnapshot, FetchContext, Provider, ProviderDisplayDetail, ProviderError,
     ProviderFetchResult, ProviderId, ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
@@ -215,15 +216,12 @@ async fn read_response(response: reqwest::Response) -> Result<String, ProviderEr
             "TypeSafe returned HTTP {status}."
         )));
     }
-    let mut body = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        if chunk.len() > MAX_BODY_BYTES.saturating_sub(body.len()) {
-            return Err(parse_failure("response too large"));
-        }
-        body.extend_from_slice(&chunk);
-    }
+    let body = read_bounded_response(response, MAX_BODY_BYTES)
+        .await
+        .map_err(|error| match error {
+            BoundedBodyError::TooLarge => parse_failure("response too large"),
+            BoundedBodyError::Read(error) => ProviderError::Network(error),
+        })?;
     let body = String::from_utf8(body).map_err(|_| parse_failure("response was not UTF-8"))?;
     if body.contains("\\\"(auth)\\\",{\\\"children\\\":[\\\"login\\\"") {
         return Err(ProviderError::AuthRequired);

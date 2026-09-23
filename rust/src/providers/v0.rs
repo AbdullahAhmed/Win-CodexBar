@@ -10,10 +10,12 @@ use crate::core::{
     FetchContext, Provider, ProviderDisplayDetail, ProviderError, ProviderFetchResult, ProviderId,
     ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
 };
+use crate::providers::{BoundedBodyError, read_bounded_response};
 
 const API_BASE: &str = "https://api.v0.dev/v1";
 const CREDENTIAL_TARGET: &str = "codexbar-v0";
 const ENV_KEYS: &[&str] = &["V0_API_KEY"];
+const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 struct Quota {
@@ -100,11 +102,14 @@ impl V0Provider {
         }
         let response = self.client.get(url).bearer_auth(api_key).send().await?;
         classify_status(response.status())?;
-        response.json().await.map_err(|_| {
-            ProviderError::Parse(format!(
-                "Could not parse v0 usage: {path} returned invalid JSON"
-            ))
-        })
+        let body = read_bounded_response(response, MAX_RESPONSE_BYTES)
+            .await
+            .map_err(|error| match error {
+                BoundedBodyError::TooLarge => parse_failure(format!("{path} response too large")),
+                BoundedBodyError::Read(_) => parse_failure(format!("{path} returned invalid JSON")),
+            })?;
+        serde_json::from_slice(&body)
+            .map_err(|_| parse_failure(format!("{path} returned invalid JSON")))
     }
 }
 

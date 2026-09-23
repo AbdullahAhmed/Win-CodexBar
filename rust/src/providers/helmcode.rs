@@ -10,6 +10,9 @@ use crate::core::{
     CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId,
     ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
 };
+use crate::providers::{BoundedBodyError, read_bounded_response};
+
+const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tenant {
@@ -213,10 +216,13 @@ impl HelmcodeProvider {
                 "Helmcode dashboard returned HTTP {status}."
             )));
         }
-        let value = response
-            .json()
+        let body = read_bounded_response(response, MAX_RESPONSE_BYTES)
             .await
-            .map_err(|_| parse_failure("invalid JSON"))?;
+            .map_err(|error| match error {
+                BoundedBodyError::TooLarge => parse_failure("response too large"),
+                BoundedBodyError::Read(_) => parse_failure("invalid JSON"),
+            })?;
+        let value = serde_json::from_slice(&body).map_err(|_| parse_failure("invalid JSON"))?;
         Ok(Some(value))
     }
 }
