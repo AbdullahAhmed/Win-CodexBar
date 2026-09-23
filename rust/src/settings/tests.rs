@@ -1144,7 +1144,6 @@ fn provider_aliases_are_canonicalized_at_the_load_boundary() {
                 "not-a-provider": "weekly"
             },
             "float_bar_provider_ids": ["OPENAI", "codex", "ClAuDe", "unknown"],
-            "enabled_providers": ["claude"],
             "stacked_tray_top_provider": "OPENAI",
             "stacked_tray_bottom_provider": "ClAuDe"
         }"#,
@@ -1166,6 +1165,21 @@ fn provider_aliases_are_canonicalized_at_the_load_boundary() {
         settings.stacked_tray_bottom_provider.as_deref(),
         Some("claude")
     );
+}
+
+#[test]
+fn stacked_preferences_preserve_known_disabled_providers() {
+    let settings: Settings = serde_json::from_str(
+        r#"{
+            "enabled_providers": ["claude"],
+            "stacked_tray_top_provider": "OPENAI",
+            "stacked_tray_bottom_provider": "not-a-provider"
+        }"#,
+    )
+    .expect("load stacked preferences independently of enablement");
+
+    assert_eq!(settings.stacked_tray_top_provider.as_deref(), Some("codex"));
+    assert_eq!(settings.stacked_tray_bottom_provider, None);
     assert_eq!(
         settings.enabled_providers,
         HashSet::from(["claude".to_string()])
