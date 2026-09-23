@@ -75,17 +75,12 @@ impl V0Provider {
                     .map(|value| value.trim().to_string())
                     .filter(|value| !value.is_empty())
             });
-        let billing = parse_billing(
-            &self
-                .get_json("/user/billing", scope.as_deref(), &api_key)
-                .await?,
-        )?;
-        let rate_limit = parse_quota(
-            &self
-                .get_json("/rate-limits", scope.as_deref(), &api_key)
-                .await?,
-            "rate limit response",
-        )?;
+        let (billing_result, rate_limit_result) = tokio::join!(
+            self.get_json("/user/billing", scope.as_deref(), &api_key),
+            self.get_json("/rate-limits", scope.as_deref(), &api_key),
+        );
+        let billing = parse_billing(&billing_result?)?;
+        let rate_limit = parse_quota(&rate_limit_result?, "rate limit response")?;
         Ok(build_result(billing, rate_limit, scope.as_deref()))
     }
 
@@ -184,14 +179,9 @@ fn parse_billing(value: &Value) -> Result<Billing, ProviderError> {
                 .get("balance")
                 .and_then(Value::as_object)
                 .ok_or_else(|| parse_failure("billing.data.balance"))?;
-            let total = finite_number(balance.get("total"), "billing.data.balance.total")?;
+            let total = nonnegative_number(balance.get("total"), "billing.data.balance.total")?;
             let remaining =
                 nonnegative_number(balance.get("remaining"), "billing.data.balance.remaining")?;
-            if total < 0.0 {
-                return Err(parse_failure(
-                    "billing.data.balance.total must not be negative",
-                ));
-            }
             let resets_at = match data.get("billingCycle").and_then(Value::as_object) {
                 Some(cycle) => parse_reset(cycle.get("end"))?,
                 None => None,
@@ -221,10 +211,7 @@ fn parse_billing(value: &Value) -> Result<Billing, ProviderError> {
 
 fn parse_quota(value: &Value, field: &str) -> Result<Quota, ProviderError> {
     let object = value.as_object().ok_or_else(|| parse_failure(field))?;
-    let limit = finite_number(object.get("limit"), &format!("{field}.limit"))?;
-    if limit < 0.0 {
-        return Err(parse_failure(format!("{field}.limit must not be negative")));
-    }
+    let limit = nonnegative_number(object.get("limit"), &format!("{field}.limit"))?;
     let remaining =
         optional_nonnegative_number(object.get("remaining"), &format!("{field}.remaining"))?;
     Ok(Quota {
@@ -374,14 +361,37 @@ mod tests {
             "data": {"balance": {"total": 100, "remaining": 75}, "billingCycle": {"end": 1_800_000_000}, "onDemand": {"balance": 12.5}}
         })).unwrap();
         assert_eq!(billing.quota.used_percent, Some(25.0));
+        assert_eq!(billing.quota.limit, 100.0);
         assert_eq!(billing.on_demand_balance, Some(12.5));
         let unknown = parse_quota(
             &json!({"limit": 50, "remaining": null, "reset": null}),
             "rate",
         )
         .unwrap();
+        assert_eq!(unknown.limit, 50.0);
         assert_eq!(unknown.used_percent, None);
         assert_eq!(unknown.remaining, None);
+    }
+
+    #[test]
+    fn rejects_negative_token_total_and_accepts_zero_limits() {
+        assert!(
+            parse_billing(&json!({
+                "billingType": "token",
+                "data": {"balance": {"total": -1, "remaining": 0}}
+            }))
+            .is_err()
+        );
+
+        let zero_billing = parse_billing(&json!({
+            "billingType": "token",
+            "data": {"balance": {"total": 0, "remaining": 0}}
+        }))
+        .unwrap();
+        assert_eq!(zero_billing.quota.limit, 0.0);
+
+        let zero_quota = parse_quota(&json!({"limit": 0, "remaining": 0}), "rate").unwrap();
+        assert_eq!(zero_quota.limit, 0.0);
     }
 
     #[test]
