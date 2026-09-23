@@ -10,9 +10,12 @@ use chrono::{DateTime, Duration, Local, TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior, types::ValueRef};
 
 use self::local_bot_id::{ExactStepTimestamp, embedded_timestamps_agree, record_exact_bot_id};
+use super::cost::estimate_cost_usd;
 use super::local_proto::{ParsedTurn, parse_step_metadata, parse_turn};
-use super::local_sessions::{LocalHistoryCoverage, LocalSessionSummary};
 use super::local_step_resolver::{StepOccurrence, resolve_step_timestamps};
+#[cfg(test)]
+use crate::spend_contract::LocalTokenHistorySummary as LocalSessionSummary;
+use crate::spend_contract::{LocalHistoryCoverage, LocalTokenHistorySummary};
 
 const MAX_DATABASES: usize = 500;
 const MAX_DIRECTORY_ENTRIES: usize = 10_000;
@@ -34,7 +37,7 @@ pub(super) enum SQLiteScan {
     /// This is non-authoritative: callers may continue with another local
     /// history source instead of treating the scan as known-empty history.
     Unsupported,
-    Summary(LocalSessionSummary),
+    Summary(LocalTokenHistorySummary),
 }
 
 #[derive(Debug)]
@@ -262,7 +265,7 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
             let input = usage.system_prompt.checked_add(usage.new_input);
             let output = usage.output.checked_add(usage.reasoning);
             if let (Some(input), Some(output)) = (input, output) {
-                super::local_sessions::estimate_cost_usd(model, input, usage.cache_read, 0, output)
+                estimate_cost_usd(model, input, usage.cache_read, 0, output)
             } else {
                 None
             }
@@ -271,7 +274,7 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
         sessions.insert(event.session);
     }
 
-    SQLiteScan::Summary(LocalSessionSummary {
+    SQLiteScan::Summary(LocalTokenHistorySummary {
         total_tokens,
         session_count: sessions.len(),
         coverage: if complete {
@@ -389,10 +392,10 @@ fn read_database(path: &Path, budget: &mut Budget) -> rusqlite::Result<DatabaseS
     }
 
     let session = path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("unknown")
-        .to_string();
+        .canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
     let mut rows = read_generation_rows(&tx, &session, budget)?;
     if rows.pending.is_empty() {
         return Ok(DatabaseScan::Supported {
@@ -849,6 +852,48 @@ mod tests {
     use super::*;
     use rusqlite::params;
 
+    fn varint(mut value: u64) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        loop {
+            let mut byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            bytes.push(byte);
+            if value == 0 {
+                return bytes;
+            }
+        }
+    }
+
+    fn field_varint(number: u64, value: u64) -> Vec<u8> {
+        let mut bytes = varint(number << 3);
+        bytes.extend(varint(value));
+        bytes
+    }
+
+    fn field_bytes(number: u64, value: &[u8]) -> Vec<u8> {
+        let mut bytes = varint((number << 3) | 2);
+        bytes.extend(varint(value.len() as u64));
+        bytes.extend(value);
+        bytes
+    }
+
+    fn valid_turn_blob(input: u64, timestamp_seconds: u64) -> Vec<u8> {
+        let mut usage = field_varint(1, 11);
+        usage.extend(field_varint(2, input));
+        usage.extend(field_varint(5, 50));
+        usage.extend(field_varint(9, 30));
+        usage.extend(field_varint(10, 7));
+
+        let mut timestamp = field_varint(1, timestamp_seconds);
+        timestamp.extend(field_varint(2, 0));
+        let mut chat = field_bytes(4, &usage);
+        chat.extend(field_bytes(9, &field_bytes(4, &timestamp)));
+        field_bytes(1, &chat)
+    }
+
     #[test]
     fn missing_databases_falls_through() {
         let dir = tempfile::tempdir().unwrap();
@@ -890,6 +935,36 @@ mod tests {
         assert_eq!(summary.coverage, LocalHistoryCoverage::Complete);
         assert_eq!(summary.total_tokens, 0);
         assert_eq!(summary.session_count, 0);
+    }
+
+    #[test]
+    fn same_named_databases_in_separate_roots_keep_distinct_rows_and_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let first_root = dir.path().join("first");
+        let second_root = dir.path().join("second");
+        fs::create_dir_all(&first_root).unwrap();
+        fs::create_dir_all(&second_root).unwrap();
+        let timestamp = u64::try_from(Utc::now().timestamp()).unwrap();
+
+        for (root, input) in [(&first_root, 100_u64), (&second_root, 200_u64)] {
+            let conn = Connection::open(root.join("session.db")).unwrap();
+            conn.execute("CREATE TABLE gen_metadata(idx INTEGER, data BLOB)", [])
+                .unwrap();
+            conn.execute(
+                "INSERT INTO gen_metadata(idx, data) VALUES(1, ?1)",
+                [valid_turn_blob(input, timestamp)],
+            )
+            .unwrap();
+        }
+
+        let SQLiteScan::Summary(summary) = summarize(&[first_root, second_root], Utc::now(), 30)
+        else {
+            panic!("supported databases should produce coverage");
+        };
+
+        assert_eq!(summary.coverage, LocalHistoryCoverage::Complete);
+        assert_eq!(summary.total_tokens, 496);
+        assert_eq!(summary.session_count, 2);
     }
 
     #[test]
