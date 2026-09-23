@@ -8,6 +8,7 @@ pub mod atomic_file;
 pub mod browser;
 pub mod cli;
 pub mod codex_accounts;
+pub mod currency;
 pub mod codex_cli;
 pub mod codex_workspaces;
 pub mod core;
