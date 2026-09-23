@@ -593,6 +593,60 @@ fn claude_daily_token_coverage_requires_a_complete_valid_scan() {
 }
 
 #[test]
+fn public_claude_daily_token_dispatch_reports_incomplete_fixture_scans() {
+    const CHILD_MARKER: &str = "CODEXBAR_CLAUDE_DAILY_TOKEN_TEST_CHILD";
+    const CHILD_DONE: &str = "isolated Claude daily-history fixture verified";
+    if std::env::var_os(CHILD_MARKER).is_some() {
+        let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
+            .map(PathBuf::from)
+            .expect("child receives isolated Claude config directory");
+        let projects_dir = config_dir.join("projects");
+        let project_dir = projects_dir.join("fixture-project");
+        let (complete_history, incomplete) = get_daily_token_history("claude", 1);
+        assert!(!incomplete, "valid fixture scan should establish coverage");
+        assert!(complete_history.iter().any(|(_, tokens)| *tokens > 0));
+
+        std::fs::write(project_dir.join("malformed.jsonl"), b"{malformed\n").unwrap();
+        let (partial_history, incomplete) = get_daily_token_history("claude", 1);
+        assert!(
+            incomplete,
+            "malformed fixture should leave coverage incomplete"
+        );
+        assert_eq!(partial_history, complete_history);
+        println!("{CHILD_DONE}");
+        return;
+    }
+
+    let config_dir = tempfile::tempdir().unwrap();
+    let project_dir = config_dir.path().join("projects").join("fixture-project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let timestamp = Utc::now().to_rfc3339();
+    std::fs::write(
+        project_dir.join("valid.jsonl"),
+        format!(
+            "{}\n",
+            claude_transcript_line(&timestamp, "requestId", "req_public", "msg_public")
+        ),
+    )
+    .unwrap();
+
+    let test_thread = std::thread::current();
+    let test_name = test_thread.name().expect("test harness names this thread");
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+        .env(CHILD_MARKER, "1")
+        .env("CLAUDE_CONFIG_DIR", config_dir.path())
+        .output()
+        .expect("spawn isolated exact-test child");
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains(CHILD_DONE),
+        "fixture child failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn classifies_vertex_ai_claude_metadata_without_changing_anthropic_rows() {
     let cases = [
         (
