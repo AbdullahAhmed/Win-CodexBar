@@ -122,7 +122,7 @@ fn provider_dashboard_url(id: ProviderId, settings: &Settings) -> Option<String>
             .map(str::to_string),
         _ => provider_dashboard_url_from_sources(
             instantiate_provider(id).metadata().dashboard_url,
-            codexbar::settings::api_keys::get_api_key_providers()
+            codexbar::settings::get_api_key_providers()
                 .into_iter()
                 .find(|provider| provider.id == id)
                 .and_then(|provider| provider.dashboard_url),
