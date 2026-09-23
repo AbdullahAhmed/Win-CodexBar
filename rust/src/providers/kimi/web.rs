@@ -32,6 +32,15 @@ fn browser_import_allowed(cookie_source: &str) -> bool {
     cookie_source.eq_ignore_ascii_case("auto") || cookie_source.eq_ignore_ascii_case("browser")
 }
 
+fn browser_import_error(cookie_source: &str) -> ProviderError {
+    let message = if cookie_source.eq_ignore_ascii_case("manual") {
+        "Kimi cookie source is Manual; provide a valid manual cookie header."
+    } else {
+        "Kimi cookie source is Off; provide a manual cookie header or enable browser import."
+    };
+    ProviderError::Other(message.into())
+}
+
 /// Web auth token chain for both the web fetch and the Code-API enrichment
 /// (upstream `KimiWebEnrichmentTokenResolver.resolve`):
 /// 1. Manual cookie header (its `kimi-auth`/auth cookie), source-independent.
@@ -135,10 +144,7 @@ pub(crate) async fn fetch_via_web(
     }
 
     if !browser_import_allowed(&source) {
-        return Err(ProviderError::Other(
-            "Kimi cookie source is Off; provide a manual cookie header or enable browser import."
-                .into(),
-        ));
+        return Err(browser_import_error(&source));
     }
 
     let client = client()?;
@@ -440,6 +446,25 @@ mod tests {
         assert!(browser_import_allowed("browser"));
         assert!(browser_import_allowed("AUTO"));
         assert!(!browser_import_allowed("manual"));
+    }
+
+    #[test]
+    fn browser_import_error_matches_rejected_cookie_source() {
+        assert!(matches!(
+            browser_import_error("manual"),
+            ProviderError::Other(message)
+                if message == "Kimi cookie source is Manual; provide a valid manual cookie header."
+        ));
+        assert!(matches!(
+            browser_import_error("off"),
+            ProviderError::Other(message)
+                if message == "Kimi cookie source is Off; provide a manual cookie header or enable browser import."
+        ));
+        assert!(matches!(
+            browser_import_error("unexpected"),
+            ProviderError::Other(message)
+                if message == "Kimi cookie source is Off; provide a manual cookie header or enable browser import."
+        ));
     }
 
     #[test]
