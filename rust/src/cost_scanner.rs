@@ -1367,8 +1367,8 @@ pub fn get_daily_token_history(provider: &str, days: u32) -> (Vec<(String, u64)>
         }
         "claude" => {
             // Per-day token breakdown from the same de-duplicated record walk
-            // as the cost chart. The full walk is authoritative, so the
-            // Refreshing marker never applies here.
+            // as the cost chart. Only a complete valid walk establishes
+            // authoritative coverage of the requested history window.
             let projects_dir = scanner.get_claude_projects_dir();
             if projects_dir.exists() {
                 let cutoff = Utc::now() - Duration::days(days as i64);
@@ -1412,16 +1412,12 @@ pub fn get_daily_token_history(provider: &str, days: u32) -> (Vec<(String, u64)>
     let mut result: Vec<(String, u64)> = daily_tokens.into_iter().collect();
     result.sort_by(|a, b| a.0.cmp(&b.0));
 
-    // Codex only: the bounded catch-up may not have reached the requested
-    // depth yet. Incomplete = history exists but the oldest quarter of the
-    // window has no scanned day.
-    let incomplete = if provider == "claude" {
-        covered_days.is_empty()
-    } else if provider == "pi" {
-        // Pi scans are bounded filesystem walks, so a complete parse covers
-        // the requested window even when the roots contain no sessions.
+    let incomplete = if matches!(provider, "claude" | "pi") {
+        // A complete filesystem scan covers the requested window even when
+        // the roots contain no sessions; failed scans leave coverage empty.
         covered_days.is_empty()
     } else {
+        // Codex catch-up may not have reached the oldest quarter of the window.
         provider == "codex"
             && !covered_days.is_empty()
             && covered_days.len() < days as usize
