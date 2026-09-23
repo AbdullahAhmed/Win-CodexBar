@@ -151,6 +151,7 @@ fn main() {
             }
         }
         initial_state.provider_cache.extend(snapshots);
+        initial_state.provider_cache_seeded = true;
         initial_state.provider_cache_updated_at = Some(seeded_at);
     }
 
