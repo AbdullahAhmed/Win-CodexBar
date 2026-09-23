@@ -246,34 +246,65 @@ impl CodexLineageGraph {
         }
     }
 
-    fn apply_candidate_plan(&self, candidates: &mut Vec<CodexPreparedCandidate>) -> Vec<String> {
-        if candidates.is_empty() {
-            return Vec::new();
-        }
-        for (candidate_index, candidate) in candidates.iter_mut().enumerate() {
-            let node_index = self.candidate_node_indices[candidate_index];
-            candidate.lineage_gate = self.gates[node_index];
-            candidate.parent_owner_expected = self.parent_indices[node_index].is_some();
+    fn apply_candidate_plan(
+        &self,
+        candidates: &mut Vec<CodexPreparedCandidate>,
+        sessions_dirs: &[PathBuf],
+        range: &CostUsageDayRange,
+    ) -> Vec<String> {
+        if !candidates.is_empty() {
+            for (candidate_index, candidate) in candidates.iter_mut().enumerate() {
+                let node_index = self.candidate_node_indices[candidate_index];
+                candidate.lineage_gate = self.gates[node_index];
+                candidate.parent_owner_expected = self.parent_indices[node_index].is_some();
+            }
+
+            let mut remaining = candidates.drain(..).map(Some).collect::<Vec<_>>();
+            for candidate_index in &self.ordered_candidate_indices {
+                candidates.push(
+                    remaining[*candidate_index]
+                        .take()
+                        .expect("candidate is ordered once"),
+                );
+            }
         }
 
-        let mut remaining = candidates.drain(..).map(Some).collect::<Vec<_>>();
-        for candidate_index in &self.ordered_candidate_indices {
-            candidates.push(
-                remaining[*candidate_index]
-                    .take()
-                    .expect("candidate is ordered once"),
-            );
+        // Keep the complete graph for parent resolution, but invalidate only
+        // unsafe cached nodes in the active range or in the ancestor closure
+        // required to resolve an active node.
+        let mut relevant = vec![false; self.nodes.len()];
+        let mut pending = VecDeque::new();
+        for (index, node) in self.nodes.iter().enumerate() {
+            if super::is_codex_path_in_scan_window(Path::new(&node.path), sessions_dirs, range) {
+                relevant[index] = true;
+                pending.push_back(index);
+            }
+        }
+        while let Some(index) = pending.pop_front() {
+            let Some(parent_id) = self.nodes[index].parent_id.as_deref() else {
+                continue;
+            };
+            if let Some(owners) = self.session_owners.get(parent_id) {
+                for &owner in owners {
+                    if !relevant[owner] {
+                        relevant[owner] = true;
+                        pending.push_back(owner);
+                    }
+                }
+            }
         }
 
         self.nodes
             .iter()
             .zip(&self.gates)
-            .filter(|(node, gate)| {
-                node.candidate_index.is_none()
+            .enumerate()
+            .filter(|(index, (node, gate))| {
+                relevant[*index]
+                    && node.candidate_index.is_none()
                     && **gate == CodexLineageGate::Unsafe
                     && !node.initially_unsafe
             })
-            .map(|(node, _)| node.path.clone())
+            .map(|(_, (node, _))| node.path.clone())
             .collect()
     }
 }
@@ -292,12 +323,14 @@ impl CodexLineagePlanner {
     pub(super) fn plan_candidates_by_lineage(
         cache: &CostUsageCache,
         candidates: &mut Vec<CodexPreparedCandidate>,
+        sessions_dirs: &[PathBuf],
+        range: &CostUsageDayRange,
     ) -> (Self, Vec<String>) {
         let graph = Self::needs_graph(cache, Some(candidates))
             .then(|| CodexLineageGraph::new(cache, Some(candidates)));
-        let unsafe_paths = graph
-            .as_ref()
-            .map_or_else(Vec::new, |graph| graph.apply_candidate_plan(candidates));
+        let unsafe_paths = graph.as_ref().map_or_else(Vec::new, |graph| {
+            graph.apply_candidate_plan(candidates, sessions_dirs, range)
+        });
         (Self { graph }, unsafe_paths)
     }
 

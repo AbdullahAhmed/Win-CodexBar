@@ -437,3 +437,71 @@ fn bounded_refresh_rejects_dependent_of_locally_inferred_parent() {
     assert_locally_inferred(&cache, &parent);
     assert_unresolved(&cache, &dependent);
 }
+
+#[test]
+fn current_refresh_scopes_unsafe_cache_invalidation_to_range_and_dependencies() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let active_time = Utc::now() - Duration::hours(1);
+    let old_date = Local::now().date_naive() - Duration::days(30);
+    let old_day = old_date.format("%Y-%m-%d").to_string();
+    let old_dir = sessions
+        .join(old_date.format("%Y").to_string())
+        .join(old_date.format("%m").to_string())
+        .join(old_date.format("%d").to_string());
+    let mut cache = CostUsageCache::default();
+
+    {
+        let mut add_cached = |name: &str, session_id: &str, parent_id: Option<&str>| {
+            let path = old_dir.join(name).to_string_lossy().to_string();
+            let mut usage = cached_usage_with_packed(&old_day, "gpt-5.6-sol", vec![100, 0, 5, 0]);
+            usage.codex_session_id = Some(session_id.to_string());
+            usage.codex_forked_from_id = parent_id.map(str::to_string);
+            cache.files.insert(path, usage);
+        };
+        add_cached("unrelated-a.jsonl", "unrelated-a", Some("unrelated-b"));
+        add_cached("unrelated-b.jsonl", "unrelated-b", Some("unrelated-a"));
+        add_cached("required-a.jsonl", "required-parent", None);
+        add_cached("required-b.jsonl", "required-parent", None);
+    }
+    JsonlScanner::save_cache(ProviderId::Codex, &mut cache, Some(&cache_root));
+
+    let active_child = write_codex_fork_session_fixture(
+        &sessions,
+        "active-child.jsonl",
+        "active-child",
+        Some("required-parent"),
+        active_time,
+        active_time + Duration::seconds(1),
+        &[1_000_000, 1_000_140],
+    );
+    let scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+
+    let (summary, _, refreshed) = scanner.scan_codex_detailed_with_cache(None);
+    let cached_path = |name: &str| old_dir.join(name).to_string_lossy().to_string();
+
+    for path in [
+        cached_path("unrelated-a.jsonl"),
+        cached_path("unrelated-b.jsonl"),
+    ] {
+        let usage = refreshed
+            .files
+            .get(&path)
+            .expect("unrelated history retained");
+        assert_eq!(usage.days[&old_day]["gpt-5.6-sol"], vec![100, 0, 5, 0]);
+        assert!(!usage.codex_unresolved_fork_parent);
+    }
+    for path in [
+        cached_path("required-a.jsonl"),
+        cached_path("required-b.jsonl"),
+    ] {
+        assert_unresolved(&refreshed, Path::new(&path));
+    }
+    assert_eq!(summary.input_tokens, 0);
+    assert_eq!(summary.sessions_count, 0);
+    assert_unresolved(&refreshed, &active_child);
+}

@@ -248,8 +248,12 @@ pub(super) fn scan_codex_detailed_with_cache(
         unprocessed.extend(cancelled_during_preparation);
         cached_lineage
     } else {
-        let (planner, unsafe_cached_paths) =
-            CodexLineagePlanner::plan_candidates_by_lineage(&cache, &mut work_queue);
+        let (planner, unsafe_cached_paths) = CodexLineagePlanner::plan_candidates_by_lineage(
+            &cache,
+            &mut work_queue,
+            &sessions_dirs,
+            scan_range,
+        );
         invalidated_unsafe_lineage = !unsafe_cached_paths.is_empty();
         if invalidated_unsafe_lineage {
             cache.previous_report = None;
