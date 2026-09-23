@@ -118,13 +118,8 @@ pub(super) fn snapshot_from_code_api_response(
 ) -> Result<UsageSnapshot, ProviderError> {
     let pools_present = response.usages.is_some();
     let legacy_limit = response.limits.as_ref().and_then(|limits| limits.first());
-    let legacy_session_minutes = legacy_limit.map(|limit| {
-        limit
-            .window
-            .as_ref()
-            .and_then(kimi_window_minutes)
-            .unwrap_or(300)
-    });
+    let legacy_session_minutes =
+        legacy_limit.and_then(|limit| limit.window.as_ref().and_then(kimi_window_minutes));
     let session_pool = response
         .usages
         .as_ref()
@@ -587,6 +582,54 @@ mod tests {
         let weekly = snapshot.secondary.expect("weekly count fallback");
         assert_eq!(weekly.used_percent, 19.0);
         assert_eq!(weekly.window_minutes, Some(10_080));
+    }
+
+    fn snapshot_with_zero_session_ratio_and_legacy_window(
+        window: Option<serde_json::Value>,
+    ) -> UsageSnapshot {
+        let mut legacy_limit = json!({
+            "detail": {
+                "limit": "100",
+                "used": "1",
+                "resetTime": "2026-09-19T14:45:58Z"
+            }
+        });
+        if let Some(window) = window {
+            legacy_limit["window"] = window;
+        }
+
+        let response: KimiCodeApiUsageResponse = serde_json::from_value(json!({
+            "limits": [legacy_limit],
+            "usages": {
+                "limit_5h": {
+                    "used_ratio": 0,
+                    "reset_time": "2026-09-19T14:45:58Z"
+                },
+                "limit_7d": { "used_ratio": 0 }
+            }
+        }))
+        .expect("fixture parses");
+
+        snapshot_from_code_api_response(response).expect("ratio pools are usable")
+    }
+
+    #[test]
+    fn missing_legacy_window_does_not_override_zero_session_ratio() {
+        let snapshot = snapshot_with_zero_session_ratio_and_legacy_window(None);
+
+        assert_eq!(snapshot.primary.window_minutes, Some(300));
+        assert_eq!(snapshot.primary.used_percent, 0.0);
+    }
+
+    #[test]
+    fn unrecognized_legacy_window_does_not_override_zero_session_ratio() {
+        let snapshot = snapshot_with_zero_session_ratio_and_legacy_window(Some(json!({
+            "duration": 300,
+            "timeUnit": "TIME_UNIT_FORTNIGHT"
+        })));
+
+        assert_eq!(snapshot.primary.window_minutes, Some(300));
+        assert_eq!(snapshot.primary.used_percent, 0.0);
     }
 
     #[test]
