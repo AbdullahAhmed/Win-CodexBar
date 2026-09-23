@@ -242,15 +242,14 @@ pub(super) fn scan_codex_detailed_with_cache(
         });
     }
     let mut unprocessed = Vec::new();
-    let lineage_planner;
     let cancelled_before_plan = !cancelled_during_preparation.is_empty() || is_cancelled(cancel);
-    if cancelled_before_plan {
+    let lineage_planner = if cancelled_before_plan {
         unprocessed.extend(work_queue.drain(..).map(|candidate| candidate.path));
         unprocessed.extend(cancelled_during_preparation);
+        cached_lineage
     } else {
         let (planner, unsafe_cached_paths) =
             CodexLineagePlanner::plan_candidates_by_lineage(&cache, &mut work_queue);
-        lineage_planner = planner;
         invalidated_unsafe_lineage = !unsafe_cached_paths.is_empty();
         if invalidated_unsafe_lineage {
             cache.previous_report = None;
@@ -261,10 +260,8 @@ pub(super) fn scan_codex_detailed_with_cache(
                 pending_next.push(path);
             }
         }
-    }
-    if cancelled_before_plan {
-        lineage_planner = cached_lineage;
-    }
+        planner
+    };
 
     let mut incomplete_processed = Vec::new();
     for (index, candidate) in work_queue.iter().enumerate() {
