@@ -21,6 +21,13 @@ pub fn safe_error_message(err: impl std::fmt::Display) -> String {
 
 /// Canonical application config root that hosts the settings file and logs.
 pub fn config_root() -> Option<PathBuf> {
+    // Keep visual proof runs separate from an installed CodexBar process.
+    if std::env::var_os("CODEXBAR_PROOF_COIN").is_some()
+        && let Some(root) = std::env::var_os("CODEXBAR_PROOF_CONFIG_ROOT")
+        && !root.is_empty()
+    {
+        return Some(PathBuf::from(root));
+    }
     dirs::config_dir().map(|p| p.join("CodexBar"))
 }
 

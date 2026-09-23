@@ -10,10 +10,13 @@ const SIZE: f64 = 156.0;
 
 pub fn install(app: &tauri::AppHandle) {
     let settings = Settings::load();
-    if settings.usage_coin_enabled {
-        if let Err(error) = show(app, settings.usage_coin_always_on_top) {
-            tracing::warn!(%error, "could not restore usage coin");
-        }
+    // Allows an isolated proof build to show the coin without editing the
+    // user's persisted settings or the currently running installed app.
+    let proof_requested = std::env::var_os("CODEXBAR_PROOF_COIN").is_some();
+    if (settings.usage_coin_enabled || proof_requested)
+        && let Err(error) = show(app, settings.usage_coin_always_on_top)
+    {
+        tracing::warn!(%error, "could not restore usage coin");
     }
 }
 

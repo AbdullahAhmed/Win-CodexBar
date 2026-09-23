@@ -646,7 +646,11 @@ impl Settings {
         // Sync autostart toggle with actual registry state and repair stale commands from older builds.
         #[cfg(target_os = "windows")]
         {
-            settings.start_at_login = Self::sync_start_at_login_registry();
+            // An isolated coin proof run must not repoint the installed app's
+            // start-at-login entry at the temporary proof executable.
+            if std::env::var_os("CODEXBAR_PROOF_COIN").is_none() {
+                settings.start_at_login = Self::sync_start_at_login_registry();
+            }
             settings.apply_promote_tray_default_migration();
         }
 

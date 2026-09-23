@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type MouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useProviders } from "../hooks/useProviders";
+import { refreshProvidersIfStale } from "../lib/tauri";
 import type { RateWindowSnapshot } from "../types/bridge";
 import "./UsageCoin.css";
 
@@ -22,7 +23,7 @@ function percentage(window: RateWindowSnapshot | null): string {
 }
 
 export default function UsageCoin() {
-  const { providers } = useProviders();
+  const { providers } = useProviders({ refreshOnMount: false });
   const codex = providers.find((provider) => provider.providerId === "codex");
   const weekly = codex?.secondary ?? null;
   const [now, setNow] = useState(Date.now());
@@ -32,6 +33,7 @@ export default function UsageCoin() {
   useEffect(() => {
     document.body.classList.add("usage-coin-window");
     void invoke<boolean>("get_usage_coin_topmost").then(setTopmost).catch(() => {});
+    void refreshProvidersIfStale().catch(() => {});
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
     return () => {
       document.body.classList.remove("usage-coin-window");
