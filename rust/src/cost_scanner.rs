@@ -599,31 +599,32 @@ impl CostScanner {
         if projects_dir.exists() {
             let mut seen = HashSet::new();
             let mut pricing = ClaudeScanPricingResolver::default();
-            let mut handle_file = |path: &Path| {
-                let mut aggregation_complete = true;
-                let mut file_result = scan_claude_file_with_pricing(
-                    path,
-                    &cutoff,
-                    &mut seen,
-                    cancel,
-                    &mut pricing,
-                    |record| {
-                        aggregation_complete &= record.timestamp.is_some();
-                        aggregation_complete &= add_claude_record_to_summary(&mut summary, record);
-                    },
-                );
-                if !aggregation_complete {
-                    file_result.aggregation_failures =
-                        file_result.aggregation_failures.saturating_add(1);
-                }
-                if file_result.counted > 0 {
-                    summary.sessions_count += 1;
-                }
-                claude_scan.absorb(file_result);
+            let traversal_read_failures = {
+                let mut handle_file = |path: &Path| {
+                    let mut aggregation_complete = true;
+                    let mut file_result = scan_claude_file_with_pricing(
+                        path,
+                        &cutoff,
+                        &mut seen,
+                        cancel,
+                        &mut pricing,
+                        |record| {
+                            aggregation_complete &= record.timestamp.is_some();
+                            aggregation_complete &=
+                                add_claude_record_to_summary(&mut summary, record);
+                        },
+                    );
+                    if !aggregation_complete {
+                        file_result.aggregation_failures =
+                            file_result.aggregation_failures.saturating_add(1);
+                    }
+                    if file_result.counted > 0 {
+                        summary.sessions_count += 1;
+                    }
+                    claude_scan.absorb(file_result);
+                };
+                self.walk_claude_files(&projects_dir, &cutoff, cancel, &mut handle_file)
             };
-            let traversal_read_failures =
-                self.walk_claude_files(&projects_dir, &cutoff, cancel, &mut handle_file);
-            drop(handle_file);
             claude_scan.read_failures = claude_scan
                 .read_failures
                 .saturating_add(traversal_read_failures);
@@ -1255,29 +1256,29 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
                 let mut seen = HashSet::new();
                 let mut pricing = ClaudeScanPricingResolver::default();
                 let mut claude_scan = ClaudeFileScanResult::default();
-                let mut handle_file = |path: &Path| {
-                    let mut aggregation_complete = true;
-                    let mut file_result = scan_claude_file_with_pricing(
-                        path,
-                        &cutoff,
-                        &mut seen,
-                        None,
-                        &mut pricing,
-                        |record| {
-                            aggregation_complete &= record.timestamp.is_some();
-                            aggregation_complete &=
-                                add_claude_record_to_daily_costs(&mut daily_costs, record);
-                        },
-                    );
-                    if !aggregation_complete {
-                        file_result.aggregation_failures =
-                            file_result.aggregation_failures.saturating_add(1);
-                    }
-                    claude_scan.absorb(file_result);
+                let traversal_read_failures = {
+                    let mut handle_file = |path: &Path| {
+                        let mut aggregation_complete = true;
+                        let mut file_result = scan_claude_file_with_pricing(
+                            path,
+                            &cutoff,
+                            &mut seen,
+                            None,
+                            &mut pricing,
+                            |record| {
+                                aggregation_complete &= record.timestamp.is_some();
+                                aggregation_complete &=
+                                    add_claude_record_to_daily_costs(&mut daily_costs, record);
+                            },
+                        );
+                        if !aggregation_complete {
+                            file_result.aggregation_failures =
+                                file_result.aggregation_failures.saturating_add(1);
+                        }
+                        claude_scan.absorb(file_result);
+                    };
+                    scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file)
                 };
-                let traversal_read_failures =
-                    scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file);
-                drop(handle_file);
                 claude_scan.read_failures = claude_scan
                     .read_failures
                     .saturating_add(traversal_read_failures);
@@ -1374,19 +1375,19 @@ pub fn get_daily_token_history(provider: &str, days: u32) -> (Vec<(String, u64)>
                 let mut seen = HashSet::new();
                 let mut pricing = ClaudeScanPricingResolver::default();
                 let mut claude_scan = ClaudeFileScanResult::default();
-                let mut handle_file = |path: &Path| {
-                    let file_result = scan_claude_file_for_daily_tokens(
-                        path,
-                        &cutoff,
-                        &mut seen,
-                        &mut pricing,
-                        &mut daily_tokens,
-                    );
-                    claude_scan.absorb(file_result);
+                let traversal_read_failures = {
+                    let mut handle_file = |path: &Path| {
+                        let file_result = scan_claude_file_for_daily_tokens(
+                            path,
+                            &cutoff,
+                            &mut seen,
+                            &mut pricing,
+                            &mut daily_tokens,
+                        );
+                        claude_scan.absorb(file_result);
+                    };
+                    scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file)
                 };
-                let traversal_read_failures =
-                    scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file);
-                drop(handle_file);
                 claude_scan.read_failures = claude_scan
                     .read_failures
                     .saturating_add(traversal_read_failures);

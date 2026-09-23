@@ -266,13 +266,13 @@ mod tests {
                 cache_write,
                 output,
             );
-            let routed = claude_routed_pricing::cost_usd_from_pricing_with_threshold(
+            let routed = claude_routed_pricing::cost_usd_from_u64_counts_with_threshold(
                 pricing,
                 threshold,
-                input as i32,
-                cache_read as i32,
-                cache_write as i32,
-                output as i32,
+                input,
+                cache_read,
+                cache_write,
+                output,
             );
             assert!((actual - expected_usd).abs() < 1e-12);
             assert!((actual - routed).abs() < 1e-12);
