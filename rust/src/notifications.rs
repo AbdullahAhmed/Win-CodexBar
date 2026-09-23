@@ -856,6 +856,32 @@ mod tests {
     }
 
     #[test]
+    fn unresolved_and_resolved_warning_histories_remain_separate() {
+        let now = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+        let reset = window(now, Duration::hours(3), 300);
+        let risk = pace(false, Some(3600.0));
+        let mut manager = NotificationManager::new();
+
+        assert!(manager.record_predictive_observation(
+            true,
+            ProviderId::Claude,
+            "claude:oauth:unknown",
+            PredictiveWarningWindow::Session,
+            &reset,
+            &risk,
+        ));
+        assert!(manager.record_predictive_observation(
+            true,
+            ProviderId::Claude,
+            "oauth:person@example.com",
+            PredictiveWarningWindow::Session,
+            &reset,
+            &risk,
+        ));
+        assert_eq!(manager.predictive_warning_keys.len(), 2);
+    }
+
+    #[test]
     fn session_below_high_does_not_rearm_weekly_high_toast() {
         // Repro for #198: session cool + weekly hot on every refresh used to
         // clear all provider keys on the session call, then re-fire weekly.
