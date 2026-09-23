@@ -673,6 +673,7 @@ impl CostScanner {
         };
         let mut daily_cost = HashMap::new();
         let mut daily_tokens = HashMap::new();
+        let mut unknown_cost_dates = HashSet::new();
         for days_ago in 0..self.days {
             let date = today - Duration::days(days_ago as i64);
             let key = date.format("%Y-%m-%d").to_string();
@@ -700,8 +701,11 @@ impl CostScanner {
                             aggregation_complete &= record.timestamp.is_some();
                             aggregation_complete &=
                                 add_claude_record_to_summary(&mut summary, record);
-                            aggregation_complete &=
-                                add_claude_record_to_daily_costs(&mut daily_cost, record);
+                            aggregation_complete &= add_claude_record_to_daily_costs(
+                                &mut daily_cost,
+                                &mut unknown_cost_dates,
+                                record,
+                            );
                             aggregation_complete &=
                                 add_claude_record_to_daily_tokens(&mut daily_tokens, record);
                             if let Some(quota_record) = quota_history_record_from_usage(record) {
@@ -739,11 +743,7 @@ impl CostScanner {
             is_cancelled(cancel),
         );
         if complete {
-            for value in daily_cost.values_mut() {
-                if value.is_none() {
-                    *value = Some(0.0);
-                }
-            }
+            zero_fill_uninitialized_claude_daily_costs(&mut daily_cost, &unknown_cost_dates);
         }
 
         let mut daily_cost = daily_cost.into_iter().collect::<Vec<_>>();
@@ -1151,6 +1151,7 @@ fn quota_history_record_from_usage(record: &ClaudeUsageRecord) -> Option<ClaudeQ
 /// date range (or without a timestamp) are ignored.
 fn add_claude_record_to_daily_costs(
     daily_costs: &mut HashMap<String, Option<f64>>,
+    unknown_cost_dates: &mut HashSet<String>,
     record: &ClaudeUsageRecord,
 ) -> bool {
     let Some(timestamp) = record.timestamp else {
@@ -1162,18 +1163,34 @@ fn add_claude_record_to_daily_costs(
         .format("%Y-%m-%d")
         .to_string();
     if let Some(cost) = daily_costs.get_mut(&date_str) {
+        if unknown_cost_dates.contains(&date_str) {
+            return false;
+        }
         let Some(record_cost) = record.cost else {
             *cost = None;
+            unknown_cost_dates.insert(date_str);
             return false;
         };
         let sum = cost.unwrap_or(0.0) + record_cost;
         if !sum.is_finite() {
             *cost = None;
+            unknown_cost_dates.insert(date_str);
             return false;
         }
         *cost = Some(sum);
     }
     true
+}
+
+fn zero_fill_uninitialized_claude_daily_costs(
+    daily_costs: &mut HashMap<String, Option<f64>>,
+    unknown_cost_dates: &HashSet<String>,
+) {
+    for (day, cost) in daily_costs {
+        if cost.is_none() && !unknown_cost_dates.contains(day) {
+            *cost = Some(0.0);
+        }
+    }
 }
 
 /// Check if any cost usage sources are available
@@ -1256,6 +1273,7 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
                 let mut seen = HashSet::new();
                 let mut pricing = ClaudeScanPricingResolver::default();
                 let mut claude_scan = ClaudeFileScanResult::default();
+                let mut unknown_cost_dates = HashSet::new();
                 let traversal_read_failures = {
                     let mut handle_file = |path: &Path| {
                         let mut aggregation_complete = true;
@@ -1267,8 +1285,11 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
                             &mut pricing,
                             |record| {
                                 aggregation_complete &= record.timestamp.is_some();
-                                aggregation_complete &=
-                                    add_claude_record_to_daily_costs(&mut daily_costs, record);
+                                aggregation_complete &= add_claude_record_to_daily_costs(
+                                    &mut daily_costs,
+                                    &mut unknown_cost_dates,
+                                    record,
+                                );
                             },
                         );
                         if !aggregation_complete {
@@ -1283,11 +1304,10 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
                     .read_failures
                     .saturating_add(traversal_read_failures);
                 if claude_scan.is_complete() {
-                    for slot in daily_costs.values_mut() {
-                        if slot.is_none() {
-                            *slot = Some(0.0);
-                        }
-                    }
+                    zero_fill_uninitialized_claude_daily_costs(
+                        &mut daily_costs,
+                        &unknown_cost_dates,
+                    );
                 }
             }
         }

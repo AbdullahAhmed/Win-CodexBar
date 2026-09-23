@@ -865,14 +865,15 @@ fn daily_history_dedups_across_files_and_buckets_by_local_day() {
             .to_string()
     };
     let mut daily_costs = HashMap::new();
-    daily_costs.insert(day_key(&day_one), Some(0.0));
-    daily_costs.insert(day_key(&day_two), Some(0.0));
+    daily_costs.insert(day_key(&day_one), None);
+    daily_costs.insert(day_key(&day_two), None);
+    let mut unknown_cost_dates = HashSet::new();
 
     let cutoff = Utc::now() - Duration::days(30);
     let mut seen = HashSet::new();
     for path in [&file_a, &file_b] {
         for_each_claude_usage_record(path, &cutoff, &mut seen, None, |record| {
-            add_claude_record_to_daily_costs(&mut daily_costs, record);
+            add_claude_record_to_daily_costs(&mut daily_costs, &mut unknown_cost_dates, record);
         });
     }
 
@@ -889,6 +890,65 @@ fn daily_history_dedups_across_files_and_buckets_by_local_day() {
     // Best-effort test cleanup; the files may already be gone.
     let _removed_a = std::fs::remove_file(&file_a);
     let _removed_b = std::fs::remove_file(&file_b);
+}
+
+fn claude_daily_cost_record(timestamp: DateTime<Utc>, cost: Option<f64>) -> ClaudeUsageRecord {
+    ClaudeUsageRecord {
+        model: "claude-test".to_string(),
+        pricing_known: cost.is_some(),
+        timestamp: Some(timestamp),
+        dedup_key: None,
+        input: 1,
+        output: 1,
+        cache_create: 0,
+        cache_read: 0,
+        cost,
+    }
+}
+
+#[test]
+fn unknown_claude_cost_date_cannot_be_restored_by_later_priced_record() {
+    let timestamp = Utc::now();
+    let day = timestamp
+        .with_timezone(&Local)
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    let mut daily_costs = HashMap::from([(day.clone(), None)]);
+    let mut unknown_cost_dates = HashSet::new();
+
+    assert!(add_claude_record_to_daily_costs(
+        &mut daily_costs,
+        &mut unknown_cost_dates,
+        &claude_daily_cost_record(timestamp, Some(0.75)),
+    ));
+    assert!(!add_claude_record_to_daily_costs(
+        &mut daily_costs,
+        &mut unknown_cost_dates,
+        &claude_daily_cost_record(timestamp, None),
+    ));
+    assert!(!add_claude_record_to_daily_costs(
+        &mut daily_costs,
+        &mut unknown_cost_dates,
+        &claude_daily_cost_record(timestamp, Some(1.25)),
+    ));
+
+    assert_eq!(daily_costs[&day], None);
+    assert!(unknown_cost_dates.contains(&day));
+}
+
+#[test]
+fn claude_daily_zero_fill_preserves_unknown_dates_and_fills_untouched_dates() {
+    let unknown_day = "2026-09-22".to_string();
+    let untouched_day = "2026-09-23".to_string();
+    let mut daily_costs =
+        HashMap::from([(unknown_day.clone(), None), (untouched_day.clone(), None)]);
+    let unknown_cost_dates = HashSet::from([unknown_day.clone()]);
+
+    zero_fill_uninitialized_claude_daily_costs(&mut daily_costs, &unknown_cost_dates);
+
+    assert_eq!(daily_costs[&unknown_day], None);
+    assert_eq!(daily_costs[&untouched_day], Some(0.0));
 }
 
 #[test]
