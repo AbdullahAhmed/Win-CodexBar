@@ -120,7 +120,14 @@ impl CodexLineageGraph {
                                 .flatten()
                         })
                 };
-                let cached_fallback = cached_identity_matches.then_some(cached).flatten();
+                // Freshly read identity-bearing metadata owns this candidate's
+                // current lineage state. Retain cached lineage flags only when
+                // the bounded metadata read could not establish an identity.
+                let cached_fallback = if metadata_owns_identity {
+                    None
+                } else {
+                    cached_identity_matches.then_some(cached).flatten()
+                };
                 nodes.push(CodexLineageNode {
                     path: candidate.path.to_string_lossy().to_string(),
                     session_id,
