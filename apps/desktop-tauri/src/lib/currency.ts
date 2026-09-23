@@ -66,11 +66,13 @@ export function formatDisplayCurrency(
   sourceSymbol?: string | null,
 ): string {
   if (amount == null || !Number.isFinite(amount)) return "—";
-  const source = sourceCode.trim().toUpperCase();
+  const trimmedSource = sourceCode.trim();
+  const source = trimmedSource.toUpperCase();
+  const sourceLabel = /^[A-Za-z]{3}$/.test(trimmedSource) ? source : trimmedSource;
   const preferred = normalizePreferredCurrency(preferredCode);
-  if (preferred === "AUTO") return formatOriginal(amount, source, sourceSymbol);
+  if (preferred === "AUTO") return formatOriginal(amount, sourceLabel, sourceSymbol);
   const converted = convertCurrencyAmount(amount, source, preferred, rates);
-  if (converted == null) return formatOriginal(amount, source, sourceSymbol);
+  if (converted == null) return formatOriginal(amount, sourceLabel, sourceSymbol);
   try {
     return new Intl.NumberFormat(undefined, {
       style: "currency",

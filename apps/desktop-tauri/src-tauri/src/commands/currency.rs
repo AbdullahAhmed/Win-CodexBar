@@ -39,7 +39,7 @@ pub async fn get_currency_rates(
     app: tauri::AppHandle,
     cache: State<'_, CurrencyRateCache>,
     preferred_currency_code: String,
-) -> CurrencyRatesSnapshot {
+) -> Result<CurrencyRatesSnapshot, String> {
     let preferred = normalize_preferred_currency(&preferred_currency_code);
     let mut state = cache.inner.lock().await;
     if !state.loaded {
@@ -71,9 +71,9 @@ pub async fn get_currency_rates(
         }
     }
 
-    CurrencyRatesSnapshot {
+    Ok(CurrencyRatesSnapshot {
         rates: merged_rates(state.persisted.as_ref()),
-    }
+    })
 }
 
 pub(crate) fn convert_preferred_amount(amount: f64, source_code: &str) -> Option<(f64, String)> {
