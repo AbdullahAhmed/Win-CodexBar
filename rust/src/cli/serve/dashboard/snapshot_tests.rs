@@ -415,6 +415,62 @@ mod tests {
     }
 
     #[test]
+    fn provider_reported_30_day_cost_falls_back_without_local_today() {
+        for reported in [0.0, 12.5] {
+            let result = fetch_result(5.0, None, None).with_cost(
+                CostSnapshot::new(reported, "USD", "Last 30 days (UTC)").always_visible(),
+            );
+            let row = &serde_json::to_value(build_snapshot(&input(
+                vec![provider_envelope(Ok(result))],
+                DashboardIdentity::Redacted,
+            )))
+            .unwrap()["providers"][0];
+            assert!(row["cost"]["todayUSD"].is_null());
+            assert_eq!(row["cost"]["last30DaysUSD"], reported);
+        }
+    }
+
+    #[test]
+    fn unsupported_provider_reported_cost_is_not_projected() {
+        for cost in [
+            CostSnapshot::new(12.5, "EUR", "Last 30 days (UTC)").always_visible(),
+            CostSnapshot::new(12.5, "USD", "This month").always_visible(),
+            CostSnapshot::new(12.5, "USD", "Last 30 days (UTC)"),
+        ] {
+            let row = &serde_json::to_value(build_snapshot(&input(
+                vec![provider_envelope(Ok(
+                    fetch_result(5.0, None, None).with_cost(cost)
+                ))],
+                DashboardIdentity::Redacted,
+            )))
+            .unwrap()["providers"][0];
+            assert!(row["cost"].is_null());
+        }
+    }
+
+    #[test]
+    fn local_cost_payload_keeps_precedence_when_amount_is_unavailable() {
+        let mut input = input(
+            vec![provider_envelope(Ok(fetch_result(5.0, None, None)
+                .with_cost(
+                    CostSnapshot::new(99.0, "USD", "Last 30 days (UTC)").always_visible(),
+                )))],
+            DashboardIdentity::Redacted,
+        );
+        input.collection.costs.insert(
+            "claude".to_string(),
+            RawCostPayload {
+                today_usd: None,
+                last_30_days_usd: None,
+            },
+        );
+
+        let row = &serde_json::to_value(build_snapshot(&input)).unwrap()["providers"][0];
+        assert!(row["cost"]["todayUSD"].is_null());
+        assert!(row["cost"]["last30DaysUSD"].is_null());
+    }
+
+    #[test]
     fn claude_accounts_attach_to_first_claude_row_only() {
         let second = ProviderFetchEnvelope {
             id: "claude".to_string(),
