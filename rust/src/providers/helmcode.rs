@@ -126,15 +126,7 @@ impl HelmcodeProvider {
     ) -> Result<ProviderFetchResult, ProviderError> {
         let quota_request = self.get(tenant, cookie, "/api/usage/quota", false);
         let billing_request = self.get(tenant, cookie, "/api/billing", true);
-        let credits_request = async {
-            if tenant == Tenant::Helmcode {
-                self.get(tenant, cookie, "/api/billing/credits", true).await
-            } else {
-                Ok(None)
-            }
-        };
-        let (quota_result, billing_result, credits_result) =
-            tokio::join!(quota_request, billing_request, credits_request);
+        let (quota_result, billing_result) = tokio::join!(quota_request, billing_request);
 
         let quota = quota_result?.ok_or_else(|| parse_failure("quota"))?;
         let billing = billing_result?;
@@ -151,6 +143,12 @@ impl HelmcodeProvider {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.name.cmp(&b.name))
         });
+        let credits = if tenant == Tenant::Helmcode {
+            self.get(tenant, cookie, "/api/billing/credits", true)
+                .await?
+        } else {
+            None
+        };
         let primary = models
             .first()
             .map(model_window)
@@ -166,7 +164,7 @@ impl HelmcodeProvider {
             );
         }
         let mut result = ProviderFetchResult::new(usage, "web");
-        if let Some(credits) = credits_result?
+        if let Some(credits) = credits
             && let Some(balance_micros) = credits
                 .get("balanceMicros")
                 .and_then(nonnegative_balance_micros)
