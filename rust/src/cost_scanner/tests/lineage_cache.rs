@@ -138,6 +138,34 @@ fn assert_unresolved(cache: &CostUsageCache, path: &Path) {
 }
 
 #[test]
+fn appended_owned_token_row_reinfers_locally_resolved_subagent_from_start() {
+    use std::io::Write as _;
+
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let base = Utc::now() - Duration::hours(1);
+    let child = write_subagent(&sessions, "child.jsonl", "child-id", "missing-parent", base);
+    let scanner = bounded_scanner(&sessions, &cache_root);
+
+    let (initial, _, initial_cache) = scanner.scan_codex_detailed_with_cache(None);
+    assert_eq!(initial.input_tokens, 50);
+    assert_locally_inferred(&initial_cache, &child);
+
+    let appended_owned_row = lineage_token_row(base + Duration::seconds(2), 22, 1_100, 50);
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&child)
+        .unwrap()
+        .write_all(format!("{appended_owned_row}\n").as_bytes())
+        .unwrap();
+
+    let (grown, _, grown_cache) = scanner.scan_codex_detailed_with_cache(None);
+    assert_eq!(grown.input_tokens, 100);
+    assert_locally_inferred(&grown_cache, &child);
+}
+
+#[test]
 fn replaced_parent_with_same_path_size_and_mtime_cannot_author_lineage() {
     let root = tempfile::tempdir().unwrap();
     let sessions = root.path().join("sessions");

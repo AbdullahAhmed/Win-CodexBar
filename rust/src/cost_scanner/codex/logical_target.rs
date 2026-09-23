@@ -526,18 +526,14 @@ impl CodexLineageDecision {
                 }
             }
             Self::ParentAbsent => {
-                if let Some(state) = matching_cached_state
+                if let Some(state) = matching_cached_state.filter(|state| !state.locally_resolved)
                     && let Some(baseline) = state.inherited_totals.clone()
                 {
                     return CodexAccountingMode::Baseline {
                         baseline,
                         paginated_continuation,
                         remaining_inherited_totals: state.remaining_inherited_totals.clone(),
-                        provenance: if state.locally_resolved {
-                            CodexBaselineProvenance::CachedLocalInference
-                        } else {
-                            CodexBaselineProvenance::CachedValidatedParent
-                        },
+                        provenance: CodexBaselineProvenance::CachedValidatedParent,
                     };
                 }
                 if metadata.is_subagent {
