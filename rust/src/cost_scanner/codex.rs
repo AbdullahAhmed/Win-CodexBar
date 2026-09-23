@@ -32,7 +32,6 @@ enum CodexAccountingMode {
 enum CodexBaselineProvenance {
     ValidatedParent { replaces_cached_state: bool },
     CachedValidatedParent,
-    CachedLocalInference,
 }
 
 impl CodexAccountingMode {
@@ -42,16 +41,6 @@ impl CodexAccountingMode {
 
     fn infers_subagent_baseline(&self) -> bool {
         matches!(self, Self::InferSubagent { .. })
-    }
-
-    fn locally_resolved(&self) -> bool {
-        matches!(
-            self,
-            Self::Baseline {
-                provenance: CodexBaselineProvenance::CachedLocalInference,
-                ..
-            }
-        )
     }
 
     fn requires_cached_reparse(&self) -> bool {
@@ -747,8 +736,7 @@ impl CostScanner {
             bytes_read: parse_result.bytes_read,
             is_complete: parse_result.is_complete,
         };
-        let locally_resolved =
-            accounting_mode.locally_resolved() || parse_result.fork_baseline_locally_resolved;
+        let locally_resolved = parse_result.fork_baseline_locally_resolved;
         let codex_fork_accounting_state = if is_fork
             && (parse_result.fork_baseline.is_some() || parse_result.fork_baseline_locally_resolved)
         {
