@@ -80,6 +80,7 @@ See the full history in [CHANGELOG.md](CHANGELOG.md).
 | MiniMax | API / Cookies | Usage, Billing Summary |
 | Kiro | Cookies / CLI | Monthly Credits, Overage |
 | Vertex AI | gcloud OAuth | Cost |
+| v0 | API Key | Billing quota, API rate limits, on-demand balance |
 | Augment | Cookies | Credits |
 | OpenCode | Local Config | Usage |
 | Kimi | Cookies | 5h Rate, Weekly |
@@ -89,6 +90,7 @@ See the full history in [CHANGELOG.md](CHANGELOG.md).
 | Ollama | Cookies / API Key | Usage, Cloud Models, Pace windows |
 | Azure OpenAI | API Key | Deployment |
 | T3 Chat | Cookies / cURL | Base, Overage |
+| TypeSafe | Browser cookies / manual Cookie header | Billing-cycle spend, balance, expiring credits |
 | OpenRouter | API Key | Credits |
 | JetBrains AI | Local Config | Usage |
 | Alibaba | Cookies | Usage |
@@ -112,6 +114,7 @@ See the full history in [CHANGELOG.md](CHANGELOG.md).
 | Venice | API Key | USD / DIEM Balance |
 | OpenAI | Admin API / API Key | Usage, Requests, Project-scoped cost, Credit Balance |
 | Grok | Cookies / auth.json | Billing |
+| Helmcode (also NaN Builders) | Browser cookies / manual Cookie header | Per-model token quotas, reset windows, Helmcode prepaid balance |
 | Replicate | Cookies / token accounts | Monthly spend, credit balance |
 | ElevenLabs | API Key | Subscription Credits, Voice Slots |
 | Deepgram | API Key | Project Usage |

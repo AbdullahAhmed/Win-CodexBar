@@ -64,6 +64,9 @@ pub enum ProviderId {
     Deepgram,
     Groq,
     HuggingFace,
+    Helmcode,
+    V0,
+    TypeSafe,
     LLMProxy,
     Chutes,
     LiteLLM,
@@ -148,6 +151,9 @@ impl ProviderId {
             ProviderId::Deepgram,
             ProviderId::Groq,
             ProviderId::HuggingFace,
+            ProviderId::Helmcode,
+            ProviderId::V0,
+            ProviderId::TypeSafe,
             ProviderId::LLMProxy,
             ProviderId::Chutes,
             ProviderId::LiteLLM,
@@ -235,6 +241,9 @@ impl ProviderId {
             ProviderId::Deepgram => "deepgram",
             ProviderId::Groq => "groq",
             ProviderId::HuggingFace => "huggingface",
+            ProviderId::Helmcode => "helmcode",
+            ProviderId::V0 => "v0",
+            ProviderId::TypeSafe => "typesafe",
             ProviderId::LLMProxy => "llmproxy",
             ProviderId::Chutes => "chutes",
             ProviderId::LiteLLM => "litellm",
@@ -319,6 +328,9 @@ impl ProviderId {
             ProviderId::Deepgram => "Deepgram",
             ProviderId::Groq => "Groq",
             ProviderId::HuggingFace => "Hugging Face",
+            ProviderId::Helmcode => "Helmcode",
+            ProviderId::V0 => "v0",
+            ProviderId::TypeSafe => "TypeSafe",
             ProviderId::LLMProxy => "LLM Proxy",
             ProviderId::Chutes => "Chutes",
             ProviderId::LiteLLM => "LiteLLM",
@@ -413,6 +425,9 @@ impl ProviderId {
             ProviderId::Deepgram => None,
             ProviderId::Groq => None,
             ProviderId::HuggingFace => None,
+            ProviderId::Helmcode => Some("helmcode.com"),
+            ProviderId::TypeSafe => Some("typesafe.ai"),
+            ProviderId::V0 => None,
             ProviderId::LLMProxy => None,
             ProviderId::Chutes => None,
             ProviderId::LiteLLM => None,
@@ -502,6 +517,9 @@ impl ProviderId {
             "deepgram" | "dg" => Some(ProviderId::Deepgram),
             "groq" | "groqcloud" | "groq-cloud" | "groq cloud" => Some(ProviderId::Groq),
             "huggingface" | "hugging-face" | "hugging face" | "hf" => Some(ProviderId::HuggingFace),
+            "helmcode" | "nan-builders" | "nan builders" => Some(ProviderId::Helmcode),
+            "v0" | "v0-dev" | "v0.dev" => Some(ProviderId::V0),
+            "typesafe" | "type-safe" | "type safe" => Some(ProviderId::TypeSafe),
             "llmproxy" | "llm-proxy" | "llm proxy" => Some(ProviderId::LLMProxy),
             "chutes" | "chutes-ai" | "chutes ai" => Some(ProviderId::Chutes),
             "litellm" | "lite-llm" | "lite llm" => Some(ProviderId::LiteLLM),
@@ -988,6 +1006,9 @@ pub fn cli_name_map() -> HashMap<&'static str, ProviderId> {
     map.insert("groq-cloud", ProviderId::Groq);
     map.insert("hugging-face", ProviderId::HuggingFace);
     map.insert("hf", ProviderId::HuggingFace);
+    map.insert("nan-builders", ProviderId::Helmcode);
+    map.insert("v0-dev", ProviderId::V0);
+    map.insert("type-safe", ProviderId::TypeSafe);
     map.insert("chutes-ai", ProviderId::Chutes);
     map.insert("lite-llm", ProviderId::LiteLLM);
     map.insert("zed-ai", ProviderId::Zed);
@@ -1057,6 +1078,9 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::Deepgram => "#13EF93",
         ProviderId::Groq => "#F55036",
         ProviderId::HuggingFace => "#FFD21E",
+        ProviderId::Helmcode => "#4F46E5",
+        ProviderId::V0 => "#111827",
+        ProviderId::TypeSafe => "#2563EB",
         ProviderId::LLMProxy => "#4F46E5",
         ProviderId::Chutes => "#FF5C35",
         ProviderId::LiteLLM => "#0EA5E9",
@@ -1096,7 +1120,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 77);
+        assert_eq!(all.len(), 80);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Pi));
@@ -1130,6 +1154,9 @@ mod tests {
         assert!(all.contains(&ProviderId::Deepgram));
         assert!(all.contains(&ProviderId::Groq));
         assert!(all.contains(&ProviderId::HuggingFace));
+        assert!(all.contains(&ProviderId::Helmcode));
+        assert!(all.contains(&ProviderId::V0));
+        assert!(all.contains(&ProviderId::TypeSafe));
         assert!(all.contains(&ProviderId::LLMProxy));
         assert!(all.contains(&ProviderId::Chutes));
         assert!(all.contains(&ProviderId::LiteLLM));

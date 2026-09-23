@@ -5,6 +5,8 @@
     reason = "provider traits and helpers are shared across modules; not all are consumed in every build"
 )]
 
+use futures::{Stream, StreamExt};
+
 pub mod abacus;
 pub mod aiand;
 pub mod alibaba;
@@ -38,6 +40,7 @@ pub mod fireworks;
 pub mod gemini;
 pub mod grok;
 pub mod groq;
+pub mod helmcode;
 pub mod huggingface;
 pub mod infini;
 pub mod jetbrains;
@@ -74,6 +77,8 @@ pub mod sakana;
 pub mod stepfun;
 pub mod sub2api;
 pub mod t3chat;
+pub mod typesafe;
+pub mod v0;
 pub mod venice;
 pub mod vertexai;
 pub mod warp;
@@ -118,6 +123,7 @@ pub use fireworks::FireworksProvider;
 pub use gemini::GeminiProvider;
 pub use grok::GrokProvider;
 pub use groq::GroqProvider;
+pub use helmcode::HelmcodeProvider;
 pub use huggingface::HuggingFaceProvider;
 pub use infini::InfiniProvider;
 pub use jetbrains::JetBrainsProvider;
@@ -153,6 +159,8 @@ pub use sakana::SakanaProvider;
 pub use stepfun::StepFunProvider;
 pub use sub2api::Sub2ApiProvider;
 pub use t3chat::T3ChatProvider;
+pub use typesafe::TypeSafeProvider;
+pub use v0::V0Provider;
 pub use venice::VeniceProvider;
 pub use vertexai::VertexAIProvider;
 pub use warp::WarpProvider;
@@ -163,6 +171,46 @@ pub use zai::ZaiProvider;
 pub use zed::ZedProvider;
 pub use zenmux::ZenMuxProvider;
 pub use zoommate::ZoomMateProvider;
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum BoundedBodyError<E> {
+    TooLarge,
+    Read(E),
+}
+
+pub(crate) async fn read_bounded_response(
+    response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Vec<u8>, BoundedBodyError<reqwest::Error>> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes as u64)
+    {
+        return Err(BoundedBodyError::TooLarge);
+    }
+    read_bounded_stream(response.bytes_stream(), max_bytes).await
+}
+
+async fn read_bounded_stream<S, B, E>(
+    stream: S,
+    max_bytes: usize,
+) -> Result<Vec<u8>, BoundedBodyError<E>>
+where
+    S: Stream<Item = Result<B, E>>,
+    B: AsRef<[u8]>,
+{
+    let mut stream = Box::pin(stream);
+    let mut body = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(BoundedBodyError::Read)?;
+        let chunk = chunk.as_ref();
+        if chunk.len() > max_bytes.saturating_sub(body.len()) {
+            return Err(BoundedBodyError::TooLarge);
+        }
+        body.extend_from_slice(chunk);
+    }
+    Ok(body)
+}
 
 pub(crate) fn browser_cookie_header(
     domains: &[&str],
@@ -197,6 +245,22 @@ pub(crate) fn cookie_values<'a>(cookie_header: &'a str, name: &str) -> Vec<&'a s
                 .filter(|value| !value.is_empty())
         })
         .collect()
+}
+
+/// Normalize a user-supplied `Cookie` header value at the shared provider boundary.
+///
+/// Accepts either the raw header value or a full, case-insensitive `Cookie:` line.
+/// Empty values and control characters are rejected before the value reaches an
+/// HTTP client.
+pub(crate) fn normalize_cookie_header(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let value = trimmed
+        .get(.."cookie:".len())
+        .filter(|prefix| prefix.eq_ignore_ascii_case("cookie:"))
+        .map_or(trimmed, |_| &trimmed["cookie:".len()..])
+        .trim();
+
+    (!value.is_empty() && !value.chars().any(char::is_control)).then(|| value.to_string())
 }
 
 pub(crate) fn browser_cookies_for_domain(
@@ -333,4 +397,77 @@ pub(crate) fn extract_renewal(text: &str) -> Option<chrono::DateTime<chrono::Utc
     chrono::DateTime::parse_from_rfc3339(raw)
         .ok()
         .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BoundedBodyError, normalize_cookie_header, read_bounded_stream};
+    use futures::stream;
+
+    #[tokio::test]
+    async fn bounded_stream_rejects_oversized_body_without_content_length() {
+        const MAX_BYTES: usize = 8;
+        let body = stream::iter([Ok::<_, ()>(vec![0_u8; MAX_BYTES - 1]), Ok(vec![1_u8; 2])]);
+
+        assert_eq!(
+            read_bounded_stream(body, MAX_BYTES).await,
+            Err(BoundedBodyError::TooLarge)
+        );
+    }
+
+    #[tokio::test]
+    async fn bounded_stream_accepts_body_below_limit() {
+        let body = stream::iter([Ok::<_, ()>(vec![1_u8, 2, 3]), Ok(vec![4_u8])]);
+
+        assert_eq!(read_bounded_stream(body, 8).await, Ok(vec![1, 2, 3, 4]));
+    }
+
+    #[tokio::test]
+    async fn bounded_stream_accepts_body_at_limit() {
+        let body = stream::iter([Ok::<_, ()>(vec![1_u8; 4]), Ok(vec![2_u8; 4])]);
+
+        assert_eq!(
+            read_bounded_stream(body, 8).await,
+            Ok(vec![1, 1, 1, 1, 2, 2, 2, 2])
+        );
+    }
+
+    #[tokio::test]
+    async fn bounded_stream_reports_read_failure() {
+        let body = stream::iter([
+            Ok::<_, &'static str>(vec![1_u8]),
+            Err("network read failed"),
+        ]);
+
+        assert_eq!(
+            read_bounded_stream(body, 8).await,
+            Err(BoundedBodyError::Read("network read failed"))
+        );
+    }
+
+    #[test]
+    fn normalizes_raw_and_prefixed_cookie_headers() {
+        assert_eq!(
+            normalize_cookie_header("  session=abc; user=42  ").as_deref(),
+            Some("session=abc; user=42")
+        );
+        assert_eq!(
+            normalize_cookie_header(" Cookie: session=abc ").as_deref(),
+            Some("session=abc")
+        );
+        assert_eq!(
+            normalize_cookie_header("cOoKiE: session=abc").as_deref(),
+            Some("session=abc")
+        );
+    }
+
+    #[test]
+    fn rejects_empty_and_control_character_cookie_headers() {
+        assert_eq!(normalize_cookie_header("  "), None);
+        assert_eq!(normalize_cookie_header("Cookie:  "), None);
+        assert_eq!(
+            normalize_cookie_header("session=abc\r\nInjected: true"),
+            None
+        );
+    }
 }

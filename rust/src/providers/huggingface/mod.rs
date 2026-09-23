@@ -7,16 +7,20 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, TimeZone, Utc};
-use futures::StreamExt;
 use reqwest::{Client, StatusCode, Url};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use super::{BoundedBodyError, read_bounded_response};
 use crate::core::{
     CostSnapshot, FetchContext, Provider, ProviderDisplayDetail, ProviderError,
     ProviderFetchResult, ProviderId, ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
 };
+
+mod wallet;
+
+use wallet::{WalletCandidate, matching_wallet_balance, parse_wallet_balance};
 
 const BILLING_URL: &str = "https://huggingface.co/api/settings/billing/usage-v2";
 const WHOAMI_URL: &str = "https://huggingface.co/api/whoami-v2";
@@ -47,6 +51,7 @@ struct ZeroGpuSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct IdentitySnapshot {
+    user_id: Option<String>,
     name: Option<String>,
     email: Option<String>,
     plan: Option<String>,
@@ -165,16 +170,62 @@ impl HuggingFaceProvider {
         let zerogpu_url = Url::parse(ZEROGPU_URL)
             .map_err(|_| ProviderError::Other("Invalid Hugging Face ZeroGPU URL.".to_string()))?;
 
-        let (billing, identity, zerogpu) = tokio::join!(
+        let (billing, identity, zerogpu, wallet_candidate) = tokio::join!(
             self.fetch_json(billing_url, &token, PRIMARY_TIMEOUT),
             self.fetch_optional_json(whoami_url, &token),
             self.fetch_optional_json(zerogpu_url, &token),
+            self.fetch_optional_wallet_candidate(),
         );
         let billing = parse_billing(billing?)?;
         let identity = identity.and_then(|value| parse_identity(&value));
         let zerogpu = zerogpu.and_then(|value| parse_zerogpu(&value));
+        let balance = matching_wallet_balance(identity.as_ref(), wallet_candidate);
 
-        Ok(build_result(billing, identity, zerogpu))
+        Ok(build_result(billing, identity, zerogpu, balance))
+    }
+
+    async fn fetch_optional_wallet_candidate(&self) -> Option<WalletCandidate> {
+        let cookie = crate::providers::browser_cookie_header(&["huggingface.co"]).ok()?;
+        let (billing, whoami) = tokio::join!(
+            self.fetch_cookie_text(
+                "https://huggingface.co/settings/billing",
+                &cookie,
+                "text/html",
+            ),
+            self.fetch_cookie_text(WHOAMI_URL, &cookie, "application/json"),
+        );
+        let billing = billing.ok()?;
+        let whoami = whoami.ok()?;
+        let balance = parse_wallet_balance(&billing).ok()?;
+        let profile: Value = serde_json::from_str(&whoami).ok()?;
+        let user_id = parse_identity(&profile)?.user_id?;
+        Some(WalletCandidate { user_id, balance })
+    }
+
+    async fn fetch_cookie_text(
+        &self,
+        url: &str,
+        cookie: &str,
+        accept: &str,
+    ) -> Result<String, ProviderError> {
+        tokio::time::timeout(OPTIONAL_TIMEOUT, async {
+            let response = self
+                .client
+                .get(url)
+                .header(reqwest::header::COOKIE, cookie)
+                .header(reqwest::header::ACCEPT, accept)
+                .send()
+                .await?;
+            if !response.status().is_success() {
+                return Err(classify_status(response.status()));
+            }
+            let body = read_bounded_body(response, "wallet response").await?;
+            String::from_utf8(body).map_err(|_| {
+                ProviderError::Parse("Hugging Face returned invalid wallet text.".to_string())
+            })
+        })
+        .await
+        .map_err(|_| ProviderError::Timeout)?
     }
 
     async fn fetch_optional_json(&self, url: Url, token: &str) -> Option<Value> {
@@ -204,21 +255,7 @@ impl HuggingFaceProvider {
                 return Err(classify_status(status));
             }
 
-            let mut body = Vec::new();
-            let mut stream = response.bytes_stream();
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(|_| {
-                    ProviderError::Parse(
-                        "Hugging Face returned an unreadable JSON body.".to_string(),
-                    )
-                })?;
-                body.extend_from_slice(&chunk);
-                if body.len() > MAX_RESPONSE_BYTES {
-                    return Err(ProviderError::Parse(
-                        "Hugging Face returned an oversized JSON body.".to_string(),
-                    ));
-                }
-            }
+            let body = read_bounded_body(response, "JSON body").await?;
             serde_json::from_slice(&body).map_err(|_| {
                 ProviderError::Parse("Hugging Face returned invalid JSON.".to_string())
             })
@@ -226,6 +263,22 @@ impl HuggingFaceProvider {
         .await
         .map_err(|_| ProviderError::Timeout)?
     }
+}
+
+async fn read_bounded_body(
+    response: reqwest::Response,
+    response_kind: &str,
+) -> Result<Vec<u8>, ProviderError> {
+    read_bounded_response(response, MAX_RESPONSE_BYTES)
+        .await
+        .map_err(|error| match error {
+            BoundedBodyError::TooLarge => ProviderError::Parse(format!(
+                "Hugging Face returned an oversized {response_kind}."
+            )),
+            BoundedBodyError::Read(_) => ProviderError::Parse(format!(
+                "Hugging Face returned an unreadable {response_kind}."
+            )),
+        })
 }
 
 impl Default for HuggingFaceProvider {
@@ -400,17 +453,23 @@ fn parse_timestamp(value: &Value) -> Option<DateTime<Utc>> {
 }
 
 fn parse_identity(value: &Value) -> Option<IdentitySnapshot> {
+    let user_id = (value.get("type").and_then(Value::as_str) == Some("user"))
+        .then(|| safe_text(value.get("id").and_then(Value::as_str)))
+        .flatten();
     let name = safe_text(value.get("name").and_then(Value::as_str));
     let email = safe_text(value.get("email").and_then(Value::as_str));
     let plan = value
         .get("isPro")
         .and_then(Value::as_bool)
         .map(|is_pro| if is_pro { "Pro" } else { "Free" }.to_string());
-    (name.is_some() || email.is_some() || plan.is_some()).then_some(IdentitySnapshot {
-        name,
-        email,
-        plan,
-    })
+    (user_id.is_some() || name.is_some() || email.is_some() || plan.is_some()).then_some(
+        IdentitySnapshot {
+            user_id,
+            name,
+            email,
+            plan,
+        },
+    )
 }
 
 fn safe_text(value: Option<&str>) -> Option<String> {
@@ -425,6 +484,7 @@ fn build_result(
     billing: BillingSnapshot,
     identity: Option<IdentitySnapshot>,
     zerogpu: Option<ZeroGpuSnapshot>,
+    balance: Option<f64>,
 ) -> ProviderFetchResult {
     let mut result = ProviderFetchResult::new(
         UsageSnapshot::new(RateWindow::informational("Hugging Face billing"))
@@ -436,6 +496,9 @@ fn build_result(
     let mut cost = CostSnapshot::new(billing.billable_usd, "USD", "Current month");
     if let Some(limit) = billing.limit_usd {
         cost = cost.with_limit(limit);
+    }
+    if let Some(balance) = balance {
+        cost = cost.with_balance(balance);
     }
     result = result.with_cost(cost);
 
@@ -461,6 +524,9 @@ fn build_result(
     }
     if let Some(requests) = billing.requests {
         details.push(("inference-requests", "Requests", requests.to_string()));
+    }
+    if let Some(balance) = balance {
+        details.push(("prepaid-balance", "Prepaid balance", format_usd(balance)));
     }
 
     let mut rows: Vec<Option<ProviderDisplayDetail>> = details
@@ -751,6 +817,7 @@ mod tests {
                 total_minutes: 1500.0,
                 resets_at: None,
             }),
+            None,
         );
         assert_eq!(result.source_label, "api");
         assert_eq!(result.cost.as_ref().and_then(|cost| cost.limit), Some(10.0));

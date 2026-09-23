@@ -40,6 +40,21 @@ pub fn validate_provider_workspace_value(
             }
             Ok(trimmed.to_string())
         }
+        ProviderId::V0 => validate_id(trimmed, "v0 scope", |value| {
+            value.len() <= 128
+                && value
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+        }),
+        ProviderId::Helmcode => {
+            if trimmed.eq_ignore_ascii_case("helmcode") {
+                Ok("helmcode".to_string())
+            } else if trimmed.eq_ignore_ascii_case("nanBuilders") {
+                Ok("nanBuilders".to_string())
+            } else {
+                Err("Helmcode tenant must be 'helmcode' or 'nanBuilders'".to_string())
+            }
+        }
         ProviderId::LiteLLM => validate_token_endpoint(trimmed, "LiteLLM base URL", |_| true),
         ProviderId::Sub2Api => validate_sub2api_base_url(trimmed),
         _ => Ok(trimmed.to_string()),
