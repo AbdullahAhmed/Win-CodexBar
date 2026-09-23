@@ -177,8 +177,15 @@ pub(super) fn scan_codex_detailed_with_cache(
     cache.codex_pending_scan_root_paths = pending_scan.root_paths.clone();
     cache.codex_pending_scan_timezone = Some(pending_scan.timezone.clone());
 
-    let (mut candidates, discovery_complete) =
-        scanner.collect_codex_candidates(&sessions_dirs, scan_range, &cache, cancel, &mut stats);
+    let cached_lineage = CodexLineagePlanner::new(&cache);
+    let (mut candidates, discovery_complete) = scanner.collect_codex_candidates(
+        &sessions_dirs,
+        scan_range,
+        &cache,
+        &cached_lineage,
+        cancel,
+        &mut stats,
+    );
     let candidate_limit = if scanner.options.codex_candidate_limit == 0 {
         usize::MAX
     } else {
@@ -201,8 +208,9 @@ pub(super) fn scan_codex_detailed_with_cache(
     prioritize_codex_pending_candidates(&mut candidates, &pending_paths_before_pass);
     defer_codex_locally_inferred_candidates(&mut candidates, &cache);
     if discovery_complete && !is_cancelled(cancel) {
-        pending_next
-            .retain(|path| !cached_codex_file_is_complete_for_range(&cache, path, scan_range));
+        pending_next.retain(|path| {
+            !cached_codex_file_is_complete_for_range(&cache, &cached_lineage, path, scan_range)
+        });
     }
 
     // Admit one bounded set, inspect each admitted candidate once, and order
@@ -234,12 +242,15 @@ pub(super) fn scan_codex_detailed_with_cache(
         });
     }
     let mut unprocessed = Vec::new();
-    if !cancelled_during_preparation.is_empty() || is_cancelled(cancel) {
+    let lineage_planner;
+    let cancelled_before_plan = !cancelled_during_preparation.is_empty() || is_cancelled(cancel);
+    if cancelled_before_plan {
         unprocessed.extend(work_queue.drain(..).map(|candidate| candidate.path));
         unprocessed.extend(cancelled_during_preparation);
     } else {
-        let unsafe_cached_paths =
+        let (planner, unsafe_cached_paths) =
             CodexLineagePlanner::plan_candidates_by_lineage(&cache, &mut work_queue);
+        lineage_planner = planner;
         invalidated_unsafe_lineage = !unsafe_cached_paths.is_empty();
         if invalidated_unsafe_lineage {
             cache.previous_report = None;
@@ -250,6 +261,9 @@ pub(super) fn scan_codex_detailed_with_cache(
                 pending_next.push(path);
             }
         }
+    }
+    if cancelled_before_plan {
+        lineage_planner = cached_lineage;
     }
 
     let mut incomplete_processed = Vec::new();
@@ -274,6 +288,7 @@ pub(super) fn scan_codex_detailed_with_cache(
             &mut stats,
             Some(allowance),
             Some(candidate),
+            &lineage_planner,
         );
         bytes_read_this_refresh = bytes_read_this_refresh.saturating_add(outcome.bytes_read.max(0));
         stats.codex_bytes_read = stats

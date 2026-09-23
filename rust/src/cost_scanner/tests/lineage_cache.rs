@@ -167,7 +167,7 @@ fn replaced_parent_with_same_path_size_and_mtime_cannot_author_lineage() {
     let parent_key = parent.to_string_lossy().to_string();
     let child_usage = &cache.files[&child.to_string_lossy().to_string()];
     assert!(matches!(
-        CodexLineagePlanner::new(&cache).decision_for_usage(child_usage),
+        CodexLineagePlanner::new(&cache).decision_for_usage(&cache, child_usage),
         CodexLineageDecision::ParentReady(_)
     ));
 
@@ -203,7 +203,7 @@ fn replaced_parent_with_same_path_size_and_mtime_cannot_author_lineage() {
     assert_ne!(replacement_identity, old_identity);
 
     assert_eq!(
-        CodexLineagePlanner::new(&cache).decision_for_usage(child_usage),
+        CodexLineagePlanner::new(&cache).decision_for_usage(&cache, child_usage),
         CodexLineageDecision::Unsafe
     );
 }

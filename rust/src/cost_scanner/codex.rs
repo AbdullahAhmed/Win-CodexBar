@@ -101,10 +101,6 @@ fn codex_usage_uses_parent(usage: &CostUsageFileUsage) -> bool {
             && usage.codex_forked_from_id.is_some())
 }
 
-fn codex_fork_parent_is_safe(cache: &CostUsageCache, usage: &CostUsageFileUsage) -> bool {
-    CodexLineagePlanner::new(cache).cached_usage_is_safe(usage)
-}
-
 fn codex_fork_uses_local_inference(usage: &CostUsageFileUsage) -> bool {
     usage
         .codex_fork_accounting_state
@@ -202,6 +198,7 @@ impl CostScanner {
         sessions_dirs: &[PathBuf],
         range: &CostUsageDayRange,
         cache: &CostUsageCache,
+        planner: &CodexLineagePlanner,
         cancel: Option<&AtomicBool>,
         stats: &mut CostScanStats,
     ) -> (Vec<CodexScanCandidate>, bool) {
@@ -263,7 +260,7 @@ impl CostScanner {
                     };
                     let mtime_unix_ms = system_time_to_unix_ms(metadata.modified().ok());
                     let unchanged_complete =
-                        cached_codex_file_is_complete_for_range(cache, &path_key, range);
+                        cached_codex_file_is_complete_for_range(cache, planner, &path_key, range);
                     if unchanged_complete {
                         stats.files_seen = stats.files_seen.saturating_add(1);
                         stats.files_skipped = stats.files_skipped.saturating_add(1);
@@ -323,8 +320,10 @@ impl CostScanner {
         cancel: Option<&AtomicBool>,
         stats: &mut CostScanStats,
     ) {
-        let _ =
-            self.parse_codex_file_bounded(path, range, summary, cache, cancel, stats, None, None);
+        let planner = CodexLineagePlanner::new(cache);
+        let _ = self.parse_codex_file_bounded(
+            path, range, summary, cache, cancel, stats, None, None, &planner,
+        );
     }
 
     #[allow(
@@ -341,6 +340,7 @@ impl CostScanner {
         stats: &mut CostScanStats,
         max_bytes_to_read: Option<i64>,
         prepared_candidate: Option<&CodexPreparedCandidate>,
+        planner: &CodexLineagePlanner,
     ) -> CodexFileScanOutcome {
         if is_cancelled(cancel) {
             return CodexFileScanOutcome::default();
@@ -377,7 +377,7 @@ impl CostScanner {
             };
         }
         let cache_entry_is_fresh = |entry: &CostUsageFileUsage| {
-            cached_codex_file_is_fresh(cache, entry, cache_covers_range, mtime_ms, size)
+            cached_codex_file_is_fresh(cache, planner, entry, cache_covers_range, mtime_ms, size)
         };
         let identity_matches_cached = |entry: &CostUsageFileUsage| {
             codex_file_identity_matches(
@@ -502,7 +502,8 @@ impl CostScanner {
             .unwrap_or_default();
         let parent_owner_expected =
             prepared_candidate.is_some_and(|candidate| candidate.parent_owner_expected);
-        let lineage_decision = CodexLineagePlanner::new(cache).decision_for_scan(
+        let lineage_decision = planner.decision_for_scan(
+            cache,
             is_fork,
             lineage_gate,
             codex_forked_from_id.as_deref(),
@@ -545,7 +546,7 @@ impl CostScanner {
         }
 
         if let Some(entry) = &cached
-            && cached_codex_file_is_fresh(cache, entry, cache_covers_range, mtime_ms, size)
+            && cached_codex_file_is_fresh(cache, planner, entry, cache_covers_range, mtime_ms, size)
             && identity_matches_cached(entry)
             && !cached_identity_changed
             && !accounting_mode.requires_cached_reparse()
