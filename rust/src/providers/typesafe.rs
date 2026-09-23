@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use futures::stream;
+use futures::{StreamExt, stream};
 use reqwest::{Client, StatusCode, redirect::Policy};
 use serde_json::Value;
 use std::time::Duration;
