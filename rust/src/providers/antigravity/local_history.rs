@@ -63,6 +63,7 @@ pub fn offline_conversation_count() -> usize {
     offline_conversation_count_with_roots(&roots, &tokscale_sessions)
 }
 
+#[cfg(test)]
 fn offline_conversation_count_in(home: &Path) -> usize {
     let roots = local_sqlite::database_roots(&home.join(".gemini"));
     let tokscale_sessions = local_sessions::tokscale_sessions_from_values(home, None);
