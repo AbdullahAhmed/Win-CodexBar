@@ -124,11 +124,20 @@ impl HelmcodeProvider {
         tenant: Tenant,
         cookie: &str,
     ) -> Result<ProviderFetchResult, ProviderError> {
-        let quota = self
-            .get(tenant, cookie, "/api/usage/quota", false)
-            .await?
-            .ok_or_else(|| parse_failure("quota"))?;
-        let billing = self.get(tenant, cookie, "/api/billing", true).await?;
+        let quota_request = self.get(tenant, cookie, "/api/usage/quota", false);
+        let billing_request = self.get(tenant, cookie, "/api/billing", true);
+        let credits_request = async {
+            if tenant == Tenant::Helmcode {
+                self.get(tenant, cookie, "/api/billing/credits", true).await
+            } else {
+                Ok(None)
+            }
+        };
+        let (quota_result, billing_result, credits_result) =
+            tokio::join!(quota_request, billing_request, credits_request);
+
+        let quota = quota_result?.ok_or_else(|| parse_failure("quota"))?;
+        let billing = billing_result?;
         let premium = billing
             .as_ref()
             .and_then(|value| value.get("subscription"))
@@ -157,10 +166,7 @@ impl HelmcodeProvider {
             );
         }
         let mut result = ProviderFetchResult::new(usage, "web");
-        if tenant == Tenant::Helmcode
-            && let Some(credits) = self
-                .get(tenant, cookie, "/api/billing/credits", true)
-                .await?
+        if let Some(credits) = credits_result?
             && let Some(balance_micros) = credits
                 .get("balanceMicros")
                 .and_then(nonnegative_balance_micros)
