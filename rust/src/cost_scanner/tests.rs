@@ -496,6 +496,103 @@ fn malformed_claude_history_stays_unknown_while_valid_empty_history_is_known_zer
 }
 
 #[test]
+fn claude_daily_token_coverage_requires_a_complete_valid_scan() {
+    let root = tempfile::tempdir().unwrap();
+    let cutoff = Utc::now() - Duration::days(1);
+    let valid_path = root.path().join("valid.jsonl");
+    let timestamp = Utc::now() - Duration::hours(1);
+    let today = timestamp
+        .with_timezone(&Local)
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    std::fs::write(
+        &valid_path,
+        format!(
+            "{}\n",
+            claude_transcript_line(
+                &timestamp.to_rfc3339(),
+                "requestId",
+                "req_valid",
+                "msg_valid"
+            )
+        ),
+    )
+    .unwrap();
+
+    let mut valid_tokens = HashMap::from([(today.clone(), 0)]);
+    let valid_result = scan_claude_file_for_daily_tokens(
+        &valid_path,
+        &cutoff,
+        &mut HashSet::new(),
+        &mut ClaudeScanPricingResolver::default(),
+        &mut valid_tokens,
+    );
+    assert!(valid_result.is_complete());
+    let mut covered_days = HashSet::new();
+    mark_claude_daily_token_coverage(&mut covered_days, &valid_tokens, valid_result);
+    assert!(covered_days.contains(&today));
+
+    let assert_uncovered = |path: &Path| {
+        let mut daily_tokens = HashMap::from([(today.clone(), 0)]);
+        let result = scan_claude_file_for_daily_tokens(
+            path,
+            &cutoff,
+            &mut HashSet::new(),
+            &mut ClaudeScanPricingResolver::default(),
+            &mut daily_tokens,
+        );
+        assert!(!result.is_complete());
+        let mut covered_days = HashSet::from(["stale-coverage".to_string()]);
+        mark_claude_daily_token_coverage(&mut covered_days, &daily_tokens, result);
+        assert!(covered_days.is_empty());
+        result
+    };
+
+    let malformed_path = root.path().join("malformed.jsonl");
+    std::fs::write(&malformed_path, b"{malformed\n").unwrap();
+    assert_eq!(assert_uncovered(&malformed_path).malformed_lines, 1);
+
+    let incomplete_path = root.path().join("incomplete.jsonl");
+    std::fs::write(
+        &incomplete_path,
+        r#"{"type":"assistant","message":{"id":"msg_preliminary","model":"gpt-5.6-sol","stop_reason":null,"usage":{"input_tokens":1000}}}"#,
+    )
+    .unwrap();
+    assert_eq!(assert_uncovered(&incomplete_path).incomplete_requests, 1);
+
+    let missing_timestamp_path = root.path().join("missing-timestamp.jsonl");
+    std::fs::write(
+        &missing_timestamp_path,
+        r#"{"type":"assistant","requestId":"req_no_timestamp","message":{"id":"msg_no_timestamp","model":"claude-sonnet-4-6","usage":{"input_tokens":1000,"output_tokens":500}}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        assert_uncovered(&missing_timestamp_path).aggregation_failures,
+        1
+    );
+
+    let unreadable_path = root.path().join("missing.jsonl");
+    assert_eq!(assert_uncovered(&unreadable_path).read_failures, 1);
+
+    let scanner = CostScanner::new(1);
+    let missing_directory = root.path().join("missing-directory");
+    let traversal_read_failures =
+        scanner.walk_claude_files(&missing_directory, &cutoff, None, &mut |_| {});
+    assert_eq!(traversal_read_failures, 1);
+    let mut covered_days = HashSet::from([today]);
+    mark_claude_daily_token_coverage(
+        &mut covered_days,
+        &valid_tokens,
+        ClaudeFileScanResult {
+            read_failures: traversal_read_failures,
+            ..ClaudeFileScanResult::default()
+        },
+    );
+    assert!(covered_days.is_empty());
+}
+
+#[test]
 fn classifies_vertex_ai_claude_metadata_without_changing_anthropic_rows() {
     let cases = [
         (

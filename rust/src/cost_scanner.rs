@@ -608,6 +608,7 @@ impl CostScanner {
                     cancel,
                     &mut pricing,
                     |record| {
+                        aggregation_complete &= record.timestamp.is_some();
                         aggregation_complete &= add_claude_record_to_summary(&mut summary, record);
                     },
                 );
@@ -620,7 +621,12 @@ impl CostScanner {
                 }
                 claude_scan.absorb(file_result);
             };
-            self.walk_claude_files(&projects_dir, &cutoff, cancel, &mut handle_file);
+            let traversal_read_failures =
+                self.walk_claude_files(&projects_dir, &cutoff, cancel, &mut handle_file);
+            drop(handle_file);
+            claude_scan.read_failures = claude_scan
+                .read_failures
+                .saturating_add(traversal_read_failures);
         }
 
         // OMP / pi-compatible anthropic rows, deduped across shared files.
@@ -675,42 +681,45 @@ impl CostScanner {
 
         let mut quota_records = Vec::new();
         let mut scan_result = ClaudeFileScanResult::default();
-        let mut missing_timestamp = false;
         if projects_dir.exists() {
             let mut seen = HashSet::new();
             let mut pricing = ClaudeScanPricingResolver::default();
-            self.walk_claude_files(&projects_dir, &cutoff, cancel, &mut |path| {
-                let mut file_has_usage = false;
-                let mut aggregation_complete = true;
-                let mut file_result = scan_claude_file_with_pricing(
-                    path,
-                    &cutoff,
-                    &mut seen,
-                    cancel,
-                    &mut pricing,
-                    |record| {
-                        file_has_usage = true;
-                        aggregation_complete &= add_claude_record_to_summary(&mut summary, record);
-                        aggregation_complete &=
-                            add_claude_record_to_daily_costs(&mut daily_cost, record);
-                        aggregation_complete &=
-                            add_claude_record_to_daily_tokens(&mut daily_tokens, record);
-                        if let Some(quota_record) = quota_history_record_from_usage(record) {
-                            quota_records.push(quota_record);
-                        } else {
-                            missing_timestamp = true;
-                        }
-                    },
-                );
-                if !aggregation_complete {
-                    file_result.aggregation_failures =
-                        file_result.aggregation_failures.saturating_add(1);
-                }
-                if file_has_usage {
-                    summary.sessions_count += 1;
-                }
-                scan_result.absorb(file_result);
-            });
+            let traversal_read_failures =
+                self.walk_claude_files(&projects_dir, &cutoff, cancel, &mut |path| {
+                    let mut file_has_usage = false;
+                    let mut aggregation_complete = true;
+                    let mut file_result = scan_claude_file_with_pricing(
+                        path,
+                        &cutoff,
+                        &mut seen,
+                        cancel,
+                        &mut pricing,
+                        |record| {
+                            file_has_usage = true;
+                            aggregation_complete &= record.timestamp.is_some();
+                            aggregation_complete &=
+                                add_claude_record_to_summary(&mut summary, record);
+                            aggregation_complete &=
+                                add_claude_record_to_daily_costs(&mut daily_cost, record);
+                            aggregation_complete &=
+                                add_claude_record_to_daily_tokens(&mut daily_tokens, record);
+                            if let Some(quota_record) = quota_history_record_from_usage(record) {
+                                quota_records.push(quota_record);
+                            }
+                        },
+                    );
+                    if !aggregation_complete {
+                        file_result.aggregation_failures =
+                            file_result.aggregation_failures.saturating_add(1);
+                    }
+                    if file_has_usage {
+                        summary.sessions_count += 1;
+                    }
+                    scan_result.absorb(file_result);
+                });
+            scan_result.read_failures = scan_result
+                .read_failures
+                .saturating_add(traversal_read_failures);
         }
 
         crate::pi_session_cost::scan_pi_compatible_into(
@@ -721,10 +730,7 @@ impl CostScanner {
             &mut HashSet::new(),
         );
 
-        let complete = projects_dir.exists()
-            && !is_cancelled(cancel)
-            && scan_result.is_complete()
-            && !missing_timestamp;
+        let complete = projects_dir.exists() && !is_cancelled(cancel) && scan_result.is_complete();
         finalize_claude_summary(
             &mut summary,
             projects_dir.exists(),
@@ -822,36 +828,52 @@ impl CostScanner {
         cutoff: &DateTime<Utc>,
         cancel: Option<&AtomicBool>,
         on_file: &mut F,
-    ) where
+    ) -> u32
+    where
         F: FnMut(&Path),
     {
         if is_cancelled(cancel) {
-            return;
+            return 0;
         }
         let entries = match fs::read_dir(dir) {
             Ok(e) => e,
-            Err(_) => return,
+            Err(_) => return 1,
         };
 
-        for entry in entries.flatten() {
+        let mut read_failures = 0u32;
+        for entry in entries {
             if is_cancelled(cancel) {
                 break;
             }
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    read_failures = read_failures.saturating_add(1);
+                    continue;
+                }
+            };
             let path = entry.path();
-            if path.is_dir() {
-                self.walk_claude_files(&path, cutoff, cancel, on_file);
-            } else if path.extension().is_some_and(|e| e == "jsonl") {
-                // Check file modification time
-                if let Ok(metadata) = fs::metadata(&path)
-                    && let Ok(modified) = metadata.modified()
-                {
-                    let modified_dt: DateTime<Utc> = modified.into();
-                    if modified_dt >= *cutoff {
-                        on_file(&path);
+            match fs::metadata(&path) {
+                Ok(metadata) if metadata.is_dir() => {
+                    read_failures = read_failures
+                        .saturating_add(self.walk_claude_files(&path, cutoff, cancel, on_file));
+                }
+                Ok(metadata) if path.extension().is_some_and(|e| e == "jsonl") => {
+                    match metadata.modified() {
+                        Ok(modified) => {
+                            let modified_dt: DateTime<Utc> = modified.into();
+                            if modified_dt >= *cutoff {
+                                on_file(&path);
+                            }
+                        }
+                        Err(_) => read_failures = read_failures.saturating_add(1),
                     }
                 }
+                Ok(_) => {}
+                Err(_) => read_failures = read_failures.saturating_add(1),
             }
         }
+        read_failures
     }
 }
 
@@ -873,20 +895,6 @@ where
 {
     let mut pricing = ClaudeScanPricingResolver::default();
     scan_claude_file_with_pricing(path, cutoff, seen, cancel, &mut pricing, on_record).counted
-}
-
-fn for_each_claude_usage_record_with_pricing<F>(
-    path: &Path,
-    cutoff: &DateTime<Utc>,
-    seen: &mut HashSet<ClaudeUsageDedupKey>,
-    cancel: Option<&AtomicBool>,
-    pricing: &mut ClaudeScanPricingResolver,
-    on_record: F,
-) -> usize
-where
-    F: FnMut(&ClaudeUsageRecord),
-{
-    scan_claude_file_with_pricing(path, cutoff, seen, cancel, pricing, on_record).counted
 }
 
 fn scan_claude_file_with_pricing<F>(
@@ -1248,19 +1256,31 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
                 let mut pricing = ClaudeScanPricingResolver::default();
                 let mut claude_scan = ClaudeFileScanResult::default();
                 let mut handle_file = |path: &Path| {
-                    let file_result = scan_claude_file_with_pricing(
+                    let mut aggregation_complete = true;
+                    let mut file_result = scan_claude_file_with_pricing(
                         path,
                         &cutoff,
                         &mut seen,
                         None,
                         &mut pricing,
                         |record| {
-                            add_claude_record_to_daily_costs(&mut daily_costs, record);
+                            aggregation_complete &= record.timestamp.is_some();
+                            aggregation_complete &=
+                                add_claude_record_to_daily_costs(&mut daily_costs, record);
                         },
                     );
+                    if !aggregation_complete {
+                        file_result.aggregation_failures =
+                            file_result.aggregation_failures.saturating_add(1);
+                    }
                     claude_scan.absorb(file_result);
                 };
-                scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file);
+                let traversal_read_failures =
+                    scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file);
+                drop(handle_file);
+                claude_scan.read_failures = claude_scan
+                    .read_failures
+                    .saturating_add(traversal_read_failures);
                 if claude_scan.is_complete() {
                     for slot in daily_costs.values_mut() {
                         if slot.is_none() {
@@ -1353,26 +1373,24 @@ pub fn get_daily_token_history(provider: &str, days: u32) -> (Vec<(String, u64)>
                 let cutoff = Utc::now() - Duration::days(days as i64);
                 let mut seen = HashSet::new();
                 let mut pricing = ClaudeScanPricingResolver::default();
-                let mut aggregation_complete = true;
+                let mut claude_scan = ClaudeFileScanResult::default();
                 let mut handle_file = |path: &Path| {
-                    for_each_claude_usage_record_with_pricing(
+                    let file_result = scan_claude_file_for_daily_tokens(
                         path,
                         &cutoff,
                         &mut seen,
-                        None,
                         &mut pricing,
-                        |record| {
-                            aggregation_complete &=
-                                add_claude_record_to_daily_tokens(&mut daily_tokens, record);
-                        },
+                        &mut daily_tokens,
                     );
+                    claude_scan.absorb(file_result);
                 };
-                scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file);
-                if !aggregation_complete {
-                    covered_days.clear();
-                } else {
-                    covered_days.extend(daily_tokens.keys().cloned());
-                }
+                let traversal_read_failures =
+                    scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file);
+                drop(handle_file);
+                claude_scan.read_failures = claude_scan
+                    .read_failures
+                    .saturating_add(traversal_read_failures);
+                mark_claude_daily_token_coverage(&mut covered_days, &daily_tokens, claude_scan);
             }
         }
         "pi" => {
@@ -1433,4 +1451,35 @@ fn add_claude_record_to_daily_tokens(
         return checked_add_assign(slot, tokens);
     }
     true
+}
+
+fn scan_claude_file_for_daily_tokens(
+    path: &Path,
+    cutoff: &DateTime<Utc>,
+    seen: &mut HashSet<ClaudeUsageDedupKey>,
+    pricing: &mut ClaudeScanPricingResolver,
+    daily_tokens: &mut HashMap<String, u64>,
+) -> ClaudeFileScanResult {
+    let mut aggregation_failures = 0u32;
+    let mut result = scan_claude_file_with_pricing(path, cutoff, seen, None, pricing, |record| {
+        if record.timestamp.is_none() || !add_claude_record_to_daily_tokens(daily_tokens, record) {
+            aggregation_failures = aggregation_failures.saturating_add(1);
+        }
+    });
+    result.aggregation_failures = result
+        .aggregation_failures
+        .saturating_add(aggregation_failures);
+    result
+}
+
+fn mark_claude_daily_token_coverage(
+    covered_days: &mut HashSet<String>,
+    daily_tokens: &HashMap<String, u64>,
+    scan_result: ClaudeFileScanResult,
+) {
+    if scan_result.is_complete() {
+        covered_days.extend(daily_tokens.keys().cloned());
+    } else {
+        covered_days.clear();
+    }
 }
