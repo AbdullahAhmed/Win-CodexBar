@@ -21,6 +21,7 @@ import { useDeepSeekPricingStatus } from "./hooks/useDeepSeekPricingStatus";
 const Settings = lazy(() => import("./surfaces/Settings"));
 const PopOutPanel = lazy(() => import("./surfaces/PopOutPanel"));
 const FloatBar = lazy(() => import("./floatbar/FloatBar"));
+const UsageCoin = lazy(() => import("./usageCoin/UsageCoin"));
 
 function SurfaceFallback() {
   return null;
@@ -178,6 +179,14 @@ function AppInner() {
     return (
       <Suspense fallback={<SurfaceFallback />}>
         <FloatBar state={state} />
+      </Suspense>
+    );
+  }
+
+  if (getCurrentWebviewWindow().label === "usage-coin") {
+    return (
+      <Suspense fallback={<SurfaceFallback />}>
+        <UsageCoin />
       </Suspense>
     );
   }

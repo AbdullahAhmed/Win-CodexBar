@@ -147,6 +147,10 @@ pub(super) struct RawSettings {
 
     #[serde(default)]
     float_bar_enabled: bool,
+    #[serde(default)]
+    usage_coin_enabled: bool,
+    #[serde(default = "default_true")]
+    usage_coin_always_on_top: bool,
     #[serde(default = "default_float_bar_opacity")]
     float_bar_opacity: u8,
     #[serde(default = "default_float_bar_scale")]
@@ -270,6 +274,8 @@ impl Default for RawSettings {
             tray_panel_always_on_top: s.tray_panel_always_on_top,
             powertoys_status_pipe_enabled: s.powertoys_status_pipe_enabled,
             float_bar_enabled: s.float_bar_enabled,
+            usage_coin_enabled: s.usage_coin_enabled,
+            usage_coin_always_on_top: s.usage_coin_always_on_top,
             float_bar_opacity: s.float_bar_opacity,
             float_bar_scale: s.float_bar_scale,
             float_bar_orientation: s.float_bar_orientation,
@@ -573,6 +579,8 @@ impl From<RawSettings> for Settings {
             tray_panel_always_on_top: raw.tray_panel_always_on_top,
             powertoys_status_pipe_enabled: raw.powertoys_status_pipe_enabled,
             float_bar_enabled: raw.float_bar_enabled,
+            usage_coin_enabled: raw.usage_coin_enabled,
+            usage_coin_always_on_top: raw.usage_coin_always_on_top,
             float_bar_opacity: clamp_float_bar_opacity(raw.float_bar_opacity),
             float_bar_scale: clamp_float_bar_scale(raw.float_bar_scale),
             float_bar_orientation: normalize_float_bar_orientation(&raw.float_bar_orientation),

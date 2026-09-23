@@ -1,0 +1,74 @@
+body.usage-coin-window,
+body.usage-coin-window #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: transparent !important;
+  overflow: hidden;
+}
+
+.usage-coin {
+  box-sizing: border-box;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 152px;
+  height: 152px;
+  margin: 2px;
+  overflow: hidden;
+  border: 2px solid #526bc2;
+  border-radius: 50%;
+  color: #eaf0ff;
+  background: radial-gradient(circle at 30% 20%, #314b91, #1c2a55 75%);
+  box-shadow: 0 7px 22px #090f2e88, inset 0 1px 0 #ffffff2b;
+  font-family: "Segoe UI", sans-serif;
+  user-select: none;
+  cursor: grab;
+}
+
+.usage-coin:active { cursor: grabbing; }
+.usage-coin:focus-visible { outline: 2px solid #b7c7ff; outline-offset: -5px; }
+
+.usage-coin__main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding-top: 7px;
+}
+
+.usage-coin__percent {
+  font-size: 40px;
+  font-weight: 650;
+  letter-spacing: -2px;
+  line-height: 1;
+}
+
+.usage-coin__footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 43px;
+  flex: 0 0 43px;
+  border-top: 1.5px solid #a2b4f0;
+  background: #15214275;
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: .2px;
+  white-space: nowrap;
+}
+
+.usage-coin__footer--status { font-size: 12px; }
+
+.usage-coin__notice {
+  position: absolute;
+  inset: auto 8px 45px;
+  padding: 4px 3px;
+  border-radius: 6px;
+  background: #101b3be9;
+  color: #fff;
+  text-align: center;
+  font-size: 11px;
+  pointer-events: none;
+}

@@ -137,6 +137,19 @@ fn build_native_tray_menu(
         settings.float_bar_enabled,
         settings.ui_language,
     );
+    if let Some(index) = spec
+        .iter()
+        .position(|entry| entry.id.as_deref() == Some("toggle_float_bar"))
+    {
+        spec.insert(
+            index + 1,
+            TrayMenuEntry::check_item(
+                "toggle_usage_coin",
+                "Show Codex Usage Coin",
+                settings.usage_coin_enabled,
+            ),
+        );
+    }
     crate::tray_accounts::prepend_account_menus(&mut spec, &settings);
     let entries = spec
         .iter()
@@ -185,6 +198,7 @@ enum MenuAction {
     ToggleProvider(String),
     /// Toggle the floating bar window on/off.
     ToggleFloatBar,
+    ToggleUsageCoin,
     Account(crate::tray_accounts::AccountMenuAction),
     Quit,
 }
@@ -205,6 +219,7 @@ fn resolve_menu_action(id: &str) -> Option<MenuAction> {
         "settings" => Some(MenuAction::OpenSettings("general".into())),
         "about" => Some(MenuAction::OpenSettings("about".into())),
         "toggle_float_bar" => Some(MenuAction::ToggleFloatBar),
+        "toggle_usage_coin" => Some(MenuAction::ToggleUsageCoin),
         "pop_out" => Some(MenuAction::OpenFlyout),
         _ if id.starts_with("toggle_provider:") => {
             let provider_id = id["toggle_provider:".len()..].to_string();
@@ -393,6 +408,12 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         }
         Some(MenuAction::ToggleFloatBar) => {
             crate::floatbar::toggle(app);
+            rebuild_tray_menu(app);
+        }
+        Some(MenuAction::ToggleUsageCoin) => {
+            if let Err(error) = crate::usage_coin::toggle(app) {
+                tracing::warn!(%error, "could not toggle usage coin");
+            }
             rebuild_tray_menu(app);
         }
         Some(MenuAction::Quit) => {

@@ -283,6 +283,14 @@ pub struct Settings {
     #[serde(default)]
     pub float_bar_enabled: bool,
 
+    /// Show the detached Codex usage coin.
+    #[serde(default)]
+    pub usage_coin_enabled: bool,
+
+    /// Keep the usage coin above other windows.
+    #[serde(default = "default_true")]
+    pub usage_coin_always_on_top: bool,
+
     /// Opacity of the floating bar window, in the inclusive range 30..=100.
     /// Stored as `u8` so the on-disk format remains stable.
     #[serde(default = "default_float_bar_opacity")]
@@ -577,6 +585,8 @@ impl Default for Settings {
             tray_panel_always_on_top: false,
             powertoys_status_pipe_enabled: false,
             float_bar_enabled: false,
+            usage_coin_enabled: false,
+            usage_coin_always_on_top: true,
             float_bar_opacity: default_float_bar_opacity(),
             float_bar_scale: default_float_bar_scale(),
             float_bar_orientation: default_float_bar_orientation(),

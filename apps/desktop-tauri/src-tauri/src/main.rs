@@ -20,6 +20,7 @@ mod tray_accounts;
 mod tray_bridge;
 mod tray_menu;
 mod tray_visibility;
+mod usage_coin;
 mod usage_metric;
 mod window_positioner;
 
@@ -275,6 +276,8 @@ fn main() {
             floatbar::set_float_bar_click_through,
             floatbar::resize_float_bar,
             floatbar::set_float_bar_orientation,
+            usage_coin::get_usage_coin_topmost,
+            usage_coin::toggle_usage_coin_topmost,
         ])
         .setup(move |app| {
             if let Err(error) = codexbar::providers::claude::accounts::cleanup_abandoned_logins() {
@@ -287,6 +290,7 @@ fn main() {
             tray_bridge::setup(app)?;
             shortcut_bridge::register(app.handle());
             floatbar::install(app.handle());
+            usage_coin::install(app.handle());
             auto_refresh::install(app.handle().clone());
             if settings.powertoys_status_pipe_enabled {
                 powertoys::install(app.handle().clone());
@@ -319,6 +323,9 @@ fn main() {
         })
         .on_window_event(move |window, event| {
             if floatbar::handle_window_event(window, event) {
+                return;
+            }
+            if usage_coin::handle_window_event(window, event) {
                 return;
             }
             if shell::flyout_window::handle_window_event(window, event) {

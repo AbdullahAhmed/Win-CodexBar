@@ -25,6 +25,21 @@ Win-CodexBar is a Windows system-tray app for keeping AI coding-tool usage visib
 - **Installed local CLI** for scripting usage, cost, config, diagnostics, and loopback integrations.
 - **Installer + portable builds** with WebView2 runtime bootstrap, VC++ runtime bootstrap, and SHA-256 checksum files.
 
+### Codex Usage Coin
+
+The tray menu's **Show Codex Usage Coin** item opens a separate 156 px circular
+window. It displays Codex's weekly remaining percentage and the time until that
+weekly limit resets. Drag the coin with the left mouse button to place it on any
+connected screen. Right-click the coin to toggle **Always on top**; a short
+message confirms the new state. Its visibility, topmost choice, and position are
+restored on the next launch. The existing floating bar and provider integrations
+remain available independently.
+
+The coin consumes the existing Codex provider snapshot. It does not request or
+store credentials itself. Sign in with `codex login` first, then enable Codex in
+the provider settings if necessary. When the weekly window is unavailable, the
+coin displays a waiting state instead of inventing a percentage.
+
 ## Install
 
 Install with Windows Package Manager:
