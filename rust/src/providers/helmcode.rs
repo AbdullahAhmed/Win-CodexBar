@@ -161,7 +161,9 @@ impl HelmcodeProvider {
             && let Some(credits) = self
                 .get(tenant, cookie, "/api/billing/credits", true)
                 .await?
-            && let Some(balance_micros) = credits.get("balanceMicros").and_then(Value::as_i64)
+            && let Some(balance_micros) = credits
+                .get("balanceMicros")
+                .and_then(nonnegative_balance_micros)
         {
             let currency = credits
                 .get("currency")
@@ -171,7 +173,7 @@ impl HelmcodeProvider {
             if currency.len() == 3 && currency.chars().all(|ch| ch.is_ascii_uppercase()) {
                 result = result.with_cost(
                     CostSnapshot::new(0.0, currency, "Prepaid balance")
-                        .with_balance((balance_micros.max(0) as f64) / 1_000_000.0),
+                        .with_balance((balance_micros as f64) / 1_000_000.0),
                 );
             }
         }
@@ -363,6 +365,9 @@ fn optional_nonnegative(value: Option<&Value>, field: &str) -> Result<Option<f64
         Some(value) => nonnegative(Some(value), field).map(Some),
     }
 }
+fn nonnegative_balance_micros(value: &Value) -> Option<i64> {
+    value.as_i64().filter(|amount| *amount >= 0)
+}
 fn parse_failure(field: impl AsRef<str>) -> ProviderError {
     ProviderError::Parse(format!(
         "Helmcode quota response format changed: {}",
@@ -399,5 +404,16 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn accepts_nonnegative_balance_micros_and_rejects_negative_values() {
+        assert_eq!(nonnegative_balance_micros(&json!(0)), Some(0));
+        assert_eq!(
+            nonnegative_balance_micros(&json!(1_250_000)),
+            Some(1_250_000)
+        );
+        assert_eq!(nonnegative_balance_micros(&json!(-1)), None);
+        assert_eq!(nonnegative_balance_micros(&json!(1.5)), None);
     }
 }

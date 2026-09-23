@@ -299,8 +299,8 @@ fn parse_rsc_billing(body: &str) -> Result<Billing, ProviderError> {
         .and_then(|value| value.get("billing"))
         .and_then(Value::as_object)
         .ok_or_else(|| parse_failure("missing billing"))?;
-    let spent = finite(billing.get("spent"), "spent")?;
-    let balance = finite(billing.get("balance"), "balance")?;
+    let spent = finite_nonnegative(billing.get("spent"), "spent")?;
+    let balance = finite_nonnegative(billing.get("balance"), "balance")?;
     let cycle_label = clean_text(billing.get("cycleLabel"));
     let plan = clean_text(billing.get("plan"));
     let credits = billing
@@ -310,8 +310,8 @@ fn parse_rsc_billing(body: &str) -> Result<Billing, ProviderError> {
         .flatten()
         .filter_map(|item| {
             let object = item.as_object()?;
-            let amount = finite(object.get("amount"), "credit amount").ok()?;
-            let remaining = finite(object.get("remaining"), "credit remaining").ok()?;
+            let amount = finite_nonnegative(object.get("amount"), "credit amount").ok()?;
+            let remaining = finite_nonnegative(object.get("remaining"), "credit remaining").ok()?;
             if remaining <= 0.0 {
                 return None;
             }
@@ -405,10 +405,10 @@ fn build_result(billing: Billing) -> ProviderFetchResult {
     result
 }
 
-fn finite(value: Option<&Value>, field: &str) -> Result<f64, ProviderError> {
+fn finite_nonnegative(value: Option<&Value>, field: &str) -> Result<f64, ProviderError> {
     value
         .and_then(Value::as_f64)
-        .filter(|value| value.is_finite())
+        .filter(|value| value.is_finite() && *value >= 0.0)
         .ok_or_else(|| parse_failure(field))
 }
 fn clean_text(value: Option<&Value>) -> Option<String> {
@@ -470,10 +470,32 @@ mod tests {
 
     #[test]
     fn parses_billing_result_and_skips_expired_or_empty_credits() {
-        let body = r#"1:{"ok":true,"data":{"billing":{"spent":4.5,"balance":10,"cycleLabel":"September","plan":"free_plan","credits":[{"amount":8,"remaining":3,"expiresAt":"2100-01-02T00:00:00Z"},{"amount":1,"remaining":0,"expiresAt":"2100-01-02T00:00:00Z"},{"amount":5,"remaining":2,"expiresAt":"2000-01-02T00:00:00Z"}]}}}"#;
+        let body = r#"1:{"ok":true,"data":{"billing":{"spent":4.5,"balance":10,"cycleLabel":"September","plan":"free_plan","credits":[{"amount":8,"remaining":3,"expiresAt":"2100-01-02T00:00:00Z"},{"amount":1,"remaining":0,"expiresAt":"2100-01-02T00:00:00Z"},{"amount":5,"remaining":2,"expiresAt":"2000-01-02T00:00:00Z"},{"amount":-2,"remaining":1,"expiresAt":"2100-01-02T00:00:00Z"},{"amount":2,"remaining":-1,"expiresAt":"2100-01-02T00:00:00Z"}]}}}"#;
         let parsed = parse_rsc_billing(body).unwrap();
         assert_eq!(parsed.spent, 4.5);
         assert_eq!(parsed.balance, 10.0);
         assert_eq!(parsed.credits.len(), 1);
+    }
+
+    #[test]
+    fn rejects_negative_spent_and_balance() {
+        let negative_spent = r#"1:{"ok":true,"data":{"billing":{"spent":-0.01,"balance":10}}}"#;
+        let negative_balance = r#"1:{"ok":true,"data":{"billing":{"spent":0,"balance":-0.01}}}"#;
+
+        assert!(parse_rsc_billing(negative_spent).is_err());
+        assert!(parse_rsc_billing(negative_balance).is_err());
+    }
+
+    #[test]
+    fn accepts_zero_and_positive_monetary_values() {
+        assert_eq!(
+            finite_nonnegative(Some(&serde_json::json!(0)), "amount").unwrap(),
+            0.0
+        );
+        assert_eq!(
+            finite_nonnegative(Some(&serde_json::json!(1.25)), "amount").unwrap(),
+            1.25
+        );
+        assert!(finite_nonnegative(Some(&serde_json::json!(-0.01)), "amount").is_err());
     }
 }
