@@ -31,6 +31,7 @@ body.usage-coin-window #root {
 .usage-coin:focus-visible { outline: 2px solid #b7c7ff; outline-offset: -5px; }
 
 .usage-coin__main {
+  position: relative;
   display: flex;
   flex: 1;
   align-items: center;
@@ -39,7 +40,36 @@ body.usage-coin-window #root {
   padding-top: 3px;
 }
 
+.usage-coin__trend {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  filter: drop-shadow(0 0 1px #000);
+}
+
+.usage-coin__trend-ideal,
+.usage-coin__trend-actual,
+.usage-coin__trend-projection {
+  fill: none;
+  stroke-width: 1.35;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.usage-coin__trend-ideal { stroke: #50df75; }
+.usage-coin__trend-actual { stroke: #5dafff; }
+.usage-coin__trend-actual--ahead { stroke: #ff6464; }
+.usage-coin__trend-projection { stroke: #5dafff; stroke-dasharray: 2 1.5; opacity: .85; }
+.usage-coin__trend-projection--ahead { stroke: #ff6464; }
+.usage-coin__trend-dot { fill: #5dafff; }
+.usage-coin__trend-dot--ahead { fill: #ff6464; }
+
 .usage-coin__percent {
+  position: relative;
+  z-index: 1;
   font-size: 22px;
   font-weight: 650;
   letter-spacing: -1px;

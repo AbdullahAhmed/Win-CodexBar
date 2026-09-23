@@ -4,6 +4,16 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useProviders } from "../hooks/useProviders";
 import { refreshProvidersIfStale } from "../lib/tauri";
 import type { RateWindowSnapshot } from "../types/bridge";
+import {
+  actualPath,
+  chartPoint,
+  idealUsedPercent,
+  projectedPath,
+  readWeeklySamples,
+  recordWeeklySample,
+  weeklyResetMs,
+  type UsageSample,
+} from "./trend";
 import "./UsageCoin.css";
 
 export function countdown(resetsAt: string | null, now: number): string {
@@ -29,6 +39,42 @@ export default function UsageCoin() {
   const [now, setNow] = useState(Date.now());
   const [topmost, setTopmost] = useState(true);
   const [notice, setNotice] = useState("");
+  const [samples, setSamples] = useState<UsageSample[]>([]);
+
+  useEffect(() => {
+    const reset = weeklyResetMs(weekly);
+    const observedAt = Date.parse(codex?.updatedAt ?? "");
+    if (!codex || !weekly || reset === null) {
+      setSamples([]);
+      return;
+    }
+    const account = codex.accountEmail
+      ?? codex.cost?.accountId
+      ?? codex.accountOrganization
+      ?? "default";
+    try {
+      const saved = readWeeklySamples(window.localStorage, account, reset);
+      if (codex.errorState === "ready" && Number.isFinite(observedAt)) {
+        const sample = { at: observedAt, usedPercent: weekly.usedPercent };
+        const recorded = recordWeeklySample(window.localStorage, account, reset, sample);
+        setSamples(recorded.length > 0 ? recorded : saved);
+      } else {
+        setSamples(saved);
+      }
+    } catch {
+      setSamples(Number.isFinite(observedAt)
+        ? [{ at: observedAt, usedPercent: weekly.usedPercent }]
+        : []);
+    }
+  }, [
+    codex?.updatedAt,
+    codex?.errorState,
+    codex?.accountEmail,
+    codex?.cost?.accountId,
+    codex?.accountOrganization,
+    weekly?.resetsAt,
+    weekly?.usedPercent,
+  ]);
 
   useEffect(() => {
     document.body.classList.add("usage-coin-window");
@@ -67,8 +113,20 @@ export default function UsageCoin() {
     : codex?.errorState === "needsAuthentication" || codex?.errorState === "expiredSession"
       ? "Sign in to Codex"
       : "Waiting for Codex";
+  const resetMs = weeklyResetMs(weekly);
+  const aheadOfPace = resetMs !== null && weekly !== null
+    && weekly.usedPercent > idealUsedPercent(now, resetMs);
+  const recordedSamples = resetMs === null
+    ? []
+    : samples.filter((sample) => sample.at <= now);
+  const latestPoint = resetMs !== null && recordedSamples.length > 0
+    ? chartPoint(recordedSamples[recordedSamples.length - 1], resetMs)
+    : null;
+  const forecast = resetMs !== null && recordedSamples.length > 0
+    ? projectedPath(recordedSamples[recordedSamples.length - 1], resetMs)
+    : "";
   const label = weekly
-    ? `Codex weekly usage: ${percentage(weekly)} remaining, ${reset} until reset. Right-click to ${topmost ? "turn off" : "turn on"} always on top.`
+    ? `Codex weekly usage: ${percentage(weekly)} remaining, ${reset} until reset. Green is ideal usage; ${aheadOfPace ? "red" : "blue"} is actual usage with a dashed projection. Right-click to ${topmost ? "turn off" : "turn on"} always on top.`
     : "Codex weekly usage unavailable. Right-click to toggle always on top.";
 
   return (
@@ -91,6 +149,31 @@ export default function UsageCoin() {
       }}
     >
       <div className="usage-coin__main">
+        {resetMs !== null && (
+          <svg className="usage-coin__trend" viewBox="0 0 76 52" aria-hidden="true">
+            <path className="usage-coin__trend-ideal" d="M7 44 L69 26" />
+            {recordedSamples.length > 1 && (
+              <path
+                className={`usage-coin__trend-actual${aheadOfPace ? " usage-coin__trend-actual--ahead" : ""}`}
+                d={actualPath(recordedSamples, resetMs)}
+              />
+            )}
+            {forecast && (
+              <path
+                className={`usage-coin__trend-projection${aheadOfPace ? " usage-coin__trend-projection--ahead" : ""}`}
+                d={forecast}
+              />
+            )}
+            {latestPoint && (
+              <circle
+                className={`usage-coin__trend-dot${aheadOfPace ? " usage-coin__trend-dot--ahead" : ""}`}
+                cx={latestPoint.x}
+                cy={latestPoint.y}
+                r="1.8"
+              />
+            )}
+          </svg>
+        )}
         <span className="usage-coin__percent">{percentage(weekly)}</span>
       </div>
       <div className={`usage-coin__footer${weekly ? "" : " usage-coin__footer--status"}`}>
