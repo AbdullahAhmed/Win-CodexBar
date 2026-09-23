@@ -27,7 +27,7 @@ Win-CodexBar is a Windows system-tray app for keeping AI coding-tool usage visib
 
 ### Codex Usage Coin
 
-The tray menu's **Show Codex Usage Coin** item opens a separate 156 px circular
+The tray menu's **Show Codex Usage Coin** item opens a separate 78 px circular
 window. It displays Codex's weekly remaining percentage and the time until that
 weekly limit resets. Drag the coin with the left mouse button to place it on any
 connected screen. Right-click the coin to toggle **Always on top**; a short

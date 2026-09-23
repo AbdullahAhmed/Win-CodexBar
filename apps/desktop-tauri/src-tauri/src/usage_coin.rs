@@ -6,7 +6,7 @@ use tauri::{LogicalPosition, Manager, WebviewUrl};
 use crate::geometry_store::{self, StoredGeometry};
 
 pub const LABEL: &str = "usage-coin";
-const SIZE: f64 = 156.0;
+const SIZE: f64 = 78.0;
 
 pub fn install(app: &tauri::AppHandle) {
     let settings = Settings::load();
@@ -35,6 +35,7 @@ fn show(app: &tauri::AppHandle, topmost: bool) -> Result<(), String> {
     )
     .title("Codex Usage Coin")
     .inner_size(SIZE, SIZE)
+    .min_inner_size(SIZE, SIZE)
     .decorations(false)
     .shadow(false)
     .resizable(false)
