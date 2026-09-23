@@ -797,6 +797,17 @@ fn stacked_tray_mode_preserves_provider_preferences() {
         settings.stacked_tray_bottom_provider.as_deref(),
         Some("codex")
     );
+
+    let saved = serde_json::to_string(&settings).unwrap();
+    let reloaded: Settings = serde_json::from_str(&saved).unwrap();
+    assert_eq!(
+        reloaded.stacked_tray_top_provider.as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        reloaded.stacked_tray_bottom_provider.as_deref(),
+        Some("codex")
+    );
 }
 
 #[test]
@@ -1080,6 +1091,8 @@ fn retired_provider_config_is_ignored_until_explicit_save() {
             "refresh_interval_secs": 300,
             "provider_metrics": { "codex": "weekly", "crof": "session" },
             "float_bar_provider_ids": ["codex", "crof"],
+            "stacked_tray_top_provider": "crof",
+            "stacked_tray_bottom_provider": "crof",
             "provider_configs": {
                 "crof": { "api_token": "retired-fixture-key" },
                 "codex": { "cookie_source": "manual", "openai_web_extras": false },
@@ -1100,6 +1113,8 @@ fn retired_provider_config_is_ignored_until_explicit_save() {
     );
     assert_eq!(settings.provider_metrics.len(), 1);
     assert_eq!(settings.float_bar_provider_ids, ["codex"]);
+    assert_eq!(settings.stacked_tray_top_provider, None);
+    assert_eq!(settings.stacked_tray_bottom_provider, None);
     assert_eq!(settings.api_region(ProviderId::Alibaba), "cn");
     assert_eq!(
         settings.manual_cookie_header(ProviderId::Alibaba),
@@ -1128,7 +1143,10 @@ fn provider_aliases_are_canonicalized_at_the_load_boundary() {
                 "CoDeX": "session",
                 "not-a-provider": "weekly"
             },
-            "float_bar_provider_ids": ["OPENAI", "codex", "ClAuDe", "unknown"]
+            "float_bar_provider_ids": ["OPENAI", "codex", "ClAuDe", "unknown"],
+            "enabled_providers": ["claude"],
+            "stacked_tray_top_provider": "OPENAI",
+            "stacked_tray_bottom_provider": "ClAuDe"
         }"#,
     )
     .expect("load settings containing provider aliases");
@@ -1143,6 +1161,15 @@ fn provider_aliases_are_canonicalized_at_the_load_boundary() {
     );
     assert_eq!(settings.provider_metrics.len(), 1);
     assert_eq!(settings.float_bar_provider_ids, ["codex", "claude"]);
+    assert_eq!(settings.stacked_tray_top_provider.as_deref(), Some("codex"));
+    assert_eq!(
+        settings.stacked_tray_bottom_provider.as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        settings.enabled_providers,
+        HashSet::from(["claude".to_string()])
+    );
 }
 
 /// Default `Settings` should serialize WITHOUT a `provider_configs`

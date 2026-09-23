@@ -624,8 +624,12 @@ impl From<RawSettings> for Settings {
             ),
             merge_tray_icons: raw.merge_tray_icons,
             tray_icon_mode: raw.tray_icon_mode,
-            stacked_tray_top_provider: raw.stacked_tray_top_provider,
-            stacked_tray_bottom_provider: raw.stacked_tray_bottom_provider,
+            stacked_tray_top_provider: raw
+                .stacked_tray_top_provider
+                .and_then(|provider_id| canonical_provider_id(&provider_id)),
+            stacked_tray_bottom_provider: raw
+                .stacked_tray_bottom_provider
+                .and_then(|provider_id| canonical_provider_id(&provider_id)),
             switcher_shows_icons: raw.switcher_shows_icons,
             menu_bar_shows_highest_usage: raw.menu_bar_shows_highest_usage,
             menu_bar_shows_percent: raw.menu_bar_shows_percent,
