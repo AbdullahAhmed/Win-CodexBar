@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { countdown } from "./UsageCoin";
+import { countdown, resetWeekday } from "./UsageCoin";
 
 describe("usage coin reset countdown", () => {
   it("formats the weekly reset shown in the coin", () => {
@@ -11,5 +11,11 @@ describe("usage coin reset countdown", () => {
     const now = Date.parse("2026-09-23T10:00:00Z");
     expect(countdown(null, now)).toBe("Reset unknown");
     expect(countdown("2026-09-23T09:00:00Z", now)).toBe("Reset due");
+  });
+
+  it("shows the local day of week for the reset", () => {
+    expect(resetWeekday("2026-09-26T12:00:00Z", "en-US")).toBe("Sat");
+    expect(resetWeekday(null, "en-US")).toBe("");
+    expect(resetWeekday("invalid", "en-US")).toBe("");
   });
 });

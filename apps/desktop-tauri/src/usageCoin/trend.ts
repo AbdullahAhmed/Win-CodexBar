@@ -104,19 +104,20 @@ export function recordWeeklySample(
 export function chartPoint(sample: UsageSample, reset: number): { x: number; y: number } {
   const elapsed = idealUsedPercent(sample.at, reset) / 100;
   return {
-    x: 7 + elapsed * 62,
-    y: 44 - sample.usedPercent * 0.18,
+    x: 5 + elapsed * 66,
+    y: 25 - sample.usedPercent * 0.21,
   };
 }
 
 export function actualPath(samples: UsageSample[], reset: number): string {
-  return samples
+  const observed = samples
     .filter((sample) => validSample(sample, reset))
-    .map((sample, index) => {
+    .sort((left, right) => left.at - right.at);
+  if (observed.length === 0) return "";
+  return ["M5 25", ...observed.map((sample) => {
       const { x, y } = chartPoint(sample, reset);
-      return `${index === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
-    })
-    .join(" ");
+      return `L${x.toFixed(1)} ${y.toFixed(1)}`;
+    })].join(" ");
 }
 
 /** Extend the average burn rate from the latest observation, capped at exhaustion. */

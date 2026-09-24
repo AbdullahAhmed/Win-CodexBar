@@ -30,14 +30,18 @@ body.usage-coin-window #root {
 .usage-coin:active { cursor: grabbing; }
 .usage-coin:focus-visible { outline: 2px solid #b7c7ff; outline-offset: -5px; }
 
-.usage-coin__main {
-  position: relative;
+.usage-coin__header {
   display: flex;
-  flex: 1;
   align-items: center;
   justify-content: center;
+  flex: 0 0 23px;
+  border-bottom: 1px solid #a2b4f0;
+}
+
+.usage-coin__chart {
+  position: relative;
+  flex: 1;
   min-height: 0;
-  padding-top: 3px;
 }
 
 .usage-coin__trend {
@@ -47,30 +51,28 @@ body.usage-coin-window #root {
   height: 100%;
   overflow: visible;
   pointer-events: none;
-  filter: drop-shadow(0 0 1px #000);
+  filter: drop-shadow(0 0 1.5px #000);
 }
 
 .usage-coin__trend-ideal,
 .usage-coin__trend-actual,
 .usage-coin__trend-projection {
   fill: none;
-  stroke-width: 1.35;
+  stroke-width: 2.1;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
-.usage-coin__trend-ideal { stroke: #50df75; }
-.usage-coin__trend-actual { stroke: #5dafff; }
-.usage-coin__trend-actual--ahead { stroke: #ff6464; }
-.usage-coin__trend-projection { stroke: #5dafff; stroke-dasharray: 2 1.5; opacity: .85; }
-.usage-coin__trend-projection--ahead { stroke: #ff6464; }
-.usage-coin__trend-dot { fill: #5dafff; }
-.usage-coin__trend-dot--ahead { fill: #ff6464; }
+.usage-coin__trend-ideal { stroke: #59ec82; }
+.usage-coin__trend-actual { stroke: #55b9ff; }
+.usage-coin__trend-actual--ahead { stroke: #ff6969; }
+.usage-coin__trend-projection { stroke: #55b9ff; stroke-dasharray: 3 2; }
+.usage-coin__trend-projection--ahead { stroke: #ff6969; }
+.usage-coin__trend-dot { fill: #55b9ff; }
+.usage-coin__trend-dot--ahead { fill: #ff6969; }
 
 .usage-coin__percent {
-  position: relative;
-  z-index: 1;
-  font-size: 22px;
+  font-size: 21px;
   font-weight: 650;
   letter-spacing: -1px;
   line-height: 1;
@@ -80,15 +82,17 @@ body.usage-coin-window #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 22px;
-  flex: 0 0 22px;
+  height: 24px;
+  flex: 0 0 24px;
   border-top: 1px solid #a2b4f0;
   background: transparent;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
-  letter-spacing: .2px;
+  gap: 3px;
   white-space: nowrap;
 }
+
+.usage-coin__weekday { font-weight: 700; }
 
 .usage-coin__footer--status { font-size: 7px; }
 

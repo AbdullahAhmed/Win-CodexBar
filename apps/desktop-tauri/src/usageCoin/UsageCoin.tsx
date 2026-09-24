@@ -27,6 +27,13 @@ export function countdown(resetsAt: string | null, now: number): string {
   return days > 0 ? `${days}d ${hours}h` : `${hours}h`;
 }
 
+export function resetWeekday(resetsAt: string | null, locale?: string): string {
+  if (!resetsAt) return "";
+  const reset = new Date(resetsAt);
+  if (!Number.isFinite(reset.getTime())) return "";
+  return new Intl.DateTimeFormat(locale, { weekday: "short" }).format(reset);
+}
+
 function percentage(window: RateWindowSnapshot | null): string {
   if (!window || !Number.isFinite(window.remainingPercent)) return "--%";
   return `${Math.round(Math.max(0, Math.min(100, window.remainingPercent)))}%`;
@@ -125,6 +132,7 @@ export default function UsageCoin() {
   const forecast = resetMs !== null && recordedSamples.length > 0
     ? projectedPath(recordedSamples[recordedSamples.length - 1], resetMs)
     : "";
+  const weekday = weekly ? resetWeekday(weekly.resetsAt) : "";
   const label = weekly
     ? `Codex weekly usage: ${percentage(weekly)} remaining, ${reset} until reset. Green is ideal usage; ${aheadOfPace ? "red" : "blue"} is actual usage with a dashed projection. Right-click to ${topmost ? "turn off" : "turn on"} always on top.`
     : "Codex weekly usage unavailable. Right-click to toggle always on top.";
@@ -148,11 +156,14 @@ export default function UsageCoin() {
         }
       }}
     >
-      <div className="usage-coin__main">
+      <div className="usage-coin__header">
+        <span className="usage-coin__percent">{percentage(weekly)}</span>
+      </div>
+      <div className="usage-coin__chart">
         {resetMs !== null && (
-          <svg className="usage-coin__trend" viewBox="0 0 76 52" aria-hidden="true">
-            <path className="usage-coin__trend-ideal" d="M7 44 L69 26" />
-            {recordedSamples.length > 1 && (
+          <svg className="usage-coin__trend" viewBox="0 0 76 28" preserveAspectRatio="none" aria-hidden="true">
+            <path className="usage-coin__trend-ideal" d="M5 25 L71 4" />
+            {recordedSamples.length > 0 && (
               <path
                 className={`usage-coin__trend-actual${aheadOfPace ? " usage-coin__trend-actual--ahead" : ""}`}
                 d={actualPath(recordedSamples, resetMs)}
@@ -174,10 +185,10 @@ export default function UsageCoin() {
             )}
           </svg>
         )}
-        <span className="usage-coin__percent">{percentage(weekly)}</span>
       </div>
       <div className={`usage-coin__footer${weekly ? "" : " usage-coin__footer--status"}`}>
-        {reset}
+        {weekday && <span className="usage-coin__weekday">{weekday}</span>}
+        <span>{reset}</span>
       </div>
       {notice && <div className="usage-coin__notice" role="status">{notice}</div>}
     </div>

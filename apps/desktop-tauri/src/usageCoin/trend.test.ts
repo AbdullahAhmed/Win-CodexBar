@@ -21,9 +21,9 @@ function memoryStorage() {
 }
 
 describe("weekly usage trend", () => {
-  it("maps day one zero usage to the lower left and day seven 100% to the right middle", () => {
-    expect(chartPoint({ at: START, usedPercent: 0 }, RESET)).toEqual({ x: 7, y: 44 });
-    expect(chartPoint({ at: RESET, usedPercent: 100 }, RESET)).toEqual({ x: 69, y: 26 });
+  it("maps day one zero usage to the chart's lower left and day seven 100% to its upper right", () => {
+    expect(chartPoint({ at: START, usedPercent: 0 }, RESET)).toEqual({ x: 5, y: 25 });
+    expect(chartPoint({ at: RESET, usedPercent: 100 }, RESET)).toEqual({ x: 71, y: 4 });
     expect(idealUsedPercent(START + 3.5 * DAY, RESET)).toBe(50);
     expect(60 > idealUsedPercent(START + 3.5 * DAY, RESET)).toBe(true);
   });
@@ -50,16 +50,16 @@ describe("weekly usage trend", () => {
     const second = { at: START + 2 * DAY, usedPercent: 25 };
     expect(recordWeeklySample(storage, "alice", RESET, { at: START - 1, usedPercent: 99 }))
       .toEqual([]);
-    expect(actualPath([first, second], RESET)).toBe("M15.9 41.8 L24.7 39.5");
+    expect(actualPath([first, second], RESET)).toBe("M5 25 L14.4 22.5 L23.9 19.8");
     expect(actualPath([first, { at: RESET + 1, usedPercent: 100 }], RESET))
-      .toBe("M15.9 41.8");
+      .toBe("M5 25 L14.4 22.5");
   });
 
   it("projects a fast burn to early exhaustion and a slow burn to day seven", () => {
     const at = START + 3.5 * DAY;
     expect(projectedPath({ at, usedPercent: 60 }, RESET))
-      .toBe("M38.0 33.2 L58.7 26.0");
+      .toBe("M38.0 12.4 L60.0 4.0");
     expect(projectedPath({ at, usedPercent: 40 }, RESET))
-      .toBe("M38.0 36.8 L69.0 29.6");
+      .toBe("M38.0 16.6 L71.0 8.2");
   });
 });

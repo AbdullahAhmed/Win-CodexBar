@@ -35,10 +35,12 @@ message confirms the new state. Its visibility, topmost choice, and position are
 restored on the next launch. The existing floating bar and provider integrations
 remain available independently.
 
-Behind the percentage, a green line runs from 0% on day one to 100% on day
-seven. The solid blue line joins weekly quota percentages actually observed by
-the app; it turns red when usage is ahead of the green pace. A dashed extension
-projects the current average burn rate to day seven or earlier exhaustion.
+The coin has three bands: weekly percentage at the top, a usage chart in the
+middle, and the local reset weekday plus countdown at the bottom. In the chart,
+a green line runs from 0% on day one to 100% on day seven. The solid blue line
+starts at the weekly reset and joins quota percentages observed by the app; it
+turns red when usage is ahead of the green pace. A dashed extension projects
+the current average burn rate to day seven or earlier exhaustion.
 Observed points are kept locally across app restarts and separated by account
 and weekly reset. The Codex usage API does not provide earlier observations, so
 the solid history begins when this version first runs.
