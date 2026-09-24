@@ -36,7 +36,7 @@ restored on the next launch. The existing floating bar and provider integrations
 remain available independently.
 
 The coin has three bands: weekly percentage at the top, a usage chart in the
-middle, and the local reset weekday plus countdown at the bottom. In the chart,
+middle, and the local reset weekday plus countdown (`DDD | xd xh`) at the bottom. In the chart,
 a green line runs from 0% on day one to 100% on day seven. The solid blue line
 starts at the weekly reset and joins quota percentages observed by the app; it
 turns red when usage is ahead of the green pace. A dashed extension projects

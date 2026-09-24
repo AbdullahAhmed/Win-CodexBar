@@ -5,6 +5,7 @@ describe("usage coin reset countdown", () => {
   it("formats the weekly reset shown in the coin", () => {
     const now = Date.parse("2026-09-23T10:00:00Z");
     expect(countdown("2026-09-29T20:00:00Z", now)).toBe("6d 10h");
+    expect(countdown("2026-09-23T14:00:00Z", now)).toBe("0d 4h");
   });
 
   it("does not invent a reset when it is missing or elapsed", () => {

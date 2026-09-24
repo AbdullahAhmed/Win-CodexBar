@@ -24,14 +24,14 @@ export function countdown(resetsAt: string | null, now: number): string {
   const totalHours = Math.ceil(remaining / 3_600_000);
   const days = Math.floor(totalHours / 24);
   const hours = totalHours % 24;
-  return days > 0 ? `${days}d ${hours}h` : `${hours}h`;
+  return `${days}d ${hours}h`;
 }
 
 export function resetWeekday(resetsAt: string | null, locale?: string): string {
   if (!resetsAt) return "";
   const reset = new Date(resetsAt);
   if (!Number.isFinite(reset.getTime())) return "";
-  return new Intl.DateTimeFormat(locale, { weekday: "short" }).format(reset);
+  return new Intl.DateTimeFormat(locale ?? "en-US", { weekday: "short" }).format(reset);
 }
 
 function percentage(window: RateWindowSnapshot | null): string {
@@ -187,8 +187,7 @@ export default function UsageCoin() {
         )}
       </div>
       <div className={`usage-coin__footer${weekly ? "" : " usage-coin__footer--status"}`}>
-        {weekday && <span className="usage-coin__weekday">{weekday}</span>}
-        <span>{reset}</span>
+        <span>{weekday ? `${weekday} | ${reset}` : reset}</span>
       </div>
       {notice && <div className="usage-coin__notice" role="status">{notice}</div>}
     </div>

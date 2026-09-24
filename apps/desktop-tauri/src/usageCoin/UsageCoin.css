@@ -31,9 +31,8 @@ body.usage-coin-window #root {
 .usage-coin:focus-visible { outline: 2px solid #b7c7ff; outline-offset: -5px; }
 
 .usage-coin__header {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  place-items: center;
   flex: 0 0 23px;
   border-bottom: 1px solid #a2b4f0;
 }
@@ -72,27 +71,24 @@ body.usage-coin-window #root {
 .usage-coin__trend-dot--ahead { fill: #ff6969; }
 
 .usage-coin__percent {
-  font-size: 21px;
+  font-size: 16.8px;
   font-weight: 650;
-  letter-spacing: -1px;
+  letter-spacing: -.5px;
   line-height: 1;
 }
 
 .usage-coin__footer {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  place-items: center;
   height: 24px;
   flex: 0 0 24px;
   border-top: 1px solid #a2b4f0;
   background: transparent;
   font-size: 9px;
   font-weight: 600;
-  gap: 3px;
+  line-height: 1;
   white-space: nowrap;
 }
-
-.usage-coin__weekday { font-weight: 700; }
 
 .usage-coin__footer--status { font-size: 7px; }
 
