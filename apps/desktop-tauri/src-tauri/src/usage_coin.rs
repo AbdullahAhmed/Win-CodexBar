@@ -1,7 +1,7 @@
 //! Detached, movable Codex usage coin. Provider data stays in the shared cache.
 
 use codexbar::settings::Settings;
-use tauri::{LogicalPosition, Manager, WebviewUrl};
+use tauri::{LogicalPosition, Manager, PhysicalPosition, PhysicalSize, WebviewUrl};
 
 use crate::geometry_store::{self, StoredGeometry};
 
@@ -25,7 +25,9 @@ fn show(app: &tauri::AppHandle, topmost: bool) -> Result<(), String> {
         window
             .set_always_on_top(topmost)
             .map_err(|e| e.to_string())?;
-        return window.show().map_err(|e| e.to_string());
+        window.show().map_err(|e| e.to_string())?;
+        ensure_visible(&window);
+        return Ok(());
     }
 
     let builder = tauri::WebviewWindowBuilder::new(
@@ -59,7 +61,69 @@ fn show(app: &tauri::AppHandle, topmost: bool) -> Result<(), String> {
         let y = monitor.position().y as f64 / scale + 80.0;
         let _ = window.set_position(LogicalPosition::new(x, y));
     }
-    window.show().map_err(|e| e.to_string())
+    window.show().map_err(|e| e.to_string())?;
+    ensure_visible(&window);
+    Ok(())
+}
+
+fn fully_inside_bounds(
+    position: PhysicalPosition<i32>,
+    size: PhysicalSize<u32>,
+    bounds_position: PhysicalPosition<i32>,
+    bounds_size: PhysicalSize<u32>,
+) -> bool {
+    let (x, y) = (i64::from(position.x), i64::from(position.y));
+    let (left, top) = (i64::from(bounds_position.x), i64::from(bounds_position.y));
+    x >= left
+        && y >= top
+        && x + i64::from(size.width) <= left + i64::from(bounds_size.width)
+        && y + i64::from(size.height) <= top + i64::from(bounds_size.height)
+}
+
+/// A remembered position can partly leave the monitor after a DPI or display
+/// change. Bring the entire coin back onto the primary display in that case.
+fn ensure_visible(window: &tauri::WebviewWindow) {
+    let (Ok(position), Ok(size), Ok(monitors)) = (
+        window.outer_position(),
+        window.outer_size(),
+        window.available_monitors(),
+    ) else {
+        return;
+    };
+    if monitors.is_empty()
+        || monitors.iter().any(|monitor| {
+            fully_inside_bounds(position, size, *monitor.position(), *monitor.size())
+        })
+    {
+        return;
+    }
+    let target_monitor = window
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| monitors.into_iter().next());
+    let Some(target_monitor) = target_monitor else {
+        return;
+    };
+    let work_area = target_monitor.work_area();
+    let scale = target_monitor.scale_factor();
+    let target = PhysicalPosition::new(
+        work_area.position.x + (24.0 * scale).round() as i32,
+        work_area.position.y + (80.0 * scale).round() as i32,
+    );
+    if let Err(error) = window.set_position(target) {
+        tracing::warn!(%error, "could not recover usage coin onto primary monitor");
+        return;
+    }
+    geometry_store::save_entry(
+        LABEL,
+        StoredGeometry {
+            x: (f64::from(target.x) / scale).round() as i32,
+            y: (f64::from(target.y) / scale).round() as i32,
+            width: None,
+            height: None,
+        },
+    );
 }
 
 fn remember_position(window: &tauri::Window) {
@@ -141,4 +205,34 @@ pub fn toggle_usage_coin_topmost(app: tauri::AppHandle) -> Result<bool, String> 
     settings.usage_coin_always_on_top = topmost;
     settings.save().map_err(|e| e.to_string())?;
     Ok(topmost)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_coin_must_fit_entirely_on_a_display() {
+        let monitor_position = PhysicalPosition::new(370, -1080);
+        let monitor_size = PhysicalSize::new(1920, 1080);
+        let coin_size = PhysicalSize::new(132, 78);
+        assert!(fully_inside_bounds(
+            PhysicalPosition::new(2100, -597),
+            coin_size,
+            monitor_position,
+            monitor_size,
+        ));
+        assert!(!fully_inside_bounds(
+            PhysicalPosition::new(2174, -597),
+            coin_size,
+            monitor_position,
+            monitor_size,
+        ));
+        assert!(!fully_inside_bounds(
+            PhysicalPosition::new(500, -1100),
+            coin_size,
+            monitor_position,
+            monitor_size,
+        ));
+    }
 }
