@@ -59,6 +59,7 @@ const ALLOWED_PREFERENCES: &[(&str, Validator)] = &[
         typed::<super::LowPowerModePreference>,
     ),
     ("show_notifications", typed::<bool>),
+    ("session_quota_notifications_enabled", typed::<bool>),
     ("sound_enabled", typed::<bool>),
     ("high_usage_threshold", percent),
     ("critical_usage_threshold", percent),

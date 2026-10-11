@@ -192,6 +192,8 @@ export interface SettingsSnapshot {
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled: boolean;
   credentialExpiryNotificationsEnabled: boolean;
+  /** Absent on older shells; the UI falls back to `showNotifications`. */
+  sessionQuotaNotificationsEnabled?: boolean;
   showPace?: boolean;
   trayIconMode: TrayIconMode;
   stackedTrayTopProvider?: string | null;
@@ -323,6 +325,7 @@ export interface SettingsUpdate {
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled?: boolean;
   credentialExpiryNotificationsEnabled?: boolean;
+  sessionQuotaNotificationsEnabled?: boolean;
   showPace?: boolean;
   trayIconMode?: TrayIconMode;
   stackedTrayTopProvider?: string;
@@ -947,6 +950,8 @@ export interface AppInfoBridge {
   name: string;
   version: string;
   buildNumber: string;
+  /** UTC build date, YYYY-MM-DD. */
+  buildDate?: string;
   updateChannel: string;
   tagline: string;
 }

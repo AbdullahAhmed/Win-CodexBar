@@ -209,3 +209,56 @@ describe("AdvancedTab", () => {
     expect(set).toHaveBeenCalledWith({ stayAwakeEnabled: true });
   });
 });
+
+describe("AdvancedTab Mac grouped layout", () => {
+  it("orders the groups with Privacy first and no keyboard or portable preferences", () => {
+    const { container } = render(
+      <AdvancedTab settings={settings} set={vi.fn()} saving={false} />,
+    );
+    const titles = Array.from(
+      container.querySelectorAll(".settings-group__title"),
+      (node) => node.textContent,
+    );
+    expect(titles).toEqual([
+      "PrivacyTitle",
+      "CodexLocalLogsTitle",
+      "AgentSessionsTitle",
+      "SectionLocalIntegrations",
+      "NetworkProxyTitle",
+      "HooksTitle",
+      "DiagnosticsSectionHeading",
+    ]);
+    expect(screen.queryByText("SectionKeyboard")).toBeNull();
+    expect(screen.queryByText("SectionPreferencesTransfer")).toBeNull();
+    expect(screen.queryByText("KEYCHAIN ACCESS")).toBeNull();
+  });
+
+  it("draws every toggle as a switch", () => {
+    render(<AdvancedTab settings={settings} set={vi.fn()} saving={false} />);
+    for (const toggle of screen.getAllByRole("checkbox")) {
+      expect(toggle).toHaveClass("toggle--switch");
+    }
+  });
+
+  it("locks the Claude keychain-prompt option while Credential Manager access is off", () => {
+    const set = vi.fn();
+    const { rerender } = render(
+      <AdvancedTab settings={settings} set={set} saving={false} />,
+    );
+    expect(screen.getByRole("checkbox", { name: "AvoidKeychainPromptsLabel" })).toBeEnabled();
+    expect(screen.queryByText("CredentialAccessFooter")).toBeNull();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "DisableAllKeychainLabel" }));
+    expect(set).toHaveBeenCalledWith({ disableKeychainAccess: true });
+
+    rerender(
+      <AdvancedTab
+        settings={{ ...settings, disableKeychainAccess: true }}
+        set={set}
+        saving={false}
+      />,
+    );
+    expect(screen.getByRole("checkbox", { name: "AvoidKeychainPromptsLabel" })).toBeDisabled();
+    expect(screen.getByText("CredentialAccessFooter")).toBeInTheDocument();
+  });
+});
