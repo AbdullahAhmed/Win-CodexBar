@@ -112,6 +112,22 @@ the bearer key are never sent together. Rate limits, server errors and
 malformed balances are final and do not fall back. Upstream's multiple API-key
 token accounts are not ported yet.
 
+### Langdock personal usage
+
+Langdock is disabled by default and has no API key. It reads the signed-in web
+app: `GET https://app.langdock.com/api/trpc/usageSettings.getPersonalUsage`
+(tRPC batch input) with the `auth_token` session cookie.
+
+- The cookie source picks the session: Automatic imports the `langdock.com`
+  cookies from the selected browser, Manual uses a pasted Cookie header, and
+  Off reads nothing. A header without `auth_token` never sends a request.
+- The card shows Session (5 hours) and Weekly percentages with their resets.
+  A plan without session limits shows the weekly lane alone, labelled Weekly.
+  A workspace without included limits shows one "Included limits" detail row.
+- Upstream keeps usage above 100%; the Windows bar clamps it at 100%.
+- 401 and tRPC `UNAUTHORIZED` are reported as an expired session. Redirects
+  are never followed and response bodies are never echoed in errors.
+
 ### llmman daemon
 
 llmman reads a local (or LAN) llmman daemon: `GET {base}/llmman/node` for the
