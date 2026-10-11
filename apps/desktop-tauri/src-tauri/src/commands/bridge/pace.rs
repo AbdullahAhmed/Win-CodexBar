@@ -222,4 +222,44 @@ mod tests {
             r#"{"stage":"far_behind","deltaPercent":-20.0,"expectedUsedPercent":50.0,"actualUsedPercent":30.0,"etaSeconds":null,"willLastToReset":true}"#
         );
     }
+
+    /// The refresh path (`from_fetch_result`) threads work days into the lane
+    /// pace. The weekly window ends at the next local Monday 00:00, so it is
+    /// the current Mon..Sun week and Mon-Fri pace is ahead of linear pace at
+    /// any instant inside it.
+    #[test]
+    fn fetch_result_lane_pace_follows_work_days() {
+        use chrono::{Datelike, Local};
+        let today = Local::now().date_naive();
+        let next_monday =
+            today + Duration::days(7 - i64::from(today.weekday().num_days_from_monday()));
+        let reset = Local
+            .from_local_datetime(&next_monday.and_hms_opt(0, 0, 0).unwrap())
+            .single()
+            .unwrap()
+            .with_timezone(&Utc);
+        if reset - Utc::now() >= Duration::days(7) {
+            return; // Monday 00:00 exactly or a DST-shortened week: nothing to compare.
+        }
+        let usage = UsageSnapshot::new(RateWindow::new(10.0)).with_secondary(
+            RateWindow::with_details(10.0, Some(10_080), Some(reset), None),
+        );
+        let metadata = instantiate_provider(ProviderId::Codex).metadata().clone();
+        let result = ProviderFetchResult::new(usage, "web");
+        let expected = |work_days: Option<u8>| {
+            let snapshot = ProviderUsageSnapshot::from_fetch_result(
+                ProviderId::Codex,
+                &metadata,
+                &result,
+                None,
+                work_days,
+            );
+            expected_used(snapshot.secondary.as_ref().expect("weekly lane"))
+        };
+
+        let linear = expected(None);
+        // Each call reads the clock again, so compare within a small tolerance.
+        assert!((expected(Some(7)) - linear).abs() < 0.01);
+        assert!(expected(Some(5)) > linear);
+    }
 }
