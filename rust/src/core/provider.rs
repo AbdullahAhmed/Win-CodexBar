@@ -103,6 +103,7 @@ pub enum ProviderId {
     XKiro,
     Raycast,
     Vercel,
+    MuseAI,
 }
 
 impl ProviderId {
@@ -198,6 +199,7 @@ impl ProviderId {
             ProviderId::XKiro,
             ProviderId::Raycast,
             ProviderId::Vercel,
+            ProviderId::MuseAI,
         ]
     }
 
@@ -254,6 +256,7 @@ impl ProviderId {
             ProviderId::XKiro => "xkiro",
             ProviderId::Raycast => "raycast",
             ProviderId::Vercel => "vercel",
+            ProviderId::MuseAI => "museai",
             ProviderId::AiAnd => "aiand",
             ProviderId::Windsurf => "windsurf",
             ProviderId::Manus => "manus",
@@ -350,6 +353,7 @@ impl ProviderId {
             ProviderId::XKiro => "xKiro",
             ProviderId::Raycast => "Raycast",
             ProviderId::Vercel => "Vercel AI Gateway",
+            ProviderId::MuseAI => "Muse (muse.ai)",
             ProviderId::AiAnd => "ai&",
             ProviderId::Windsurf => "Windsurf",
             ProviderId::Manus => "Manus",
@@ -462,6 +466,7 @@ impl ProviderId {
             ProviderId::DevPass => None,
             ProviderId::XKiro => None,
             ProviderId::Vercel => None,
+            ProviderId::MuseAI => Some("muse.ai"),
             ProviderId::AiAnd => None,
             ProviderId::Windsurf => None,
             ProviderId::Doubao => None,
@@ -614,6 +619,7 @@ impl ProviderId {
             "replicate" | "r8" => Some(ProviderId::Replicate),
             "atlascloud" | "atlas-cloud" | "atlas cloud" => Some(ProviderId::AtlasCloud),
             "raycast" | "raycast-ai" => Some(ProviderId::Raycast),
+            "museai" | "muse (muse.ai)" => Some(ProviderId::MuseAI),
             _ => None,
         }
     }
@@ -1142,6 +1148,7 @@ pub fn cli_name_map() -> HashMap<&'static str, ProviderId> {
     map.insert("vercel ai gateway", ProviderId::Vercel);
     map.insert("ai-gateway", ProviderId::Vercel);
     map.insert("ai gateway", ProviderId::Vercel);
+    map.insert("muse (muse.ai)", ProviderId::MuseAI);
     map.insert("metaspark", ProviderId::Meta);
     map.insert("meta-spark", ProviderId::Meta);
     map.insert("muse-spark", ProviderId::Meta);
@@ -1305,6 +1312,7 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::Raycast => "#FF6363",
         // Upstream uses white; a mid neutral keeps contrast on light and dark surfaces.
         ProviderId::Vercel => "#737373",
+        ProviderId::MuseAI => "#0668E1",
     }
 }
 
@@ -1319,7 +1327,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 89);
+        assert_eq!(all.len(), 90);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Pi));
@@ -1389,6 +1397,7 @@ mod tests {
         assert!(all.contains(&ProviderId::XKiro));
         assert!(all.contains(&ProviderId::Raycast));
         assert!(all.contains(&ProviderId::Vercel));
+        assert!(all.contains(&ProviderId::MuseAI));
     }
 
     #[test]

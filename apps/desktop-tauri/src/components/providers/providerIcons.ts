@@ -48,6 +48,7 @@ import mimo from "./icons/ProviderIcon-mimo.svg?raw";
 import minimax from "./icons/ProviderIcon-minimax.svg?raw";
 import mistral from "./icons/ProviderIcon-mistral.svg?raw";
 import muse from "./icons/ProviderIcon-muse.svg?raw";
+import museai from "./icons/ProviderIcon-museai.svg?raw";
 import notion from "./icons/ProviderIcon-notion.svg?raw";
 import nous from "./icons/ProviderIcon-nous.svg?raw";
 import xai from "./icons/ProviderIcon-xai.svg?raw";
@@ -146,6 +147,7 @@ const RAW: Record<string, string> = {
   xkiro: tint(xkiro),
   mistral: tint(mistral),
   muse: tint(muse),
+  museai: tint(museai),
   ollama: tint(ollama),
   opencode: tint(opencode),
   opencodego: tint(opencodego),
@@ -250,6 +252,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   sub2api:     { id: "sub2api",     brandColor: "#14b8a6", fallbackLetter: "S", svgPath: RAW.sub2api },
   venice:      { id: "venice",      brandColor: "#3c8fdd", fallbackLetter: "V", svgPath: RAW.venice },
   vercel:      { id: "vercel",      brandColor: "#737373", fallbackLetter: "V", svgPath: RAW.vercel },
+  museai:      { id: "museai",      brandColor: "#0668E1", fallbackLetter: "M", svgPath: RAW.museai },
   openaiapi:   { id: "openaiapi",   brandColor: "#10a37f", fallbackLetter: "O" },
   chutes:      { id: "chutes",      brandColor: "#ff5c35", fallbackLetter: "C" },
   litellm:     { id: "litellm",     brandColor: "#0ea5e9", fallbackLetter: "L" },

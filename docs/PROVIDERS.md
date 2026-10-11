@@ -112,6 +112,26 @@ the bearer key are never sent together. Rate limits, server errors and
 malformed balances are final and do not fall back. Upstream's multiple API-key
 token accounts are not ported yet.
 
+### Muse (muse.ai) weekly usage
+
+Muse (muse.ai) is Meta's personal agent; it is separate from Muse Code, which
+reads the `muse` CLI login. It is disabled by default and has no usage API, so
+it posts the settings dialog's Next.js server action `fetchSubscriptionAction`
+to `https://muse.ai/` with the session cookies and `Sec-Fetch-*` headers.
+
+- The cookie source picks the session: Automatic imports the `muse.ai`
+  cookies from the selected browser, Manual uses a pasted Cookie header, and
+  Off reads nothing.
+- The action ID changes on every deploy. A `404 Server action not found.`
+  starts a bounded discovery: the signed-in page's chunks (at most 96, eight
+  at a time, 8 MiB in total) lead to the lazy settings module, whose chunks
+  (at most 32) hold the new ID. Static chunks receive no cookies. The ID is
+  kept in memory after a successful response; upstream stores it on disk.
+- The card shows the weekly percentage and reset, the plan, the paid-plan
+  "tokens left" text, the renewal date and any top-up tokens as an extra bar.
+- A 401, a 403 or a redirect to `auth.muse.ai` is reported as an expired
+  session. Response bodies and cookies are never logged or echoed in errors.
+
 ### llmman daemon
 
 llmman reads a local (or LAN) llmman daemon: `GET {base}/llmman/node` for the

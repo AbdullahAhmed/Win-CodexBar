@@ -125,6 +125,7 @@ See the full history in [CHANGELOG.md](CHANGELOG.md).
 | llmman | Local daemon / optional API Key | Memory in use, loaded and stored models |
 | DevPass | API Key | Plan credits, Premium weekly, API-key spend |
 | xKiro | API Key | Daily free tokens |
+| Muse (muse.ai) | Browser cookies / manual Cookie header | Weekly usage, tokens left, top-up tokens |
 
 </details>
 
