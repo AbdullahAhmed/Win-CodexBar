@@ -3,7 +3,6 @@ import type { LocaleKey } from "../i18n/keys";
 import type {
   PaceStage,
   RateWindowSnapshot,
-  SettingsSnapshot,
   WindowPaceSnapshot,
   WorkdayTickStyle,
 } from "../types/bridge";
