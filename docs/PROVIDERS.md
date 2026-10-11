@@ -119,9 +119,11 @@ reads the `muse` CLI login. It is disabled by default and has no usage API, so
 it posts the settings dialog's Next.js server action `fetchSubscriptionAction`
 to `https://muse.ai/` with the session cookies and `Sec-Fetch-*` headers.
 
-- The cookie source picks the session: Automatic imports the `muse.ai`
-  cookies from the selected browser, Manual uses a pasted Cookie header, and
-  Off reads nothing.
+- The cookie source in Settings → Providers → Muse (muse.ai) picks the session
+  and defaults to Automatic. Automatic and Manual first use a header imported
+  under Browser Cookies (from the browser you choose) or pasted there. Without
+  one, Automatic reads the `muse.ai` cookies from the first detected browser
+  that has them and Manual fails closed. Off reads nothing.
 - The action ID changes on every deploy. A `404 Server action not found.`
   starts a bounded discovery: the signed-in page's chunks (at most 96, eight
   at a time, 8 MiB in total) lead to the lazy settings module, whose chunks

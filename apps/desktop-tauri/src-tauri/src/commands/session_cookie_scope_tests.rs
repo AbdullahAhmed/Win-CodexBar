@@ -160,3 +160,44 @@ fn groq_exposes_a_cookie_source_picker_defaulting_to_auto() {
         .collect();
     assert_eq!(values, vec!["auto", "manual", "off"]);
 }
+
+/// Muse (muse.ai) is web-only: the picker chooses the session, a stored header
+/// always wins, an empty manual source fails closed without reading a browser,
+/// and off reaches the provider as Cli (its "cookies are disabled" error).
+#[test]
+fn museai_exposes_a_cookie_source_picker_and_routes_each_choice() {
+    let settings = Settings::default();
+    assert_eq!(
+        super::provider_cookie_source_lookup(&settings, "museai").as_deref(),
+        Some("auto")
+    );
+    let values: Vec<_> = super::cookie_source_options_for("museai", Language::English)
+        .into_iter()
+        .map(|option| option.value)
+        .collect();
+    assert_eq!(values, vec!["auto", "manual", "off"]);
+
+    let cookie = "session=fixture";
+    for source in ["auto", "manual"] {
+        let ctx = session_context(ProviderId::MuseAI, Some(source), "auto", Some(cookie));
+        assert!(
+            matches!(ctx.source_mode, SourceMode::Auto | SourceMode::Web),
+            "{source}"
+        );
+        assert_eq!(
+            ctx.manual_cookie_header.as_deref(),
+            Some(cookie),
+            "{source}"
+        );
+        assert!(!ctx.manual_cookie_missing, "{source}");
+    }
+
+    let ctx = session_context(ProviderId::MuseAI, Some("manual"), "auto", None);
+    assert_eq!(ctx.source_mode, SourceMode::Web);
+    assert!(ctx.manual_cookie_header.is_none());
+    assert!(ctx.manual_cookie_missing);
+
+    let ctx = session_context(ProviderId::MuseAI, Some("off"), "auto", Some(cookie));
+    assert_eq!(ctx.source_mode, SourceMode::Cli);
+    assert!(ctx.manual_cookie_header.is_none());
+}
