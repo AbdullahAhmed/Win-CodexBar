@@ -21,8 +21,8 @@ use reqwest::{
 };
 
 use crate::core::{
-    FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
-    ProviderStateKind, SourceMode,
+    FetchContext, ManualEmptyCookiePolicy, Provider, ProviderError, ProviderFetchResult,
+    ProviderId, ProviderMetadata, ProviderStateKind, SourceMode,
 };
 use crate::providers::{BoundedBodyError, read_bounded_response};
 
@@ -145,6 +145,12 @@ impl Provider for LangdockProvider {
 
     fn supports_web(&self) -> bool {
         true
+    }
+
+    /// Upstream sends only the pasted header in Manual mode, so an empty
+    /// manual source must not fall back to a browser session.
+    fn manual_empty_cookie_policy(&self) -> ManualEmptyCookiePolicy {
+        ManualEmptyCookiePolicy::FailClosedWeb
     }
 
     fn error_state_kind(&self, error: &ProviderError) -> ProviderStateKind {
