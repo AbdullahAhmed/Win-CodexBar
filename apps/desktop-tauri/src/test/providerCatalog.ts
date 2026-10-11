@@ -86,5 +86,8 @@ export const TEST_PROVIDER_CATALOG: Array<[string, string]> = [
   ["devpass", "DevPass"],
   ["xkiro", "xKiro"],
   ["raycast", "Raycast"],
+  ["synthetic", "Synthetic"],
+  ["clawrouter", "ClawRouter"],
+  ["ibmbob", "IBM Bob"],
   ["langdock", "Langdock"],
 ];

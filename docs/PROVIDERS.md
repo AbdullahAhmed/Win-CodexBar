@@ -204,6 +204,64 @@ are never followed and response bodies are never echoed in errors.
   budget, inconsistent coverage, malformed amounts) is a parse error, not a
   partial balance.
 
+### Synthetic
+
+Synthetic reads `GET https://api.synthetic.new/v2/quotas` with
+`Authorization: Bearer <key>`. Configure the key in Settings → Providers →
+Synthetic (or `SYNTHETIC_API_KEY`); the CLI also accepts `synthetic.new`.
+
+- `rollingFiveHourLimit` is the "Five-hour quota" lane, `weeklyTokenLimit` the
+  "Weekly tokens" lane and `search.hourly` a "Search hourly" window. Other
+  payload shapes fall back to the first quota-like objects found under
+  `quotas`, `quota`, `limits`, `usage`, `entries`, `subscription` or `data`.
+- When the five-hour quota reports `tickPercent`, the lane resets at the next
+  regen tick and its detail line reads, for example,
+  "76% after next regen · Full in ~3 regens". The weekly lane does the same
+  when it carries `maxCredits` and `nextRegenCredits`, which also give a
+  weekly USD cost.
+- The plan name (`plan`, `planName`, `tier`, ...) is shown as the plan.
+- 401 and 403 report "Invalid Synthetic API credentials."; response bodies are
+  never echoed in errors.
+
+### ClawRouter
+
+ClawRouter reports the monthly budget, spend and routed-provider usage of one
+policy key (`GET {base}/v1/usage`, `Authorization: Bearer <key>`). Configure
+the key in Settings → Providers → ClawRouter (or `CLAWROUTER_API_KEY`). Leave
+the Base URL empty for `https://clawrouter.openclaw.ai`; set it (or
+`CLAWROUTER_BASE_URL`) for another deployment. The service root and its `/v1`
+URL both work, a bare host is treated as HTTPS, and plain HTTP, embedded
+credentials, a query or a fragment are rejected before the key is read.
+Redirects are never followed and response bodies are never echoed in errors.
+
+- The primary lane is the monthly budget (spent / limit), resetting on the
+  first day of the next month (UTC). The cost line shows this month's spend
+  against the limit.
+- Details show requests, tokens, actual cost, the budget ledger and the
+  monthly budget, then up to 20 routed providers ordered by spend and
+  requests.
+- A policy without a monthly limit shows "Unmetered" and this month's actual
+  cost.
+
+### IBM Bob
+
+IBM Bob reads monthly Bobcoin usage. Configure an API key from the IBM Bob web
+portal in Settings → Providers → IBM Bob, as token accounts, or with
+`BOBSHELL_API_KEY`; the CLI also accepts `ibm-bob`, `bob` and `bobshell`.
+
+- `GET https://api.us-east.bob.ibm.com/admin/v1/profile` lists the
+  subscription instances; then each team's budget comes from
+  `GET /admin/v1/teams/{team}/users/{user}` on the instance's regional host.
+- Credentials go only to HTTPS hosts named `bob.ibm.com` or under
+  `.bob.ibm.com`; any other `region_domain` stops the refresh before a team
+  request. A JWT session token is sent as `Bearer`, any other key as `Apikey`.
+- The "Monthly Bobcoins" bar sums every visible team and shows a percentage
+  only when every team has a budget; otherwise it shows Bobcoins used. It
+  resets at the earliest `refresh_at`. The "Bobcoin usage" rows list each team
+  with its plan, and the plan names are shown as the organization.
+- 401 and 403 report that the key was rejected; response bodies are never
+  echoed in errors.
+
 ## Listing what is enabled
 
 ```powershell
