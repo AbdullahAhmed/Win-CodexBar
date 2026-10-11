@@ -39,7 +39,13 @@ function snapshot(overrides: Partial<ProviderUsageSnapshot>): ProviderUsageSnaps
 }
 
 describe("accountMenuAction", () => {
-  it.each(["codex", "claude", "grok"])("offers Switch Account... for a signed-in %s", (providerId) => {
+  it("keeps Add Account... for a signed-in Codex, as upstream loginMenuAction does", () => {
+    expect(
+      accountMenuAction(snapshot({ providerId: "codex", accountEmail: "parity.user@example.com" })),
+    ).toEqual({ labelKey: "AddAccountEllipsis", settingsTab: "providers:codex" });
+  });
+
+  it.each(["claude", "grok"])("offers Switch Account... for a signed-in %s", (providerId) => {
     expect(accountMenuAction(snapshot({ providerId, accountEmail: "a@example.com" }))).toEqual({
       labelKey: "TrayMenuSwitchAccount",
       settingsTab: `providers:${providerId}`,

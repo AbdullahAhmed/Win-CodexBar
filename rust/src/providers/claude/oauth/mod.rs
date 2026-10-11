@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use crate::core::{NamedRateWindow, ProviderError, ProviderFetchResult, RateWindow, UsageSnapshot};
 
 mod credentials_store;
+mod profile;
 mod refresh;
 mod usage_gate;
 
@@ -409,7 +410,18 @@ impl ClaudeOAuthFetcher {
         credentials: ClaudeOAuthCredentials,
     ) -> Result<ProviderFetchResult, ProviderError> {
         let usage_response = self.fetch_usage(&credentials).await?;
-        let usage = self.build_usage_snapshot(&usage_response, &credentials);
+        let mut usage = self.build_usage_snapshot(&usage_response, &credentials);
+        // Header email only; a profile failure leaves the usage result intact.
+        if usage.account_email.is_none()
+            && let Some(email) = profile::fetch_email(
+                &self.client,
+                &credentials.access_token,
+                &usage_gate::token_fingerprint(&credentials.access_token),
+            )
+            .await
+        {
+            usage = usage.with_email(email);
+        }
         let mut result = ProviderFetchResult::new(usage, "oauth");
         if let Some(identity) = credential_identity(&credentials) {
             result = result.with_account_identity(identity);

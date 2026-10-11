@@ -55,6 +55,16 @@ function periodLabel(raw: string | null | undefined, fallback: string, t: Transl
   }
 }
 
+const creditsFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
+
+/** Mac `UsageFormatter.creditsNumberString`: a unitless credit count, max 2 decimals. */
+export function formatCreditsNumber(value: number): string {
+  return creditsFormatter.format(value);
+}
+
+/** Codex costs are credits; upstream `creditsUsageSection` prints them unitless. */
+const CREDIT_COST_PROVIDERS = new Set(["codex"]);
+
 /** A cost whose period names a balance carries the balance in `used`. */
 function periodNamesBalance(period: string): boolean {
   const normalized = period.trim().toLowerCase();
@@ -65,13 +75,19 @@ export function cardCostSection(
   cost: CostSnapshotBridge | null | undefined,
   style: CostSummaryDisplayStyle | undefined,
   t: Translate,
+  providerId?: string,
 ): CardCostSection | null {
   if (!cost) return null;
   if (style === "hidden" && cost.alwaysVisible !== true) return null;
 
   const isQuota = cost.currencyCode === "Quota";
+  const isCredits = providerId !== undefined && CREDIT_COST_PROVIDERS.has(providerId);
   const money = (value: number, formatted?: string | null) =>
-    isQuota ? value.toFixed(0) : formatted || formatCostAmount(value, cost.currencyCode);
+    isQuota
+      ? value.toFixed(0)
+      : isCredits
+        ? formatCreditsNumber(value)
+        : formatted || formatCostAmount(value, cost.currencyCode);
   const balanceText = (value: number) =>
     `${t("DetailCostBalance")}: ${money(value, cost.formattedBalance)}`;
   const limit = cost.limit ?? 0;

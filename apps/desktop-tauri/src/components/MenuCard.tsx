@@ -54,6 +54,21 @@ export function maskEmail(email: string): string {
   return email[0] + "•".repeat(at - 1) + email.slice(at);
 }
 
+/**
+ * Upstream `MenuCardView.email(from:)`: the provider-reported email, else the
+ * active token-account label. Hide Personal Info masks the email and drops the
+ * label, as upstream `PersonalInfoRedactor.redactAccountLabel` blanks it.
+ */
+export function headerAccount(
+  provider: Pick<ProviderUsageSnapshot, "accountEmail" | "accountLabel">,
+  hideEmail: boolean,
+): string | null {
+  const email = provider.accountEmail?.trim();
+  if (email) return hideEmail ? maskEmail(email) : email;
+  if (hideEmail) return null;
+  return provider.accountLabel?.trim() || null;
+}
+
 function cardMetrics(
   provider: ProviderUsageSnapshot,
   t: ReturnType<typeof useLocale>["t"],
@@ -164,12 +179,7 @@ export default function MenuCard({
   }, [provider.providerId, provider.accountEmail, localDay, onLayoutChange]);
 
   const isWayfinder = provider.providerId === "wayfinder";
-  const email =
-    !isWayfinder && provider.accountEmail
-      ? hideEmail
-        ? maskEmail(provider.accountEmail)
-        : provider.accountEmail
-      : null;
+  const email = isWayfinder ? null : headerAccount(provider, hideEmail);
   const plan = isWayfinder
     ? null
     : hideOpenAiApiProjectId(
