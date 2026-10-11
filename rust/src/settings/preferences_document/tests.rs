@@ -33,6 +33,7 @@ fn customized_settings() -> Settings {
         refresh_all_providers_on_menu_open: true,
         low_power_mode_preference: crate::settings::LowPowerModePreference::Automatic,
         show_notifications: false,
+        session_quota_notifications_enabled: false,
         sound_enabled: false,
         high_usage_threshold: 55.5,
         critical_usage_threshold: 80.0,
@@ -136,6 +137,8 @@ fn round_trips_every_allowlisted_preference() {
     assert_eq!(again, exported);
     assert_eq!(target.window_scale_percent, 150);
     assert_eq!(target.ui_language, Language::Japanese);
+    // Portable like the Mac PreferencesDocument: depleted/restored alerts travel.
+    assert!(!target.session_quota_notifications_enabled);
     assert_eq!(
         target.cost_reporting_period,
         CostReportingPeriod::MonthToDate

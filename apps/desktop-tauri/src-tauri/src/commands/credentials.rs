@@ -40,6 +40,8 @@ pub struct AppInfoBridge {
     pub name: String,
     pub version: String,
     pub build_number: String,
+    /// UTC date this binary was built (YYYY-MM-DD).
+    pub build_date: String,
     pub update_channel: String,
     pub tagline: String,
 }
