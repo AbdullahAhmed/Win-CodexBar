@@ -1526,6 +1526,6 @@ UsageSpendViewSessions = 工作階段
 UsageSpendNoSessions = 尚無已索引的 Codex 工作階段。
 UsageSpendDataControls = 按定價換算——不是帳單收據。
 UsageSpendTrackCosts = 追蹤費用
-UsageSpendTrackCostsHelper = 掃描本機記錄以估算花費。關閉後，卡片和浮動列上的費用也會隱藏。
+UsageSpendTrackCostsHelper = 掃描本機記錄以估算花費。關閉後，卡片和浮動列上的本機估算費用也會隱藏。
 UsageSpendTrackingOffTitle = 費用追蹤已關閉
 UsageSpendTrackingOffBody = 在下方開啟「追蹤費用」即可掃描本機記錄並估算花費。

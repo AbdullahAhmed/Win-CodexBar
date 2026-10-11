@@ -1526,6 +1526,6 @@ UsageSpendViewSessions = セッション
 UsageSpendNoSessions = インデックス済みの Codex セッションはまだありません。
 UsageSpendDataControls = 定価換算です。請求書ではありません。
 UsageSpendTrackCosts = コストを記録
-UsageSpendTrackCostsHelper = ローカルログを読み取ってコストを推定します。オフにするとカードとフローティングバーのコストも非表示になります。
+UsageSpendTrackCostsHelper = ローカルログを読み取ってコストを推定します。オフにするとカードとフローティングバーのローカル推定コストも非表示になります。
 UsageSpendTrackingOffTitle = コスト記録はオフです
 UsageSpendTrackingOffBody = 下の「コストを記録」をオンにすると、ローカルログを読み取ってコストを推定します。

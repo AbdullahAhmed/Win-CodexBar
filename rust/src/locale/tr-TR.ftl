@@ -1526,6 +1526,6 @@ UsageSpendViewSessions = Oturumlar
 UsageSpendNoSessions = Henüz dizine eklenmiş Codex oturumu yok.
 UsageSpendDataControls = Liste fiyatı karşılığıdır — fatura makbuzu değildir.
 UsageSpendTrackCosts = Maliyetleri izle
-UsageSpendTrackCostsHelper = Harcamayı tahmin etmek için yerel günlükleri tarar. Kapalıyken kartlardaki ve kayan çubuktaki maliyet de gizlenir.
+UsageSpendTrackCostsHelper = Harcamayı tahmin etmek için yerel günlükleri tarar. Kapalıyken kartlardaki ve kayan çubuktaki yerel tahmini maliyetler de gizlenir.
 UsageSpendTrackingOffTitle = Maliyet izleme kapalı
 UsageSpendTrackingOffBody = Yerel günlükleri taramak ve harcamayı tahmin etmek için aşağıdan Maliyetleri izle seçeneğini açın.

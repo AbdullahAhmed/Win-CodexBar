@@ -1528,6 +1528,6 @@ UsageSpendViewSessions = Sessions
 UsageSpendNoSessions = No indexed Codex sessions yet.
 UsageSpendDataControls = List-price equivalent — not a billing receipt.
 UsageSpendTrackCosts = Track costs
-UsageSpendTrackCostsHelper = Scan local logs to estimate spend. Off also hides cost on cards and the float bar.
+UsageSpendTrackCostsHelper = Scan local logs to estimate spend. Off also hides local cost estimates on cards and the float bar.
 UsageSpendTrackingOffTitle = Cost tracking is off
 UsageSpendTrackingOffBody = Turn on Track costs below to scan local logs and estimate spend.

@@ -1530,6 +1530,6 @@ UsageSpendViewSessions = Sessões
 UsageSpendNoSessions = Ainda não há sessões do Codex indexadas.
 UsageSpendDataControls = Equivalente ao preço de tabela — não é um recibo de cobrança.
 UsageSpendTrackCosts = Rastrear custos
-UsageSpendTrackCostsHelper = Analisa os registros locais para estimar o gasto. Desativado também oculta o custo nos cartões e na barra flutuante.
+UsageSpendTrackCostsHelper = Analisa os registros locais para estimar o gasto. Desativado também oculta os custos locais estimados nos cartões e na barra flutuante.
 UsageSpendTrackingOffTitle = O rastreamento de custos está desativado
 UsageSpendTrackingOffBody = Ative Rastrear custos abaixo para analisar os registros locais e estimar o gasto.

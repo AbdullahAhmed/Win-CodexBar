@@ -1526,6 +1526,6 @@ UsageSpendViewSessions = 会话
 UsageSpendNoSessions = 尚无已索引的 Codex 会话。
 UsageSpendDataControls = 按标价折算——不是账单收据。
 UsageSpendTrackCosts = 跟踪费用
-UsageSpendTrackCostsHelper = 扫描本地日志以估算花费。关闭后，卡片和浮动栏上的费用也会隐藏。
+UsageSpendTrackCostsHelper = 扫描本地日志以估算花费。关闭后，卡片和浮动栏上的本地估算费用也会隐藏。
 UsageSpendTrackingOffTitle = 费用跟踪已关闭
 UsageSpendTrackingOffBody = 在下方开启“跟踪费用”即可扫描本地日志并估算花费。

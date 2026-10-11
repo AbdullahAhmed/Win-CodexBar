@@ -1525,6 +1525,6 @@ UsageSpendViewSessions = 세션
 UsageSpendNoSessions = 아직 색인된 Codex 세션이 없습니다.
 UsageSpendDataControls = 정가 기준 환산이며 청구 영수증이 아닙니다.
 UsageSpendTrackCosts = 비용 추적
-UsageSpendTrackCostsHelper = 로컬 로그를 검사해 비용을 추정합니다. 끄면 카드와 플로팅 바의 비용도 숨겨집니다.
+UsageSpendTrackCostsHelper = 로컬 로그를 검사해 비용을 추정합니다. 끄면 카드와 플로팅 바의 로컬 예상 비용도 숨겨집니다.
 UsageSpendTrackingOffTitle = 비용 추적이 꺼져 있습니다
 UsageSpendTrackingOffBody = 아래에서 비용 추적을 켜면 로컬 로그를 검사해 비용을 추정합니다.
