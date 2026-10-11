@@ -155,6 +155,10 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     switcherShowsIcons: true,
     menuBarShowsHighestUsage: false,
     menuBarShowsPercent: false,
+    menuBarIconStyle: "bars",
+    mergedOverviewSelectedProviders: [],
+    quotaWarningMarkersVisible: true,
+    workdayTickStyle: "subtle",
     menuBarColorPace: false,
     providersSortedAlphabetically: false,
     showAsUsed: true,
@@ -210,6 +214,20 @@ function bootstrap(
     providers: catalog,
     settings: settings(settingsOverrides),
   };
+}
+
+/** The first `count` test providers, enabled and ordered as in the catalog. */
+function overviewOrder(count: number): Partial<SettingsSnapshot> {
+  const ids = TEST_PROVIDER_CATALOG.slice(0, count).map(([id]) => id);
+  return { enabledProviders: ids, providerOrder: ids };
+}
+
+function overviewCatalog(count: number): ProviderCatalogEntry[] {
+  return TEST_PROVIDER_CATALOG.slice(0, count).map(([id, displayName]) => ({
+    id,
+    displayName,
+    cookieDomain: null,
+  }));
 }
 
 function renderTrayPanel(
@@ -753,6 +771,42 @@ describe("TrayPanel provider grid", () => {
     expect(container.querySelectorAll(".menu-metric")).toHaveLength(3);
   });
 
+  it("shows the first six providers on Overview when none are chosen", async () => {
+    const providers = TEST_PROVIDER_CATALOG.slice(0, 8).map(([id, displayName], index) =>
+      provider(id, displayName, (index * 7) % 100),
+    );
+    const { container } = renderTrayPanel(providers, overviewOrder(8), overviewCatalog(8));
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".menu-stack__item")).toHaveLength(6);
+    });
+    expect(
+      Array.from(container.querySelectorAll(".card-header__name"), (node) => node.textContent),
+    ).toEqual(TEST_PROVIDER_CATALOG.slice(0, 6).map(([, displayName]) => displayName));
+  });
+
+  it("shows only the chosen Overview providers, in provider order", async () => {
+    const providers = TEST_PROVIDER_CATALOG.slice(0, 8).map(([id, displayName], index) =>
+      provider(id, displayName, (index * 7) % 100),
+    );
+    const [first, , third, , , , seventh] = TEST_PROVIDER_CATALOG;
+    const { container } = renderTrayPanel(
+      providers,
+      {
+        ...overviewOrder(8),
+        mergedOverviewSelectedProviders: [seventh[0], first[0], third[0], "not-present"],
+      },
+      overviewCatalog(8),
+    );
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".menu-stack__item")).toHaveLength(3);
+    });
+    expect(
+      Array.from(container.querySelectorAll(".card-header__name"), (node) => node.textContent),
+    ).toEqual([first[1], third[1], seventh[1]]);
+  });
+
   it("collapses and expands the full provider catalog in the dense tray grid", async () => {
     const providers = TEST_PROVIDER_CATALOG.map(([id, displayName], index) =>
       provider(id, displayName, (index * 7) % 100),
@@ -789,9 +843,9 @@ describe("TrayPanel provider grid", () => {
       );
     });
     expect(grid?.getAttribute("data-expanded")).toBe("true");
-    expect(container.querySelectorAll(".menu-stack__item")).toHaveLength(
-      providers.length,
-    );
+    // The expanded grid lists every provider; Overview still shows the
+    // Settings > Menu Bar > Overview providers default, the first six.
+    expect(container.querySelectorAll(".menu-stack__item")).toHaveLength(6);
     for (const [id, displayName] of TEST_PROVIDER_CATALOG) {
       expect(
         container.querySelector(`.provider-grid__item[aria-label="${displayName}"]`),

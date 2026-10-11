@@ -12,6 +12,7 @@ function bar(overrides: Partial<UsageBarModel> = {}): UsageBarModel {
     pacePercent: null,
     paceDeficit: false,
     markers: [],
+    workdayTickStyle: "subtle",
     ...overrides,
   };
 }
@@ -99,6 +100,20 @@ describe("UsageProgressBar", () => {
     expect(attrs(container, ".menu-metric__progress-workday", "y")).toEqual(["3", "3"]);
     expect(attrs(container, ".menu-metric__progress-workday", "height")).toEqual(["3", "3"]);
     expect(container.querySelector("mask")).toBeNull();
+  });
+
+  it("draws high contrast work day ticks 2px wide at full height", () => {
+    const { container } = render(
+      <UsageProgressBar
+        label="Weekly"
+        bar={bar({ workdayTickStyle: "high_contrast", markers: [{ percent: 20, kind: "workday" }] })}
+      />,
+    );
+    const tick = container.querySelector(".menu-metric__progress-workday");
+    expect(tick?.getAttribute("y")).toBe("0");
+    expect(tick?.getAttribute("height")).toBe("6");
+    expect(tick?.getAttribute("width")).toBe("2");
+    expect(tick?.classList.contains("menu-metric__progress-workday--high-contrast")).toBe(true);
   });
 
   it.each([

@@ -3,6 +3,7 @@ import type {
   CostSummaryDisplayStyle,
   ProviderChartData,
   ProviderUsageSnapshot,
+  WorkdayTickStyle,
 } from "../types/bridge";
 import { getProviderChartData } from "../lib/tauri";
 import { useLocale } from "../hooks/useLocale";
@@ -36,7 +37,9 @@ export interface MenuCardDisplayOptions {
   compactOverview?: boolean;
   costSummaryDisplayStyle?: CostSummaryDisplayStyle;
   usageThresholds?: UsageThresholdSettings | null;
+  quotaWarningMarkersVisible?: boolean;
   weeklyProgressWorkDays?: number | null;
+  workdayTickStyle?: WorkdayTickStyle;
 }
 
 interface MenuCardProps {
@@ -146,7 +149,9 @@ export default function MenuCard({
     compactOverview = false,
     costSummaryDisplayStyle,
     usageThresholds = null,
+    quotaWarningMarkersVisible = true,
     weeklyProgressWorkDays = null,
+    workdayTickStyle = "subtle",
   } = display;
   const { t, language } = useLocale();
   const [chartData, setChartData] = useState<ProviderChartData | null>(null);
@@ -221,7 +226,9 @@ export default function MenuCard({
     compactOverview,
     monthlyLimitBlockNow,
     usageThresholds,
+    quotaWarningMarkersVisible,
     weeklyProgressWorkDays,
+    workdayTickStyle,
   };
 
   const cardClassName = [

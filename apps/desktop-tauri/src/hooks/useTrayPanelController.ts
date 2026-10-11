@@ -25,6 +25,7 @@ import type { MenuFooterRow } from "../components/MenuSurface";
 import { accountMenuAction } from "../lib/accountMenuRow";
 import { orderProviderSnapshots } from "../lib/providerOrder";
 import { clampTrayScalePercent } from "../lib/trayScale";
+import { selectOverviewProviders } from "../lib/overviewProviders";
 import {
   hydrateProviderSlots,
   orderedEnabledProviderSlots,
@@ -155,7 +156,8 @@ export function useTrayPanelController(state: BootstrapState) {
       if (sorted.length + 1 > DENSE_OVERVIEW_THRESHOLD && !gridExpanded) {
         return denseTrayProviders.slice(0, 4);
       }
-      return sorted;
+      // Settings > Menu Bar > Overview providers: the chosen ones, else the first six.
+      return selectOverviewProviders(sorted, settings.mergedOverviewSelectedProviders ?? []);
     }
     // Detail: show ONLY the selected provider (macOS behavior — no appended errors)
     const match = sorted.find((p) => p.providerId === selectedProviderId);
@@ -163,7 +165,13 @@ export function useTrayPanelController(state: BootstrapState) {
       return sorted;
     }
     return [match];
-  }, [denseTrayProviders, sorted, selectedProviderId, gridExpanded]);
+  }, [
+    denseTrayProviders,
+    sorted,
+    selectedProviderId,
+    gridExpanded,
+    settings.mergedOverviewSelectedProviders,
+  ]);
 
   const actionProvider =
     selectedProviderId !== null

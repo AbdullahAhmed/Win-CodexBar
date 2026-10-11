@@ -51,6 +51,8 @@ function input(overrides: Partial<MetricRowInput> = {}): MetricRowInput {
     paceEnabled: true,
     usageThresholds: { highUsageThreshold: 70, criticalUsageThreshold: 90, providerUsageThresholds: {} },
     weeklyProgressWorkDays: null,
+    quotaWarningMarkersVisible: true,
+    workdayTickStyle: "subtle",
     now: NOW,
     ...overrides,
   };
@@ -354,6 +356,29 @@ describe("metricRowPresentation bar", () => {
       );
       expect(kinds).toEqual(["warning", "warning"]);
     }
+  });
+
+  it("hides quota warning markers when the toggle is off", () => {
+    const row = metricRowPresentation(
+      input({ lane: "secondary", snap: weekly(), weeklyProgressWorkDays: 5, quotaWarningMarkersVisible: false }),
+      en,
+    );
+    expect(row.bar.markers.map((m) => m.kind)).toEqual(["workday", "workday", "workday", "workday"]);
+    expect(metricRowPresentation(input({ quotaWarningMarkersVisible: false }), en).bar.valueText).toBe("63%");
+  });
+
+  it("hides work day ticks for the hidden style and passes the visible style to the bar", () => {
+    const hidden = metricRowPresentation(
+      input({ lane: "secondary", snap: weekly(), weeklyProgressWorkDays: 5, workdayTickStyle: "hidden" }),
+      en,
+    );
+    expect(hidden.bar.markers.map((m) => m.kind)).toEqual(["warning", "warning"]);
+    const strong = metricRowPresentation(
+      input({ lane: "secondary", snap: weekly(), weeklyProgressWorkDays: 7, workdayTickStyle: "high_contrast" }),
+      en,
+    );
+    expect(strong.bar.workdayTickStyle).toBe("high_contrast");
+    expect(strong.bar.markers.filter((m) => m.kind === "workday")).toHaveLength(6);
   });
 
   it("describes the value and markers for assistive technology", () => {
