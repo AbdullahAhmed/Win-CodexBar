@@ -171,7 +171,8 @@ to `https://muse.ai/` with the session cookies and `Sec-Fetch-*` headers.
   (at most 32) hold the new ID. Static chunks receive no cookies. The ID is
   kept in memory after a successful response; upstream stores it on disk.
 - The card shows the weekly percentage and reset, the plan, the paid-plan
-  "tokens left" text, the renewal date and any top-up tokens as an extra bar.
+  "tokens left" text, the renewal date and any top-up tokens as a detail row
+  with a progress bar.
 - A 401, a 403 or a redirect to `auth.muse.ai` is reported as an expired
   session. Response bodies and cookies are never logged or echoed in errors.
 
