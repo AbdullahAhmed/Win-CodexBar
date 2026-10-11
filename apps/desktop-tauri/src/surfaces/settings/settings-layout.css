@@ -57,3 +57,122 @@
 .codex-accounts .credential-card__badge {
   align-self: flex-start;
 }
+
+/* Settings > Providers "Usage details": planning detail moved out of the tray card. */
+.provider-usage-details {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.provider-usage-details__pace {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.provider-usage-details__pace-delta {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.provider-usage-details__pace-delta[data-pace="slow"] {
+  color: var(--pace-slow-fg);
+}
+
+.provider-usage-details__pace-delta[data-pace="steady"] {
+  color: var(--pace-steady-fg);
+}
+
+.provider-usage-details__pace-delta[data-pace="racing"] {
+  color: var(--pace-racing-fg);
+}
+
+.provider-usage-details__pace-delta[data-pace="burning"] {
+  color: var(--pace-burning-fg);
+}
+
+.provider-usage-details__pace-row {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.provider-usage-details__pace-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--usage-bar-track);
+  overflow: hidden;
+}
+
+.provider-usage-details__pace-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--usage-bar-normal);
+}
+
+.provider-usage-details__pace-fill--expected {
+  background: var(--pace-track-expected-fg);
+}
+
+.provider-usage-details__pace-fill[data-pace="slow"] {
+  background: var(--pace-slow-fg);
+}
+
+.provider-usage-details__pace-fill[data-pace="steady"] {
+  background: var(--pace-steady-fg);
+}
+
+.provider-usage-details__pace-fill[data-pace="racing"] {
+  background: var(--pace-racing-fg);
+}
+
+.provider-usage-details__pace-fill[data-pace="burning"] {
+  background: var(--pace-burning-fg);
+}
+
+.provider-usage-details__forecast {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.provider-usage-details__budget {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.provider-usage-details__budget-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.provider-usage-details__budget-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.provider-usage-details__budget-value {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface-elevated);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.provider-usage-details__pricing {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.provider-usage-details__pricing span,
+.provider-usage-details__pricing small {
+  color: var(--text-secondary);
+}
