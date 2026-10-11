@@ -7,9 +7,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
-use crate::core::{
-    ProviderDisplayDetail, ProviderError, ProviderFetchResult, RateWindow, UsageSnapshot,
-};
+use crate::core::{ProviderError, ProviderFetchResult, RateWindow, UsageSnapshot};
 
 const SESSION_WINDOW_MINUTES: u32 = 300;
 const WEEKLY_WINDOW_MINUTES: u32 = 10_080;
@@ -44,7 +42,7 @@ fn object(value: Option<&Value>) -> Result<&Map<String, Value>, ProviderError> {
 }
 
 /// A finite JSON number. Upstream keeps overage above 100%; the Windows
-/// rate window clamps at display time.
+/// `RateWindow` constructor clamps it to 0-100 when the window is built.
 fn percent(value: Option<&Value>) -> Result<f64, ProviderError> {
     value
         .and_then(Value::as_f64)
@@ -126,11 +124,13 @@ pub(super) fn parse_personal_usage(body: &[u8]) -> Result<ProviderFetchResult, P
     ))
 }
 
-/// Upstream returns only a "Usage" detail row and no bars.
+/// Upstream returns only a "Usage" detail row ("Included limits") and no
+/// bars. The Windows card always renders the primary window, so that row
+/// becomes the informational primary under its upstream label instead of a
+/// second copy of the message titled "Session".
 fn no_included_limits() -> ProviderFetchResult {
-    let row = ProviderDisplayDetail::new("included-limits", "Included limits", NO_LIMITS)
-        .and_then(|row| row.with_section_title("Usage"));
     let usage = UsageSnapshot::new(RateWindow::informational(NO_LIMITS))
+        .with_primary_label("Included limits")
         .with_login_method("Browser session");
-    ProviderFetchResult::new(usage, "web").with_display_detail(row)
+    ProviderFetchResult::new(usage, "web")
 }

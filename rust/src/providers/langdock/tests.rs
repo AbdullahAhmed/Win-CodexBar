@@ -126,7 +126,7 @@ fn null_resets_stay_unknown() {
 }
 
 #[test]
-fn missing_included_limits_show_one_detail_row_and_no_bars() {
+fn missing_included_limits_show_one_message_titled_included_limits() {
     for payload in [
         body("null"),
         r#"[{"result":{"data":{"json":{"hasIncludedUsageLimits":false}}}}]"#.to_owned(),
@@ -140,16 +140,18 @@ fn missing_included_limits_show_one_detail_row_and_no_bars() {
             result.usage.primary.reset_description.as_deref(),
             Some("No included usage limits available")
         );
-        assert!(result.usage.secondary.is_none());
+        // Upstream's detail row title, so the card never falls back to "Session".
         assert_eq!(
-            rows(&result),
-            vec![(
-                "included-limits".to_owned(),
-                "Included limits".to_owned(),
-                "No included usage limits available".to_owned(),
-                Some("Usage".to_owned()),
-            )],
+            result.usage.primary_label.as_deref(),
+            Some("Included limits"),
             "{payload}"
+        );
+        assert!(result.usage.secondary.is_none());
+        // The primary already carries the message; no second copy as a row.
+        assert_eq!(rows(&result), Vec::new(), "{payload}");
+        assert_eq!(
+            result.usage.login_method.as_deref(),
+            Some("Browser session")
         );
     }
 }
@@ -361,6 +363,110 @@ async fn a_manual_source_without_a_cookie_does_not_read_a_browser() {
     };
     let error = provider.fetch_usage(&ctx).await.expect_err("no session");
     assert!(matches!(error, ProviderError::BrowserSignInRequired { .. }));
+}
+
+fn browser_context() -> FetchContext {
+    FetchContext {
+        source_mode: SourceMode::Auto,
+        ..FetchContext::default()
+    }
+}
+
+#[test]
+fn the_provider_owns_browser_cookie_resolution() {
+    assert!(LangdockProvider::new().owns_browser_cookie_resolution());
+}
+
+#[tokio::test]
+async fn automatic_skips_a_browser_without_auth_token() {
+    let (provider, server) = provider_serving("200 OK", body(PLAN));
+    let browser = || {
+        Ok(vec![
+            ("Chrome".to_owned(), "_ga=1".to_owned()),
+            ("Edge".to_owned(), "auth_token=x".to_owned()),
+        ])
+    };
+    let result = provider
+        .fetch_routed(&browser_context(), &browser)
+        .await
+        .expect("usage fetch");
+    let request = server.join().expect("test server thread");
+    let cookies: Vec<&str> = request
+        .lines()
+        .filter(|line| line.to_ascii_lowercase().starts_with("cookie:"))
+        .collect();
+    assert_eq!(cookies, vec!["cookie: auth_token=x"]);
+    assert_eq!(result.usage.primary.used_percent, 12.5);
+}
+
+#[tokio::test]
+async fn automatic_without_any_auth_token_reports_the_missing_session() {
+    let provider = LangdockProvider::with_client("http://127.0.0.1:9/", Client::new());
+    let browser = || {
+        Ok(vec![
+            ("Chrome".to_owned(), "_ga=1".to_owned()),
+            ("Edge".to_owned(), "auth_token=; _gid=2".to_owned()),
+        ])
+    };
+    let error = provider
+        .fetch_routed(&browser_context(), &browser)
+        .await
+        .expect_err("no session");
+    assert_eq!(
+        error.to_string(),
+        "No Langdock session was found in the selected browser. Sign in at app.langdock.com or paste a Cookie header in Settings."
+    );
+    assert_eq!(error.state_kind(), ProviderStateKind::NeedsAuthentication);
+}
+
+#[tokio::test]
+async fn a_manual_header_or_empty_manual_source_never_reads_a_browser() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let calls = std::sync::Arc::new(AtomicUsize::new(0));
+    let counter = std::sync::Arc::clone(&calls);
+    let browser = move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Ok(vec![("Edge".to_owned(), "auth_token=browser".to_owned())])
+    };
+
+    let (provider, server) = provider_serving("200 OK", body(PLAN));
+    let manual = FetchContext {
+        source_mode: SourceMode::Web,
+        manual_cookie_header: Some("auth_token=manual".into()),
+        ..FetchContext::default()
+    };
+    provider
+        .fetch_routed(&manual, &browser)
+        .await
+        .expect("manual usage");
+    let request = server.join().expect("test server thread");
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("\r\ncookie: auth_token=manual\r\n")
+    );
+
+    let offline = LangdockProvider::with_client("http://127.0.0.1:9/", Client::new());
+    let empty_manual = FetchContext {
+        source_mode: SourceMode::Web,
+        manual_cookie_missing: true,
+        ..FetchContext::default()
+    };
+    assert!(matches!(
+        offline.fetch_routed(&empty_manual, &browser).await,
+        Err(ProviderError::BrowserSignInRequired { .. })
+    ));
+    let manual_without_token = FetchContext {
+        source_mode: SourceMode::Web,
+        manual_cookie_header: Some("_ga=1".into()),
+        ..FetchContext::default()
+    };
+    assert!(matches!(
+        offline.fetch_routed(&manual_without_token, &browser).await,
+        Err(ProviderError::BrowserSignInRequired { .. })
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

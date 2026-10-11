@@ -121,12 +121,14 @@ app: `GET https://app.langdock.com/api/trpc/usageSettings.getPersonalUsage`
 - The cookie source in Settings → Providers → Langdock picks the session and
   defaults to Automatic. Automatic and Manual first use a header imported under
   Browser Cookies (from the browser you choose) or pasted there. Without one,
-  Automatic reads the `langdock.com` cookies from the detected browsers and
-  Manual fails closed. Off reads nothing. A header without `auth_token` never
-  sends a request.
+  Automatic uses the first detected browser whose `langdock.com` cookies hold
+  `auth_token` (browsers with only other cookies are skipped) and Manual fails
+  closed. Off reads nothing. A header without `auth_token` never sends a
+  request.
 - The card shows Session (5 hours) and Weekly percentages with their resets.
   A plan without session limits shows the weekly lane alone, labelled Weekly.
-  A workspace without included limits shows one "Included limits" detail row.
+  A workspace without included limits shows one "Included limits" row with
+  "No included usage limits available".
 - Upstream keeps usage above 100%; the Windows bar clamps it at 100%.
 - 401 and tRPC `UNAUTHORIZED` are reported as an expired session. Redirects
   are never followed and response bodies are never echoed in errors.
