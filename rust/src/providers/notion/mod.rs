@@ -41,6 +41,11 @@ const COOKIE_DOMAINS: &[&str] = &[
 /// with the real cycle length ending at `resets_at` (upstream `ProviderPaceCapability`).
 const MONTHLY_WINDOW_SENTINEL_MINUTES: u32 = 30 * 24 * 60;
 
+/// Reset-window pace (upstream `NotionProviderDescriptor.pace`, v0.70.0):
+/// `.calendarMonthResetWindow`.
+pub(crate) const PACE_CAPABILITY: crate::core::ProviderPaceCapability =
+    crate::core::ProviderPaceCapability::CALENDAR_MONTH_RESET_WINDOW;
+
 pub struct NotionProvider {
     metadata: ProviderMetadata,
 }

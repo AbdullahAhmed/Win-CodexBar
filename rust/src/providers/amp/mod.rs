@@ -25,6 +25,14 @@ pub(crate) fn reset_window_pace_matches(window: &RateWindow, _now: chrono::DateT
     display::window_allows_pace(window)
 }
 
+/// Reset-window pace (upstream `AmpProviderDescriptor.pace`, v0.70.0):
+/// renewing subscription windows, see [`reset_window_pace_matches`]. There is
+/// no inferred monthly duration: the window already carries its length.
+pub(crate) const PACE_CAPABILITY: crate::core::ProviderPaceCapability =
+    crate::core::ProviderPaceCapability::reset_window(crate::core::PaceWindowRule::Custom(
+        reset_window_pace_matches,
+    ));
+
 /// Amp provider (Sourcegraph)
 pub struct AmpProvider {
     metadata: ProviderMetadata,
