@@ -7,6 +7,7 @@
 
 use super::{Provider, ProviderId};
 use crate::providers::AtlasCloudProvider;
+use crate::providers::IBMBobProvider;
 use crate::providers::{
     AbacusProvider, AiAndProvider, AixyProvider, AlibabaProvider, AlibabaTokenPlanProvider,
     AmpProvider, AntigravityProvider, AugmentProvider, AzureOpenAIProvider, BedrockProvider,
@@ -41,6 +42,7 @@ pub fn instantiate(id: ProviderId) -> Box<dyn Provider> {
         ProviderId::Copilot => Box::new(CopilotProvider::new()),
         ProviderId::Antigravity => Box::new(AntigravityProvider::new()),
         ProviderId::AtlasCloud => Box::new(AtlasCloudProvider::new()),
+        ProviderId::IBMBob => Box::new(IBMBobProvider::new()),
         ProviderId::Factory => Box::new(FactoryProvider::new()),
         ProviderId::Zai => Box::new(ZaiProvider::new()),
         ProviderId::Kiro => Box::new(KiroProvider::new()),

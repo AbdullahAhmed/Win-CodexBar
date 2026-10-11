@@ -124,6 +124,7 @@ See the full history in [CHANGELOG.md](CHANGELOG.md).
 | LLM Proxy | API Key | Quota Stats |
 | llmman | Local daemon / optional API Key | Memory in use, loaded and stored models |
 | DevPass | API Key | Plan credits, Premium weekly, API-key spend |
+| IBM Bob | API Key / token accounts | Monthly Bobcoins, per-team budgets |
 | xKiro | API Key | Daily free tokens |
 
 </details>

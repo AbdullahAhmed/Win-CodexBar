@@ -185,6 +185,25 @@ are never followed and response bodies are never echoed in errors.
   budget, inconsistent coverage, malformed amounts) is a parse error, not a
   partial balance.
 
+### IBM Bob
+
+IBM Bob reads monthly Bobcoin usage. Configure an API key from the IBM Bob web
+portal in Settings → Providers → IBM Bob, as token accounts, or with
+`BOBSHELL_API_KEY`; the CLI also accepts `ibm-bob`, `bob` and `bobshell`.
+
+- `GET https://api.us-east.bob.ibm.com/admin/v1/profile` lists the
+  subscription instances; then each team's budget comes from
+  `GET /admin/v1/teams/{team}/users/{user}` on the instance's regional host.
+- Credentials go only to HTTPS hosts named `bob.ibm.com` or under
+  `.bob.ibm.com`; any other `region_domain` stops the refresh before a team
+  request. A JWT session token is sent as `Bearer`, any other key as `Apikey`.
+- The "Monthly Bobcoins" bar sums every visible team and shows a percentage
+  only when every team has a budget; otherwise it shows Bobcoins used. It
+  resets at the earliest `refresh_at`. The "Bobcoin usage" rows list each team
+  with its plan, and the plan names are shown as the organization.
+- 401 and 403 report that the key was rejected; response bodies are never
+  echoed in errors.
+
 ## Listing what is enabled
 
 ```powershell

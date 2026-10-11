@@ -36,6 +36,7 @@ import gemini from "./icons/ProviderIcon-gemini.svg?raw";
 import grok from "./icons/ProviderIcon-grok.svg?raw";
 import groq from "./icons/ProviderIcon-groq.svg?raw";
 import huggingface from "./icons/ProviderIcon-huggingface.svg?raw";
+import ibmbob from "./icons/ProviderIcon-ibmbob.svg?raw";
 import jetbrains from "./icons/ProviderIcon-jetbrains.svg?raw";
 import kilo from "./icons/ProviderIcon-kilo.svg?raw";
 import kimi from "./icons/ProviderIcon-kimi.svg?raw";
@@ -130,6 +131,7 @@ const RAW: Record<string, string> = {
   grok: tint(grok),
   groq: tint(groq),
   huggingface: tint(huggingface),
+  ibmbob: tint(ibmbob),
   jetbrains: tint(jetbrains),
   kilo: tint(kilo),
   kimi: tint(kimi),
@@ -250,6 +252,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   sub2api:     { id: "sub2api",     brandColor: "#14b8a6", fallbackLetter: "S", svgPath: RAW.sub2api },
   venice:      { id: "venice",      brandColor: "#3c8fdd", fallbackLetter: "V", svgPath: RAW.venice },
   vercel:      { id: "vercel",      brandColor: "#737373", fallbackLetter: "V", svgPath: RAW.vercel },
+  ibmbob:      { id: "ibmbob",      brandColor: "#0E61FA", fallbackLetter: "B", svgPath: RAW.ibmbob },
   openaiapi:   { id: "openaiapi",   brandColor: "#10a37f", fallbackLetter: "O" },
   chutes:      { id: "chutes",      brandColor: "#ff5c35", fallbackLetter: "C" },
   litellm:     { id: "litellm",     brandColor: "#0ea5e9", fallbackLetter: "L" },
