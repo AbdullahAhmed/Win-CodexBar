@@ -580,6 +580,18 @@ impl ZaiProvider {
 
 /// Upstream 0.48.0 `resetDescription`: MCP (TIME_LIMIT) → "MCP"; 5-hour
 /// token window → "5-hour"; else the explicit window label, if any.
+/// Upstream `ZaiProviderDescriptor.isMonthlyMCPWindow`: the MCP window with
+/// the 30-day sentinel duration. Both its reset-window pace and its inferred
+/// monthly length follow this rule.
+pub(crate) fn is_monthly_mcp_window(window: &RateWindow) -> bool {
+    window.window_minutes == Some(crate::core::MONTHLY_WINDOW_SENTINEL_MINUTES)
+        && window.reset_description.as_deref() == Some("MCP")
+}
+
+pub(crate) fn reset_window_pace_matches(window: &RateWindow, _now: DateTime<Utc>) -> bool {
+    is_monthly_mcp_window(window)
+}
+
 fn rate_window_reset_description(l: &ZaiLimit, window_mins: Option<u32>) -> Option<String> {
     if is_time_limit_type(l.limit_type.as_deref()) {
         return Some("MCP".to_string());
