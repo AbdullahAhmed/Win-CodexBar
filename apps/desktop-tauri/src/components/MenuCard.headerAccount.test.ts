@@ -17,13 +17,16 @@ describe("headerAccount", () => {
     );
   });
 
-  it("masks the email or the label under Hide Personal Info", () => {
+  it("masks the email and hides the label under Hide Personal Info", () => {
     expect(headerAccount({ accountEmail: "parity.user@example.com" }, true)).toBe(
       "p••••••••••@example.com",
     );
-    expect(headerAccount({ accountEmail: null, accountLabel: "parity-github" }, true)).toBe(
-      "••••@••••",
-    );
+    expect(
+      headerAccount({ accountEmail: null, accountLabel: "parity-github" }, true),
+    ).toBeNull();
+    expect(
+      headerAccount({ accountEmail: null, accountLabel: "parity.user@example.com" }, true),
+    ).toBeNull();
   });
 
   it("shows nothing without an email or label", () => {

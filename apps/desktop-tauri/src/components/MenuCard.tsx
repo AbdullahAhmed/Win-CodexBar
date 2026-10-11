@@ -56,15 +56,17 @@ export function maskEmail(email: string): string {
 
 /**
  * Upstream `MenuCardView.email(from:)`: the provider-reported email, else the
- * active token-account label. Hide Personal Info masks either.
+ * active token-account label. Hide Personal Info masks the email and drops the
+ * label, as upstream `PersonalInfoRedactor.redactAccountLabel` blanks it.
  */
 export function headerAccount(
   provider: Pick<ProviderUsageSnapshot, "accountEmail" | "accountLabel">,
   hideEmail: boolean,
 ): string | null {
-  const account = provider.accountEmail?.trim() || provider.accountLabel?.trim() || null;
-  if (!account) return null;
-  return hideEmail ? maskEmail(account) : account;
+  const email = provider.accountEmail?.trim();
+  if (email) return hideEmail ? maskEmail(email) : email;
+  if (hideEmail) return null;
+  return provider.accountLabel?.trim() || null;
 }
 
 function cardMetrics(
