@@ -428,6 +428,152 @@ fn maps_statuses_to_upstream_messages() {
     assert!(check_status(StatusCode::OK).is_ok());
 }
 
+#[test]
+fn rejected_keys_classify_as_needs_authentication() {
+    let provider = ClawRouterProvider::new();
+    let kind = |status: StatusCode| provider.error_state_kind(&check_status(status).unwrap_err());
+    assert_eq!(
+        kind(StatusCode::UNAUTHORIZED),
+        ProviderStateKind::NeedsAuthentication
+    );
+    assert_eq!(
+        kind(StatusCode::FORBIDDEN),
+        ProviderStateKind::NeedsAuthentication
+    );
+    for status in [
+        StatusCode::INTERNAL_SERVER_ERROR,
+        StatusCode::TOO_MANY_REQUESTS,
+        StatusCode::NOT_FOUND,
+    ] {
+        assert_eq!(kind(status), ProviderStateKind::Unknown, "{status}");
+    }
+    // The guard is message-scoped: other `Other` errors keep the default.
+    assert_eq!(
+        provider.error_state_kind(&usage_url("http://router.example.com").unwrap_err()),
+        ProviderStateKind::Unknown
+    );
+    // A missing key still reaches the shared sign-in mapping.
+    assert_eq!(
+        provider.error_state_kind(&ProviderError::NotInstalled("API key not found.".into())),
+        ProviderStateKind::NeedsAuthentication
+    );
+}
+
+#[test]
+fn saved_base_url_wins_over_the_environment_fallback() {
+    fn env_router() -> Option<String> {
+        Some("https://env.example.com".into())
+    }
+    fn env_blank() -> Option<String> {
+        Some("   ".into())
+    }
+    fn env_unset() -> Option<String> {
+        None
+    }
+    let with_gateway = |gateway: Option<&str>| FetchContext {
+        gateway_url: gateway.map(str::to_owned),
+        ..FetchContext::default()
+    };
+
+    assert_eq!(
+        configured_base_url(&with_gateway(Some("https://saved.example.com")), env_router),
+        Some("https://saved.example.com".to_owned())
+    );
+    for gateway in [None, Some(""), Some("  ")] {
+        assert_eq!(
+            configured_base_url(&with_gateway(gateway), env_router),
+            Some("https://env.example.com".to_owned()),
+            "{gateway:?}"
+        );
+        assert_eq!(configured_base_url(&with_gateway(gateway), env_blank), None);
+        assert_eq!(configured_base_url(&with_gateway(gateway), env_unset), None);
+    }
+}
+
+/// Upstream `ClawRouterPluginGoldenTests.budgetedResponse` (v0.73.0), verbatim.
+const UPSTREAM_BUDGETED_RESPONSE: &str = r#"{
+  "policyId": "openclaw-smoke",
+  "budget": {
+    "configured": true,
+    "ledger": "durable_object",
+    "windowKey": "openclaw/openclaw-smoke/2026-07",
+    "limitMicros": 25000000,
+    "spentMicros": 6000,
+    "remainingMicros": 24994000
+  },
+  "usage": {
+    "ledger": "ready",
+    "summary": {
+      "requestCount": 6,
+      "successCount": 5,
+      "errorCount": 1,
+      "inputTokens": 50000,
+      "outputTokens": 4191,
+      "totalTokens": 54191,
+      "actualCostMicros": 6000
+    },
+    "providers": [
+      {
+        "provider": "anthropic",
+        "requestCount": 2,
+        "successCount": 2,
+        "errorCount": 0,
+        "totalTokens": 12191,
+        "actualCostMicros": 2000
+      },
+      {
+        "provider": "openai",
+        "requestCount": 4,
+        "successCount": 3,
+        "errorCount": 1,
+        "totalTokens": 42000,
+        "actualCostMicros": 4000
+      }
+    ],
+    "events": []
+  }
+}"#;
+
+#[test]
+fn upstream_budgeted_golden_fixture() {
+    let usage = parse_usage(UPSTREAM_BUDGETED_RESPONSE.as_bytes()).expect("golden parses");
+    let result = build_result(&usage);
+    let reset = Utc.with_ymd_and_hms(2026, 8, 1, 0, 0, 0).unwrap();
+
+    let primary = &result.usage.primary;
+    assert!(
+        (primary.used_percent - 0.024).abs() < 1e-12,
+        "{}",
+        primary.used_percent
+    );
+    assert_eq!(primary.resets_at, Some(reset));
+    assert!(!primary.is_informational);
+    assert!(result.usage.secondary.is_none());
+
+    let cost = result.cost.as_ref().expect("monthly cost");
+    assert!((cost.used - 0.006).abs() < 1e-12, "{}", cost.used);
+    assert_eq!(cost.limit, Some(25.0));
+    assert_eq!(cost.resets_at, Some(reset));
+
+    let routed: Vec<String> = rows(&result)
+        .into_iter()
+        .filter(|(section, ..)| section == "Routed providers")
+        .map(|(_, title, ..)| title)
+        .collect();
+    assert_eq!(routed, ["openai", "anthropic"]);
+    assert_eq!(
+        rows(&result)
+            .into_iter()
+            .find(|(_, title, ..)| title == "Monthly budget"),
+        Some(row(
+            "Usage",
+            "Monthly budget",
+            "$0.006000 / $25.00",
+            Some("$24.994000 remaining")
+        ))
+    );
+}
+
 /// Serve one canned HTTP response; the handle yields the lowercased request.
 fn provider_serving(
     status_line: &'static str,
@@ -492,6 +638,12 @@ async fn errors_do_not_echo_the_response_body() {
             !error.to_string().contains("private-response"),
             "{status_line}"
         );
+        let expected = if status_line.starts_with("401") {
+            ProviderStateKind::NeedsAuthentication
+        } else {
+            ProviderStateKind::Unknown
+        };
+        assert_eq!(provider.error_state_kind(&error), expected, "{status_line}");
     }
 }
 
