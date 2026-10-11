@@ -19,7 +19,7 @@ import {
   refreshProvidersIfStale,
 } from "../lib/tauri";
 import { ProviderIcon } from "../components/providers/ProviderIcon";
-import { getProviderIcon } from "../components/providers/providerIcons";
+import { brandColorOnDark, getProviderIcon } from "../components/providers/providerIcons";
 import { costPeriodShortLabel } from "../lib/costPeriod";
 import { describeProviderState } from "../lib/providerState";
 import { resetDescriptionFallback, windowDetailText } from "../lib/usageWindows";
@@ -146,7 +146,7 @@ function CostPill({
       className="floatbar__cost-pill"
       title={`${summary.displayName}: ${title} (${estimateLabel})`}
       data-tauri-drag-region
-      style={{ "--brand": brand } as CSSProperties}
+      style={brandStyle(brand)}
     >
       <span className="floatbar__provider-icon" data-tauri-drag-region>
         <ProviderIcon providerId={summary.providerId} size={iconSize} />
@@ -179,6 +179,12 @@ function CostPill({
     </div>
   );
 }
+/** Pill border variables: the brand, plus a lifted tint for near-black brands on the dark glass. */
+function brandStyle(brand: string): CSSProperties {
+  const onDark = brandColorOnDark(brand);
+  return { "--brand": brand, ...(onDark ? { "--brand-dark": onDark } : {}) } as CSSProperties;
+}
+
 /**
  * The capacity pill shown for a single provider.
  *
@@ -265,7 +271,7 @@ function ProviderPill({
             : `${provider.displayName}: ${label} ${displaySuffix}${resetSuffix}${detailSuffix}`
       }
       data-tauri-drag-region
-      style={{ "--brand": brand } as CSSProperties}
+      style={brandStyle(brand)}
     >
       <span className="floatbar__provider-icon" data-tauri-drag-region>
         <ProviderIcon providerId={provider.providerId} size={iconSize} />

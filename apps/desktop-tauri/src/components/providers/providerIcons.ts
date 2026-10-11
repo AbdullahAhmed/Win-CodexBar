@@ -2,6 +2,7 @@
 // rust/src/native_ui/theme.rs::{provider_color, provider_icon}.
 // Keep in sync with the Rust registries when new providers are added.
 
+import { contrastRatio, mixWithWhite } from "../../lib/color";
 import abacus from "./icons/ProviderIcon-abacus.svg?raw";
 import alibaba from "./icons/ProviderIcon-alibaba.svg?raw";
 import amp from "./icons/ProviderIcon-amp.svg?raw";
@@ -190,7 +191,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   codex:       { id: "codex",       brandColor: "#49a3b0", fallbackLetter: "◆", svgPath: RAW.codex },
   copilot:     { id: "copilot",     brandColor: "#a855f7", fallbackLetter: "⬡", svgPath: RAW.copilot },
   cursor:      { id: "cursor",      brandColor: "#f54e00", fallbackLetter: "▸", svgPath: RAW.cursor },
-  deepgram:    { id: "deepgram",    brandColor: "#13ef93", fallbackLetter: "D", svgPath: RAW.deepgram },
+  deepgram:    { id: "deepgram",    brandColor: "#6467f2", fallbackLetter: "D", svgPath: RAW.deepgram },
   deepinfra:   { id: "deepinfra",   brandColor: "#2a3275", fallbackLetter: "D", svgPath: RAW.deepinfra },
   devpass:     { id: "devpass",     brandColor: "#2563eb", fallbackLetter: "D", svgPath: RAW.devpass },
   fireworks:   { id: "fireworks",   brandColor: "#f25b1c", fallbackLetter: "F", svgPath: RAW.fireworks },
@@ -204,38 +205,38 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   elevenlabs:  { id: "elevenlabs",  brandColor: "#111827", fallbackLetter: "E", svgPath: RAW.elevenlabs },
   factory:     { id: "factory",     brandColor: "#ff6b35", fallbackLetter: "◎", svgPath: RAW.factory },
   gemini:      { id: "gemini",      brandColor: "#ab87ea", fallbackLetter: "✦", svgPath: RAW.gemini },
-  grok:        { id: "grok",        brandColor: "#111827", fallbackLetter: "G", svgPath: RAW.grok },
-  groq:        { id: "groq",        brandColor: "#f55036", fallbackLetter: "G", svgPath: RAW.groq },
+  grok:        { id: "grok",        brandColor: "#10a37f", fallbackLetter: "G", svgPath: RAW.grok },
+  groq:        { id: "groq",        brandColor: "#f56844", fallbackLetter: "G", svgPath: RAW.groq },
   bifrost:     { id: "bifrost",     brandColor: "#33c09e", fallbackLetter: "B" },
   aixy:        { id: "aixy",        brandColor: "#123650", fallbackLetter: "A", svgPath: RAW.aixy },
   gitkraken:   { id: "gitkraken",   brandColor: "#179287", fallbackLetter: "G" },
   huggingface: { id: "huggingface", brandColor: "#ffd21e", fallbackLetter: "H", svgPath: RAW.huggingface },
   hyper:       { id: "hyper",       brandColor: "#ff60ff", fallbackLetter: "H" },
-  helmcode:    { id: "helmcode",    brandColor: "#4f46e5", fallbackLetter: "H" },
-  v0:          { id: "v0",          brandColor: "#111827", fallbackLetter: "V" },
-  typesafe:    { id: "typesafe",    brandColor: "#2563eb", fallbackLetter: "T" },
+  helmcode:    { id: "helmcode",    brandColor: "#4934e1", fallbackLetter: "H" },
+  v0:          { id: "v0",          brandColor: "#111111", fallbackLetter: "V" },
+  typesafe:    { id: "typesafe",    brandColor: "#111111", fallbackLetter: "T" },
   jetbrains:   { id: "jetbrains",   brandColor: "#ff3399", fallbackLetter: "J", svgPath: RAW.jetbrains },
-  kilo:        { id: "kilo",        brandColor: "#5d87ff", fallbackLetter: "K", svgPath: RAW.kilo },
+  kilo:        { id: "kilo",        brandColor: "#f27027", fallbackLetter: "K", svgPath: RAW.kilo },
   bedrock:     { id: "bedrock",     brandColor: "#01a88d", fallbackLetter: "B", svgPath: RAW.bedrock },
   kimi:        { id: "kimi",        brandColor: "#fe603c", fallbackLetter: "☽", svgPath: RAW.kimi },
   kimik2:      { id: "kimik2",      brandColor: "#4c00ff", fallbackLetter: "☽", svgPath: RAW.kimi },
   kiro:        { id: "kiro",        brandColor: "#9046ff", fallbackLetter: "K", svgPath: RAW.kiro },
   llmman:      { id: "llmman",      brandColor: "#6CC5B0", fallbackLetter: "L", svgPath: RAW.llmman },
-  llmproxy:    { id: "llmproxy",    brandColor: "#4f46e5", fallbackLetter: "L", svgPath: RAW.llmproxy },
+  llmproxy:    { id: "llmproxy",    brandColor: "#24b47e", fallbackLetter: "L", svgPath: RAW.llmproxy },
   minimax:     { id: "minimax",     brandColor: "#fe603c", fallbackLetter: "M", svgPath: RAW.minimax },
   mistral:     { id: "mistral",     brandColor: "#ff5229", fallbackLetter: "M", svgPath: RAW.mistral },
   muse:        { id: "muse",        brandColor: "#0668e1", fallbackLetter: "M", svgPath: RAW.muse },
-  ollama:      { id: "ollama",      brandColor: "#8b95b0", fallbackLetter: "○", svgPath: RAW.ollama },
+  ollama:      { id: "ollama",      brandColor: "#888888", fallbackLetter: "○", svgPath: RAW.ollama },
   azureopenai: { id: "azureopenai", brandColor: "#0078d4", fallbackLetter: "A" },
-  t3chat:      { id: "t3chat",      brandColor: "#8b5cf6", fallbackLetter: "T", svgPath: RAW.t3chat },
+  t3chat:      { id: "t3chat",      brandColor: "#f56647", fallbackLetter: "T", svgPath: RAW.t3chat },
   opencode:    { id: "opencode",    brandColor: "#3b82f6", fallbackLetter: "○", svgPath: RAW.opencode },
   opencodego:  { id: "opencodego",  brandColor: "#3b82f6", fallbackLetter: "○", svgPath: RAW.opencodego },
-  openrouter:  { id: "openrouter",  brandColor: "#6b7280", fallbackLetter: "R", svgPath: RAW.openrouter },
-  perplexity:  { id: "perplexity",  brandColor: "#1fb8cd", fallbackLetter: "P", svgPath: RAW.perplexity },
+  openrouter:  { id: "openrouter",  brandColor: "#6467f2", fallbackLetter: "R", svgPath: RAW.openrouter },
+  perplexity:  { id: "perplexity",  brandColor: "#20b2aa", fallbackLetter: "P", svgPath: RAW.perplexity },
   vertexai:    { id: "vertexai",    brandColor: "#4285f4", fallbackLetter: "△", svgPath: RAW.vertexai },
-  warp:        { id: "warp",        brandColor: "#6366f1", fallbackLetter: "W", svgPath: RAW.warp },
-  windsurf:    { id: "windsurf",    brandColor: "#22c55e", fallbackLetter: "W", svgPath: RAW.windsurf },
-  wayfinder:   { id: "wayfinder",   brandColor: "#14b8a6", fallbackLetter: "W" },
+  warp:        { id: "warp",        brandColor: "#938bb4", fallbackLetter: "W", svgPath: RAW.warp },
+  windsurf:    { id: "windsurf",    brandColor: "#34e8bb", fallbackLetter: "W", svgPath: RAW.windsurf },
+  wayfinder:   { id: "wayfinder",   brandColor: "#10a37f", fallbackLetter: "W" },
   zai:         { id: "zai",         brandColor: "#e85a6a", fallbackLetter: "Z", svgPath: RAW.zai },
   // Aliases / Rust-side normalizations without their own SVG.
   nanogpt:     { id: "nanogpt",     brandColor: "#687fa1", fallbackLetter: "N" },
@@ -244,27 +245,27 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   atlascloud:  { id: "atlascloud",  brandColor: "#5975F5", fallbackLetter: "A", svgPath: RAW.atlascloud },
   manus:       { id: "manus",       brandColor: "#34322d", fallbackLetter: "M", svgPath: RAW.manus },
   mimo:        { id: "mimo",        brandColor: "#ff6900", fallbackLetter: "M", svgPath: RAW.mimo },
-  doubao:      { id: "doubao",      brandColor: "#2563eb", fallbackLetter: "D", svgPath: RAW.doubao },
+  doubao:      { id: "doubao",      brandColor: "#3370ff", fallbackLetter: "D", svgPath: RAW.doubao },
   commandcode: { id: "commandcode", brandColor: "#8c4edd", fallbackLetter: "C", svgPath: RAW.commandcode },
   crossmodel:  { id: "crossmodel",  brandColor: "#c084fc", fallbackLetter: "X", svgPath: RAW.crossmodel },
-  qoder:       { id: "qoder",       brandColor: "#2563eb", fallbackLetter: "Q", svgPath: RAW.qoder },
+  qoder:       { id: "qoder",       brandColor: "#10b981", fallbackLetter: "Q", svgPath: RAW.qoder },
   raycast:     { id: "raycast",     brandColor: "#FF6363", fallbackLetter: "R", svgPath: RAW.raycast },
   replicate:   { id: "replicate",   brandColor: "#000000", fallbackLetter: "R", svgPath: RAW.replicate },
   codebuddy:   { id: "codebuddy",   brandColor: "#0052d9", fallbackLetter: "C" },
-  sakana:      { id: "sakana",      brandColor: "#0ea5e9", fallbackLetter: "S", svgPath: RAW.sakana },
-  stepfun:     { id: "stepfun",     brandColor: "#999999", fallbackLetter: "S", svgPath: RAW.stepfun },
+  sakana:      { id: "sakana",      brandColor: "#2975db", fallbackLetter: "S", svgPath: RAW.sakana },
+  stepfun:     { id: "stepfun",     brandColor: "#2196f2", fallbackLetter: "S", svgPath: RAW.stepfun },
   sub2api:     { id: "sub2api",     brandColor: "#14b8a6", fallbackLetter: "S", svgPath: RAW.sub2api },
   venice:      { id: "venice",      brandColor: "#3c8fdd", fallbackLetter: "V", svgPath: RAW.venice },
   vercel:      { id: "vercel",      brandColor: "#737373", fallbackLetter: "V", svgPath: RAW.vercel },
   synthetic:   { id: "synthetic",   brandColor: "#141414", fallbackLetter: "S", svgPath: RAW.synthetic },
   clawrouter:  { id: "clawrouter",  brandColor: "#596EF6", fallbackLetter: "C", svgPath: RAW.clawrouter },
   ibmbob:      { id: "ibmbob",      brandColor: "#0E61FA", fallbackLetter: "B", svgPath: RAW.ibmbob },
-  openaiapi:   { id: "openaiapi",   brandColor: "#10a37f", fallbackLetter: "O" },
-  chutes:      { id: "chutes",      brandColor: "#ff5c35", fallbackLetter: "C" },
-  litellm:     { id: "litellm",     brandColor: "#0ea5e9", fallbackLetter: "L" },
-  poe:         { id: "poe",         brandColor: "#5d5fef", fallbackLetter: "P" },
+  openaiapi:   { id: "openaiapi",   brandColor: "#0f826e", fallbackLetter: "O" },
+  chutes:      { id: "chutes",      brandColor: "#3184ff", fallbackLetter: "C" },
+  litellm:     { id: "litellm",     brandColor: "#4c89f0", fallbackLetter: "L" },
+  poe:         { id: "poe",         brandColor: "#5d5cde", fallbackLetter: "P" },
   devin:       { id: "devin",       brandColor: "#317cff", fallbackLetter: "D" },
-  zed:         { id: "zed",         brandColor: "#084ccf", fallbackLetter: "Z" },
+  zed:         { id: "zed",         brandColor: "#084eff", fallbackLetter: "Z" },
   qwencloud:   { id: "qwencloud",   brandColor: "#615CED", fallbackLetter: "Q" },
   notion:      { id: "notion",      brandColor: "#337EA9", fallbackLetter: "N", svgPath: RAW.notion },
   nous:        { id: "nous",        brandColor: "#D6A55C", fallbackLetter: "N", svgPath: RAW.nous },
@@ -369,6 +370,48 @@ function normalize(id: string): string {
   const aliased = ALIASES[lower];
   if (aliased) return aliased;
   return lower.replace(/[ \-]/g, "");
+}
+
+/**
+ * Providers whose card bars use the label color instead of the brand color,
+ * as Mac `progressColorStyle: .label` (only ElevenLabs, whose brand color is
+ * near-white). The fallback is the light card's `--mac-text`.
+ */
+const LABEL_COLORED_BARS = new Set(["elevenlabs"]);
+const LABEL_BAR_COLOR = "var(--mac-text, rgba(0, 0, 0, 0.85))";
+
+/**
+ * The card's `--provider-accent`: the user's override when set, otherwise the
+ * label color for label-styled providers, otherwise the brand color.
+ */
+export function providerBarAccent(id: string, override?: string | null): string {
+  if (override) return override;
+  if (LABEL_COLORED_BARS.has(normalize(id))) return LABEL_BAR_COLOR;
+  return getProviderIcon(id).brandColor;
+}
+
+/** Reference dark surface (upstream's palette audit uses the same #222222). */
+const DARK_SURFACE = "#222222";
+/** Below this a brand color is near-invisible on dark surfaces. */
+const NEAR_INVISIBLE_ON_DARK = 1.5;
+/** A lifted color reaches the WCAG 3:1 non-text minimum. */
+const LIFTED_ON_DARK = 3;
+
+/**
+ * The tint for a near-black brand color on a dark surface (Settings in the
+ * dark theme, the dark floating bar): the brand mixed toward white in 10%
+ * steps until it reaches 3:1 on #222222. Returns null when the brand already
+ * reads on dark, so every other provider keeps its exact color. Light
+ * surfaces, the tray card above all, always use the brand color.
+ */
+export function brandColorOnDark(brandColor: string): string | null {
+  const contrast = contrastRatio(brandColor, DARK_SURFACE);
+  if (contrast === null || contrast >= NEAR_INVISIBLE_ON_DARK) return null;
+  for (let step = 1; step <= 10; step += 1) {
+    const lifted = mixWithWhite(brandColor, step / 10);
+    if ((contrastRatio(lifted, DARK_SURFACE) ?? 0) >= LIFTED_ON_DARK) return lifted;
+  }
+  return null;
 }
 
 /** Return the registry entry for a provider id, falling back to a generic one. */

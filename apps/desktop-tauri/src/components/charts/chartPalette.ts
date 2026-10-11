@@ -45,7 +45,7 @@ const PROVIDER_TOKEN: Record<string, string> = {
   "eleven labs": "--chart-elevenlabs",
   deepgram: "--chart-deepgram",
   grok: "--chart-grok",
-  xai: "--chart-grok",
+  xai: "--chart-xai",
   supergrok: "--chart-grok",
   groq: "--chart-groq",
   groqcloud: "--chart-groq",
