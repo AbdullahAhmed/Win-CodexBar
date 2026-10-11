@@ -156,9 +156,10 @@ fn main() {
     initial_state.proof_config = proof_config;
     // Validate the complete proof seed before installing any snapshots, so an
     // invalid multi-provider fixture cannot leave a partial cache behind.
-    if let Some(snapshots) =
-        proof_harness::seed_usage_snapshots_from_env(initial_state.proof_config.as_ref())
-    {
+    if let Some(snapshots) = proof_harness::seed_usage_snapshots_from_env(
+        initial_state.proof_config.as_ref(),
+        settings.weekly_progress_work_days,
+    ) {
         let seeded_at = std::time::Instant::now();
         for snapshot in &snapshots {
             tracing::info!(

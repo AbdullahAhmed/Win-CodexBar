@@ -22,23 +22,33 @@ pub fn render_text_error(provider_id: ProviderId, error_msg: &str, use_color: bo
     format!("{}  Error: {}", header, error_msg)
 }
 
+/// `pace_work_days` is `Settings::weekly_progress_work_days`; it only changes
+/// pace on 10080-minute windows (upstream `CLIRenderer.computePace`).
 pub fn render_json_result(
     provider_id: ProviderId,
     result: ProviderFetchResult,
     status: Option<&StatusInfo>,
+    pace_work_days: Option<u8>,
 ) -> serde_json::Value {
     let usage = &result.usage;
     let primary_pace = usage
         .primary
         .window_minutes
         .is_some_and(|m| m == crate::core::SESSION_WINDOW_MINUTES)
-        .then(|| UsagePace::weekly(&usage.primary, None, crate::core::SESSION_WINDOW_MINUTES))
+        .then(|| {
+            UsagePace::weekly(
+                &usage.primary,
+                None,
+                crate::core::SESSION_WINDOW_MINUTES,
+                pace_work_days,
+            )
+        })
         .flatten()
         .map(pace_json);
     let secondary_pace = usage
         .secondary
         .as_ref()
-        .and_then(|w| UsagePace::weekly(w, None, w.window_minutes.unwrap_or(10080)))
+        .and_then(|w| UsagePace::weekly(w, None, w.window_minutes.unwrap_or(10080), pace_work_days))
         .map(pace_json);
 
     let mut json_result = serde_json::json!({
@@ -145,12 +155,14 @@ pub(super) fn is_terminal() -> bool {
     std::io::stdout().is_terminal()
 }
 
-/// Render usage as text with optional status
+/// Render usage as text with optional status. `pace_work_days` is
+/// `Settings::weekly_progress_work_days` (weekly pace only).
 pub fn render_text_with_status(
     provider: ProviderId,
     result: &ProviderFetchResult,
     status: Option<&StatusInfo>,
     use_color: bool,
+    pace_work_days: Option<u8>,
 ) -> String {
     let mut lines = Vec::new();
     let metadata = instantiate_provider(provider).metadata().clone();
@@ -158,7 +170,13 @@ pub fn render_text_with_status(
     lines.push(render_usage_header(provider, result, status, use_color));
     append_status_line(&mut lines, status);
     append_account_lines(&mut lines, &result.usage);
-    append_usage_window_lines(&mut lines, &result.usage, &metadata, use_color);
+    append_usage_window_lines(
+        &mut lines,
+        &result.usage,
+        &metadata,
+        use_color,
+        pace_work_days,
+    );
     append_inventory_lines(&mut lines, &result.inventory);
     append_display_detail_lines(&mut lines, result.display_details());
     append_cost_line(&mut lines, result.cost.as_ref());
@@ -233,6 +251,7 @@ fn append_usage_window_lines(
     usage: &UsageSnapshot,
     metadata: &crate::core::ProviderMetadata,
     use_color: bool,
+    pace_work_days: Option<u8>,
 ) {
     let primary_label = usage
         .primary_label
@@ -245,7 +264,7 @@ fn append_usage_window_lines(
             || *minutes >= crate::core::WEEKLY_WINDOW_MINUTES
     });
     if let Some(minutes) = pace_minutes
-        && let Some(pace) = UsagePace::weekly(&usage.primary, None, minutes)
+        && let Some(pace) = UsagePace::weekly(&usage.primary, None, minutes, pace_work_days)
     {
         lines.push(format!(
             "  Pace:    {} {}",
@@ -261,6 +280,7 @@ fn append_usage_window_lines(
             .as_deref()
             .unwrap_or(metadata.weekly_label),
         use_color,
+        pace_work_days,
     );
     append_model_specific_line(lines, usage.model_specific.as_ref(), use_color);
     // F5 (upstream 0.48.0): monthly (30-day) lane. Label by duration cadence.
@@ -369,11 +389,12 @@ fn append_secondary_window_line(
     secondary: Option<&RateWindow>,
     label: &str,
     use_color: bool,
+    pace_work_days: Option<u8>,
 ) {
     if let Some(secondary) = secondary {
         append_window_line(lines, label, secondary, use_color);
         let window_minutes = secondary.window_minutes.unwrap_or(10080);
-        if let Some(pace) = UsagePace::weekly(secondary, None, window_minutes) {
+        if let Some(pace) = UsagePace::weekly(secondary, None, window_minutes, pace_work_days) {
             lines.push(format!(
                 "  Pace:    {} {}",
                 pace.stage.emoji(),
@@ -503,7 +524,7 @@ fn format_history_line(cost: &CostSnapshot) -> String {
 
 /// Render usage as text (backwards compatible version)
 pub fn render_text(provider: ProviderId, result: &ProviderFetchResult, use_color: bool) -> String {
-    render_text_with_status(provider, result, None, use_color)
+    render_text_with_status(provider, result, None, use_color, None)
 }
 
 /// Render a text-based progress bar

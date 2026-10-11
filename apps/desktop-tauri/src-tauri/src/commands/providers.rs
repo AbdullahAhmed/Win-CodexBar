@@ -752,6 +752,7 @@ fn spawn_provider_refreshes(
         let token_account_id = active_account.map(|account| account.id);
         let token_account_label = active_account.and_then(|account| header_label(&account.label));
         let hooks_enabled = inputs.settings.hooks_enabled;
+        let pace_work_days = inputs.settings.weekly_progress_work_days;
 
         handles.push(tokio::spawn(async move {
             let Ok(_permit) = fetch_permits.acquire_owned().await else {
@@ -767,6 +768,7 @@ fn spawn_provider_refreshes(
                     label: token_account_label,
                 },
                 hooks_enabled,
+                pace_work_days,
             )
             .await;
         }));
@@ -821,9 +823,10 @@ async fn refresh_provider(
     generation: u64,
     token_account: ActiveTokenAccount,
     hooks_enabled: bool,
+    pace_work_days: Option<u8>,
 ) {
     let (mut snapshot, account_identity, retention) =
-        fetch_provider_snapshot(id, ctx, token_account.id).await;
+        fetch_provider_snapshot(id, ctx, token_account.id, pace_work_days).await;
     snapshot.account_label = token_account.label;
     let token_account_id = token_account.id;
     let fresh_snapshot = snapshot.error.is_none();
@@ -1093,6 +1096,7 @@ async fn fetch_provider_snapshot(
     id: ProviderId,
     ctx: FetchContext,
     token_account_id: Option<uuid::Uuid>,
+    pace_work_days: Option<u8>,
 ) -> (ProviderUsageSnapshot, Option<String>, RefreshRetention) {
     let provider = instantiate_provider(id);
     let metadata = provider.metadata().clone();
@@ -1110,6 +1114,7 @@ async fn fetch_provider_snapshot(
                         &metadata,
                         &result,
                         token_account_id,
+                        pace_work_days,
                     ),
                     account_identity,
                     RefreshRetention {
@@ -1449,9 +1454,12 @@ fn notify_predictive_pace(
                 .map(|date| date.with_timezone(&chrono::Utc)),
             window.reset_description.clone(),
         );
-        let Some(pace) =
-            codexbar::core::UsagePace::weekly(&rate_window, observed_at, default_window_minutes)
-        else {
+        let Some(pace) = codexbar::core::UsagePace::weekly(
+            &rate_window,
+            observed_at,
+            default_window_minutes,
+            settings.weekly_progress_work_days,
+        ) else {
             continue;
         };
         manager.check_predictive_pace(

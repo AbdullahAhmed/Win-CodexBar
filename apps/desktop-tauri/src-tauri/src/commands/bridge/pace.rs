@@ -38,11 +38,17 @@ impl WindowPaceSnapshot {
         window: &RateWindow,
         default_window_minutes: u32,
         now: DateTime<Utc>,
+        work_days: Option<u8>,
     ) -> Option<Self> {
         if window.is_informational {
             return None;
         }
-        let pace = codexbar::core::UsagePace::weekly(window, Some(now), default_window_minutes)?;
+        let pace = codexbar::core::UsagePace::weekly(
+            window,
+            Some(now),
+            default_window_minutes,
+            work_days,
+        )?;
         Some(Self {
             stage: stage_str(pace.stage).to_string(),
             delta_percent: pace.delta_percent,
@@ -79,7 +85,7 @@ mod tests {
         if !pace_authoritative {
             result = result.with_non_authoritative_pace();
         }
-        ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None)
+        ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None, None)
     }
 
     fn expected_used(window: &RateWindowSnapshot) -> f64 {
@@ -95,7 +101,7 @@ mod tests {
         let window = resetting_in(fixed_now(), 30.0, Some(10_080), 5_040);
 
         assert_eq!(
-            WindowPaceSnapshot::for_window(&window, WEEKLY_FALLBACK_MINUTES, fixed_now()),
+            WindowPaceSnapshot::for_window(&window, WEEKLY_FALLBACK_MINUTES, fixed_now(), None),
             Some(WindowPaceSnapshot {
                 stage: "far_behind".to_string(),
                 delta_percent: -20.0,
@@ -111,13 +117,35 @@ mod tests {
     fn deficit_is_a_positive_delta_with_an_eta() {
         let window = resetting_in(fixed_now(), 55.0, Some(10_080), 5_040);
 
-        let pace = WindowPaceSnapshot::for_window(&window, WEEKLY_FALLBACK_MINUTES, fixed_now())
-            .expect("pace");
+        let pace =
+            WindowPaceSnapshot::for_window(&window, WEEKLY_FALLBACK_MINUTES, fixed_now(), None)
+                .expect("pace");
 
         assert_eq!(pace.stage, "slightly_ahead");
         assert_eq!(pace.delta_percent, 5.0);
         assert!(!pace.will_last_to_reset);
         assert!((pace.eta_seconds.expect("eta") - 247_418.18).abs() < 0.01);
+    }
+
+    /// Work days reach the weekly lane pace. Friday noon UTC two days before a
+    /// Sunday-noon reset: plain elapsed-time pace expects 5/7 = 71.4%; a
+    /// Monday-Friday schedule expects about 90% (4.5 of 5 work days in UTC).
+    /// The margin holds for every local zone the test machine might use.
+    #[test]
+    fn weekly_lane_pace_follows_configured_work_days() {
+        let now = Utc.with_ymd_and_hms(2026, 6, 12, 12, 0, 0).unwrap();
+        let window = resetting_in(now, 50.0, Some(10_080), 2 * 24 * 60);
+
+        let linear = WindowPaceSnapshot::for_window(&window, WEEKLY_FALLBACK_MINUTES, now, None)
+            .expect("linear pace");
+        let seven = WindowPaceSnapshot::for_window(&window, WEEKLY_FALLBACK_MINUTES, now, Some(7))
+            .expect("seven-day pace");
+        let five = WindowPaceSnapshot::for_window(&window, WEEKLY_FALLBACK_MINUTES, now, Some(5))
+            .expect("five-day pace");
+
+        assert!((linear.expected_used_percent - 500.0 / 7.0).abs() < 0.01);
+        assert_eq!(seven, linear);
+        assert!(five.expected_used_percent > linear.expected_used_percent + 5.0);
     }
 
     #[test]
@@ -126,7 +154,7 @@ mod tests {
         window.is_informational = true;
 
         assert_eq!(
-            WindowPaceSnapshot::for_window(&window, WEEKLY_FALLBACK_MINUTES, fixed_now()),
+            WindowPaceSnapshot::for_window(&window, WEEKLY_FALLBACK_MINUTES, fixed_now(), None),
             None
         );
     }
@@ -186,11 +214,52 @@ mod tests {
     #[test]
     fn window_pace_serializes_in_camel_case() {
         let window = resetting_in(fixed_now(), 30.0, Some(10_080), 5_040);
-        let pace = WindowPaceSnapshot::for_window(&window, WEEKLY_FALLBACK_MINUTES, fixed_now());
+        let pace =
+            WindowPaceSnapshot::for_window(&window, WEEKLY_FALLBACK_MINUTES, fixed_now(), None);
 
         assert_eq!(
             serde_json::to_string(&pace).unwrap(),
             r#"{"stage":"far_behind","deltaPercent":-20.0,"expectedUsedPercent":50.0,"actualUsedPercent":30.0,"etaSeconds":null,"willLastToReset":true}"#
         );
+    }
+
+    /// The refresh path (`from_fetch_result`) threads work days into the lane
+    /// pace. The weekly window ends at the next local Monday 00:00, so it is
+    /// the current Mon..Sun week and Mon-Fri pace is ahead of linear pace at
+    /// any instant inside it.
+    #[test]
+    fn fetch_result_lane_pace_follows_work_days() {
+        use chrono::{Datelike, Local};
+        let today = Local::now().date_naive();
+        let next_monday =
+            today + Duration::days(7 - i64::from(today.weekday().num_days_from_monday()));
+        let reset = Local
+            .from_local_datetime(&next_monday.and_hms_opt(0, 0, 0).unwrap())
+            .single()
+            .unwrap()
+            .with_timezone(&Utc);
+        if reset - Utc::now() >= Duration::days(7) {
+            return; // Monday 00:00 exactly or a DST-shortened week: nothing to compare.
+        }
+        let usage = UsageSnapshot::new(RateWindow::new(10.0)).with_secondary(
+            RateWindow::with_details(10.0, Some(10_080), Some(reset), None),
+        );
+        let metadata = instantiate_provider(ProviderId::Codex).metadata().clone();
+        let result = ProviderFetchResult::new(usage, "web");
+        let expected = |work_days: Option<u8>| {
+            let snapshot = ProviderUsageSnapshot::from_fetch_result(
+                ProviderId::Codex,
+                &metadata,
+                &result,
+                None,
+                work_days,
+            );
+            expected_used(snapshot.secondary.as_ref().expect("weekly lane"))
+        };
+
+        let linear = expected(None);
+        // Each call reads the clock again, so compare within a small tolerance.
+        assert!((expected(Some(7)) - linear).abs() < 0.01);
+        assert!(expected(Some(5)) > linear);
     }
 }

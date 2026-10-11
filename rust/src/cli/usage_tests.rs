@@ -354,7 +354,7 @@ fn opencodego_account_projection_distinguishes_api_and_cookie_routes() {
 fn text_rendering_shows_sub_one_percent_usage() {
     let result = fetch_result(UsageSnapshot::new(RateWindow::new(0.4)));
 
-    let output = render_text_with_status(ProviderId::Codex, &result, None, false);
+    let output = render_text_with_status(ProviderId::Codex, &result, None, false, None);
 
     assert!(output.contains("<1% used"));
 }
@@ -382,7 +382,7 @@ fn secondary_label_override_is_shared_by_full_and_brief_renderers() {
             .with_secondary(RateWindow::new(20.0))
             .with_secondary_label("Weekly"),
     );
-    let full = render_text_with_status(ProviderId::Antigravity, &result, None, false);
+    let full = render_text_with_status(ProviderId::Antigravity, &result, None, false, None);
     let brief = render_brief_text(ProviderId::Antigravity, &result);
     assert!(full.contains("Weekly:"));
     assert!(brief.contains("Weekly 20%"));
@@ -392,7 +392,7 @@ fn primary_label_override_is_shared_by_full_and_brief_renderers() {
     let result =
         fetch_result(UsageSnapshot::new(RateWindow::new(42.0)).with_primary_label("Monthly"));
 
-    let full = render_text_with_status(ProviderId::Grok, &result, None, false);
+    let full = render_text_with_status(ProviderId::Grok, &result, None, false, None);
     let brief = render_brief_text(ProviderId::Grok, &result);
 
     assert!(full.contains("Monthly:"));
@@ -418,12 +418,12 @@ fn openrouter_history_preserves_period_and_known_zero_in_text() {
     let result = fetch_result(UsageSnapshot::new(RateWindow::new(0.0)))
         .with_cost(CostSnapshot::new(0.0, "USD", "Last 30 days (UTC)").always_visible());
 
-    let output = render_text_with_status(ProviderId::OpenRouter, &result, None, false);
+    let output = render_text_with_status(ProviderId::OpenRouter, &result, None, false, None);
 
     assert!(output.contains("Last 30 days (UTC): $0.00"));
     assert!(!output.contains("Cost:    $0.00"));
 
-    let json = render_json_result(ProviderId::OpenRouter, result, None);
+    let json = render_json_result(ProviderId::OpenRouter, result, None, None);
     assert!(json.get("usage").is_some());
     assert!(json.get("cost").is_some());
     assert!(json.get("history").is_none());
@@ -434,7 +434,7 @@ fn ordinary_costs_keep_the_existing_cost_line() {
     let result = fetch_result(UsageSnapshot::new(RateWindow::new(0.0)))
         .with_cost(CostSnapshot::new(2.5, "EUR", "This month (API key)"));
 
-    let output = render_text_with_status(ProviderId::OpenRouter, &result, None, false);
+    let output = render_text_with_status(ProviderId::OpenRouter, &result, None, false, None);
 
     assert!(output.contains("Cost:    €2.50 (This month (API key))"));
     assert!(!output.contains("Last 30 days"));
@@ -451,7 +451,7 @@ fn inventory_is_rendered_in_full_text_but_not_brief_text() {
         },
     );
 
-    let full = render_text_with_status(ProviderId::Grok, &result, None, false);
+    let full = render_text_with_status(ProviderId::Grok, &result, None, false, None);
     let brief = render_brief_text(ProviderId::Grok, &result);
 
     assert!(full.contains("Limit Reset Credits: 2 available"));
@@ -467,8 +467,8 @@ fn display_details_are_rendered_in_full_text_and_json() {
             .and_then(|row| row.with_progress(12.0, 100.0)),
     );
 
-    let full = render_text_with_status(ProviderId::Grok, &result, None, false);
-    let json = render_json_result(ProviderId::Grok, result, None);
+    let full = render_text_with_status(ProviderId::Grok, &result, None, false, None);
+    let json = render_json_result(ProviderId::Grok, result, None, None);
 
     assert!(full.contains("Used this cycle: 12 (Monthly refill: 100) [12.00/100.00]"));
     assert_eq!(json["details"][0]["title"], "Used this cycle");
@@ -489,8 +489,8 @@ fn sectioned_display_details_print_one_heading_per_group() {
         .with_display_detail(row("a", "Alpha", Some("Model activity")))
         .with_display_detail(row("b", "Beta", Some("Model activity")));
 
-    let text = render_text_with_status(ProviderId::LiteLLM, &result, None, false);
-    let json = render_json_result(ProviderId::LiteLLM, result, None);
+    let text = render_text_with_status(ProviderId::LiteLLM, &result, None, false, None);
+    let json = render_json_result(ProviderId::LiteLLM, result, None, None);
 
     assert_eq!(text.matches("Model activity:").count(), 1);
     assert!(text.find("Plain: 1").unwrap() < text.find("Model activity:").unwrap());
@@ -510,7 +510,7 @@ fn json_inventory_is_additive_and_contains_no_redemption_token() {
         },
     );
 
-    let json = render_json_result(ProviderId::Grok, result, None);
+    let json = render_json_result(ProviderId::Grok, result, None, None);
     assert_eq!(json["inventory"][0]["availableCount"], 1);
     assert!(
         serde_json::to_string(&json)
@@ -526,7 +526,7 @@ fn json_inventory_is_additive_and_contains_no_redemption_token() {
 
 fn history_output(cost: CostSnapshot) -> String {
     let result = fetch_result(UsageSnapshot::new(RateWindow::new(0.0))).with_cost(cost);
-    render_text_with_status(ProviderId::OpenRouter, &result, None, false)
+    render_text_with_status(ProviderId::OpenRouter, &result, None, false, None)
 }
 
 #[test]
@@ -610,7 +610,7 @@ fn history_fields_do_not_change_the_cost_json_contract() {
             .with_provenance(CostProvenance::VendorMetered)
             .always_visible(),
     );
-    let json = render_json_result(ProviderId::OpenRouter, result, None);
+    let json = render_json_result(ProviderId::OpenRouter, result, None, None);
     let cost = json.get("cost").and_then(|cost| cost.as_object()).unwrap();
     assert!(!cost.contains_key("historyTokens") && !cost.contains_key("history_tokens"));
     assert!(!cost.contains_key("provenance"));
@@ -691,7 +691,7 @@ fn detail_backed_windows_omit_reset_line_without_reset_date() {
 
 #[test]
 fn detail_backed_flag_stays_out_of_json_output() {
-    let json = render_json_result(ProviderId::Mistral, detail_backed_result(None), None);
+    let json = render_json_result(ProviderId::Mistral, detail_backed_result(None), None, None);
     let windows = json["usage"]["extra_rate_windows"]
         .as_array()
         .expect("extra windows");
@@ -702,4 +702,43 @@ fn detail_backed_flag_stays_out_of_json_output() {
     );
     assert!(windows[0]["window"].get("descriptionIsDetail").is_none());
     assert!(windows[0]["window"].get("description_is_detail").is_none());
+}
+
+#[test]
+fn json_pace_follows_weekly_work_days() {
+    use chrono::{Datelike, Duration, Local, TimeZone};
+    // Weekly window ending at the next local Monday 00:00, so it covers the
+    // current Mon..Sun and Mon-Fri workday pace is ahead of linear pace at any
+    // instant inside it.
+    let today = Local::now().date_naive();
+    let next_monday = today + Duration::days(7 - i64::from(today.weekday().num_days_from_monday()));
+    let reset = Local
+        .from_local_datetime(&next_monday.and_hms_opt(0, 0, 0).unwrap())
+        .single()
+        .unwrap()
+        .with_timezone(&Utc);
+    if reset - Utc::now() >= Duration::days(7) {
+        return; // Monday 00:00 exactly or a DST-shortened week: nothing to compare.
+    }
+    let usage = UsageSnapshot::new(RateWindow::new(10.0)).with_secondary(RateWindow::with_details(
+        10.0,
+        Some(10080),
+        Some(reset),
+        None,
+    ));
+    let expected = |work_days: Option<u8>| {
+        render_json_result(
+            ProviderId::Codex,
+            fetch_result(usage.clone()),
+            None,
+            work_days,
+        )["pace"]["secondary"]["expectedUsedPercent"]
+            .as_f64()
+            .unwrap()
+    };
+
+    let linear = expected(None);
+    // Each render reads the clock again, so compare within a small tolerance.
+    assert!((expected(Some(7)) - linear).abs() < 0.01);
+    assert!(expected(Some(5)) > linear);
 }

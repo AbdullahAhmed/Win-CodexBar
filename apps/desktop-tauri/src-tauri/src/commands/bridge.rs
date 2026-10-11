@@ -393,6 +393,7 @@ impl ProviderUsageSnapshot {
         metadata: &ProviderMetadata,
         result: &ProviderFetchResult,
         token_account_id: Option<uuid::Uuid>,
+        pace_work_days: Option<u8>,
     ) -> Self {
         let usage = &result.usage;
         let allows_pace = result.pace_authoritative;
@@ -406,8 +407,9 @@ impl ProviderUsageSnapshot {
             Some(&usage.primary)
         };
         let primary_pace = allows_pace.then(|| {
-            primary_pace_window
-                .and_then(|window| codexbar::core::UsagePace::weekly(window, None, 10080))
+            primary_pace_window.and_then(|window| {
+                codexbar::core::UsagePace::weekly(window, None, 10080, pace_work_days)
+            })
         });
         let primary_pace = primary_pace.flatten();
 
@@ -428,14 +430,21 @@ impl ProviderUsageSnapshot {
             usage
                 .secondary
                 .as_ref()
-                .and_then(|sw| codexbar::core::UsagePace::weekly(sw, None, 10080))
+                .and_then(|sw| codexbar::core::UsagePace::weekly(sw, None, 10080, pace_work_days))
         });
         let secondary_pace = secondary_pace.flatten();
 
         let lane =
             |window: &RateWindow, is_blocked: bool, default_minutes: u32| RateWindowSnapshot {
                 pace: allows_pace
-                    .then(|| pace::WindowPaceSnapshot::for_window(window, default_minutes, now))
+                    .then(|| {
+                        pace::WindowPaceSnapshot::for_window(
+                            window,
+                            default_minutes,
+                            now,
+                            pace_work_days,
+                        )
+                    })
                     .flatten(),
                 ..RateWindowSnapshot::from_rate_window(window)
                     .with_quota_block(is_blocked, &blocked)

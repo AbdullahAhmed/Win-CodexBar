@@ -301,8 +301,14 @@ pub const SEED_USAGE_ENV_VAR: &str = "CODEXBAR_SEED_USAGE_JSON";
 /// Returns `None` (with a warn, never a crash) when the variable is unset,
 /// the file is unreadable, or the seed does not satisfy the selected legacy
 /// object or proof-only array contract.
+///
+/// Seed lanes that carry `resetsAt` but no `pace` get the pace the bridge
+/// would compute at launch, using `pace_work_days`
+/// (`Settings::weekly_progress_work_days`), so proof runs exercise the live
+/// pace math instead of a hand-written result.
 pub fn seed_usage_snapshots_from_env(
     proof_config: Option<&ProofConfig>,
+    pace_work_days: Option<u8>,
 ) -> Option<Vec<ProviderUsageSnapshot>> {
     let path = std::env::var_os(SEED_USAGE_ENV_VAR)?;
     let path = std::path::PathBuf::from(path);
@@ -317,7 +323,13 @@ pub fn seed_usage_snapshots_from_env(
         }
     };
     match parse_seed_usage_snapshots(&raw, proof_config) {
-        Ok(snapshots) => Some(snapshots),
+        Ok(mut snapshots) => {
+            let now = chrono::Utc::now();
+            for snapshot in &mut snapshots {
+                fill_seed_pace(snapshot, now, pace_work_days);
+            }
+            Some(snapshots)
+        }
         Err(msg) => {
             tracing::warn!("{SEED_USAGE_ENV_VAR}: {msg} in {}", path.display());
             None
@@ -404,6 +416,65 @@ fn normalize_seed_snapshot(snapshot: &mut ProviderUsageSnapshot) {
     if snapshot.updated_at.is_empty() {
         snapshot.updated_at = chrono::Utc::now().to_rfc3339();
     }
+}
+
+/// Compute lane pace for seeded windows that omit it, with the same fallback
+/// window lengths as `ProviderUsageSnapshot::from_fetch_result`.
+fn fill_seed_pace(
+    snapshot: &mut ProviderUsageSnapshot,
+    now: chrono::DateTime<chrono::Utc>,
+    work_days: Option<u8>,
+) {
+    use crate::commands::pace::{SESSION_FALLBACK_MINUTES, WEEKLY_FALLBACK_MINUTES};
+    fill_window_pace(
+        &mut snapshot.primary,
+        SESSION_FALLBACK_MINUTES,
+        now,
+        work_days,
+    );
+    for window in [
+        snapshot.secondary.as_mut(),
+        snapshot.model_specific.as_mut(),
+        snapshot.tertiary.as_mut(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        fill_window_pace(window, WEEKLY_FALLBACK_MINUTES, now, work_days);
+    }
+    for extra in &mut snapshot.extra_rate_windows {
+        fill_window_pace(&mut extra.window, WEEKLY_FALLBACK_MINUTES, now, work_days);
+    }
+}
+
+fn fill_window_pace(
+    w: &mut RateWindowSnapshot,
+    default_minutes: u32,
+    now: chrono::DateTime<chrono::Utc>,
+    work_days: Option<u8>,
+) {
+    if w.pace.is_some() || w.is_informational {
+        return;
+    }
+    let Some(resets_at) = w
+        .resets_at
+        .as_deref()
+        .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+    else {
+        return;
+    };
+    let window = codexbar::core::RateWindow::with_details(
+        w.used_percent,
+        w.window_minutes,
+        Some(resets_at.with_timezone(&chrono::Utc)),
+        None,
+    );
+    w.pace = crate::commands::pace::WindowPaceSnapshot::for_window(
+        &window,
+        default_minutes,
+        now,
+        work_days,
+    );
 }
 
 fn is_valid_proof_config(config: &ProofConfig) -> bool {
@@ -676,6 +747,43 @@ mod tests {
         assert_eq!(cost.currency_code, "USD");
         assert_eq!(cost.period, "month");
         assert_eq!(cost.formatted_used, "$12.50");
+    }
+
+    #[test]
+    fn seed_pace_is_computed_from_reset_time_and_work_days() {
+        use chrono::TimeZone;
+        // Fri 2026-06-12 12:00 UTC, weekly reset two days later, 50% used.
+        let now = chrono::Utc.with_ymd_and_hms(2026, 6, 12, 12, 0, 0).unwrap();
+        let json = r#"{"providerId":"codex","displayName":"Codex",
+            "primary":{"usedPercent":10.0,"windowMinutes":300},
+            "secondary":{"usedPercent":50.0,"windowMinutes":10080,
+                         "resetsAt":"2026-06-14T12:00:00Z"}}"#;
+
+        let mut linear = parse_seed_usage_snapshot(json).unwrap();
+        fill_seed_pace(&mut linear, now, None);
+        let linear_pace = linear.secondary.unwrap().pace.unwrap();
+        assert!((linear_pace.expected_used_percent - 500.0 / 7.0).abs() < 1e-9);
+
+        let mut workdays = parse_seed_usage_snapshot(json).unwrap();
+        fill_seed_pace(&mut workdays, now, Some(5));
+        let workday_pace = workdays.secondary.unwrap().pace.unwrap();
+        assert!(workday_pace.expected_used_percent > linear_pace.expected_used_percent + 5.0);
+
+        // No resetsAt: no pace, as before.
+        assert!(linear.primary.pace.is_none());
+    }
+
+    #[test]
+    fn seed_pace_keeps_explicit_pace() {
+        let json = r#"{"providerId":"codex","displayName":"Codex",
+            "primary":{"usedPercent":10.0,"windowMinutes":10080,
+                       "resetsAt":"2026-06-14T12:00:00Z",
+                       "pace":{"stage":"on_track","deltaPercent":0.0,
+                               "expectedUsedPercent":10.0,"actualUsedPercent":10.0}}}"#;
+        let mut snapshot = parse_seed_usage_snapshot(json).unwrap();
+        let before = snapshot.primary.pace.clone();
+        fill_seed_pace(&mut snapshot, chrono::Utc::now(), Some(5));
+        assert_eq!(snapshot.primary.pace, before);
     }
 
     fn valid_proof_config() -> ProofConfig {
