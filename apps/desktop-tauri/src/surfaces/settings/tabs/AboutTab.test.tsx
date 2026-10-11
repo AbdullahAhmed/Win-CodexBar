@@ -16,7 +16,8 @@ const updateMocks = vi.hoisted(() => ({
 
 vi.mock("../../../lib/tauri", () => tauriMocks);
 vi.mock("../../../hooks/useLocale", () => ({
-  useLocale: () => ({ t: (key: string) => key }),
+  // AboutBuilt keeps its Fluent `{}` placeholder so the rendered date is asserted.
+  useLocale: () => ({ t: (key: string) => (key === "AboutBuilt" ? "Built {}" : key) }),
 }));
 vi.mock("../../../hooks/useUpdateState", () => ({
   useUpdateState: () => ({
@@ -177,7 +178,7 @@ describe("AboutTab Mac grouped layout", () => {
     });
     render(<AboutTab settings={settings} set={vi.fn()} saving={false} />);
 
-    expect(await screen.findByText("AboutBuilt")).toBeInTheDocument();
+    expect(await screen.findByText("Built 2026-10-11")).toBeInTheDocument();
     expect(screen.getByText("Version 0.70.0 (7)")).toBeInTheDocument();
   });
 
@@ -192,7 +193,7 @@ describe("AboutTab Mac grouped layout", () => {
     render(<AboutTab settings={settings} set={vi.fn()} saving={false} />);
 
     await screen.findByText("Keep agent limits in view.");
-    expect(screen.queryByText("AboutBuilt")).toBeNull();
+    expect(screen.queryByText(/^Built /)).toBeNull();
   });
 
   it("groups Updates then Links, with Submit an Issue as a link row", async () => {
