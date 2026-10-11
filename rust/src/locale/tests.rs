@@ -9,11 +9,11 @@ fn test_locale_key_english() {
     );
     assert_eq!(
         get_text(Language::English, LocaleKey::InterfaceLanguage),
-        "Interface Language"
+        "Language"
     );
     assert_eq!(
         get_text(Language::English, LocaleKey::StartAtLogin),
-        "Start at Login"
+        "Start at login"
     );
 }
 
