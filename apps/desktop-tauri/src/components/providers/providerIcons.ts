@@ -2,6 +2,7 @@
 // rust/src/native_ui/theme.rs::{provider_color, provider_icon}.
 // Keep in sync with the Rust registries when new providers are added.
 
+import { contrastRatio, mixWithWhite } from "../../lib/color";
 import abacus from "./icons/ProviderIcon-abacus.svg?raw";
 import alibaba from "./icons/ProviderIcon-alibaba.svg?raw";
 import amp from "./icons/ProviderIcon-amp.svg?raw";
@@ -378,6 +379,30 @@ export function providerBarAccent(id: string, override?: string | null): string 
   if (override) return override;
   if (LABEL_COLORED_BARS.has(normalize(id))) return LABEL_BAR_COLOR;
   return getProviderIcon(id).brandColor;
+}
+
+/** Reference dark surface (upstream's palette audit uses the same #222222). */
+const DARK_SURFACE = "#222222";
+/** Below this a brand color is near-invisible on dark surfaces. */
+const NEAR_INVISIBLE_ON_DARK = 1.5;
+/** A lifted color reaches the WCAG 3:1 non-text minimum. */
+const LIFTED_ON_DARK = 3;
+
+/**
+ * The tint for a near-black brand color on a dark surface (Settings in the
+ * dark theme, the dark floating bar): the brand mixed toward white in 10%
+ * steps until it reaches 3:1 on #222222. Returns null when the brand already
+ * reads on dark, so every other provider keeps its exact color. Light
+ * surfaces, the tray card above all, always use the brand color.
+ */
+export function brandColorOnDark(brandColor: string): string | null {
+  const contrast = contrastRatio(brandColor, DARK_SURFACE);
+  if (contrast === null || contrast >= NEAR_INVISIBLE_ON_DARK) return null;
+  for (let step = 1; step <= 10; step += 1) {
+    const lifted = mixWithWhite(brandColor, step / 10);
+    if ((contrastRatio(lifted, DARK_SURFACE) ?? 0) >= LIFTED_ON_DARK) return lifted;
+  }
+  return null;
 }
 
 /** Return the registry entry for a provider id, falling back to a generic one. */

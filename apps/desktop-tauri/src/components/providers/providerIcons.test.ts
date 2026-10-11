@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { TEST_PROVIDER_CATALOG } from "../../test/providerCatalog";
-import { loadStyles } from "../../test/styles";
-import { PROVIDER_ICON_REGISTRY, providerBarAccent } from "./providerIcons";
+import { loadStyles, loadStylesheet, ruleBlock } from "../../test/styles";
+import { PROVIDER_ICON_REGISTRY, brandColorOnDark, providerBarAccent } from "./providerIcons";
 
 // Repository root, from apps/desktop-tauri/src/components/providers.
 const REPO_ROOT = import.meta.dirname + "/../../../../../";
@@ -139,6 +139,61 @@ describe("provider icon registry", () => {
     expect(providerBarAccent("claude")).toBe("#cc7c5e");
     expect(providerBarAccent("claude", "#123456")).toBe("#123456");
     expect(providerBarAccent("elevenlabs", "#ff0000")).toBe("#ff0000");
+  });
+
+  it("lifts only near-black brand colors on dark surfaces", () => {
+    // Literal values: #111111 is 1.19:1 on #222222, #707070 is the first
+    // 10% white mix that reaches 3:1.
+    expect(brandColorOnDark("#111111")).toBe("#707070");
+    expect(brandColorOnDark("#000000")).toBe("#808080");
+    expect(brandColorOnDark("#111827")).toBe("#70747d");
+    // Colors that already read on dark keep their exact value.
+    expect(brandColorOnDark("#10a37f")).toBeNull();
+    expect(brandColorOnDark("#2563eb")).toBeNull();
+    expect(brandColorOnDark("#737373")).toBeNull();
+    expect(brandColorOnDark("#4c00ff")).toBeNull();
+    expect(brandColorOnDark("var(--mac-text)")).toBeNull();
+
+    const lifted = Object.entries(PROVIDER_ICON_REGISTRY)
+      .filter(([, icon]) => brandColorOnDark(icon.brandColor) !== null)
+      .map(([id]) => id)
+      .sort();
+    expect(lifted).toEqual([
+      "aixy",
+      "deepinfra",
+      "elevenlabs",
+      "manus",
+      "replicate",
+      "typesafe",
+      "v0",
+    ]);
+  });
+
+  it("keeps the brand color in light scopes and the lifted tint in dark ones", () => {
+    const css = loadStyles();
+    const dark = css.indexOf('[data-theme="dark"] .provider-icon {');
+    const light = css.indexOf('[data-theme="light"] .provider-icon {');
+    expect(dark).toBeGreaterThan(-1);
+    // The tray panel nests data-theme="light" inside a dark document, so the
+    // light rule must come later to win at equal specificity.
+    expect(light).toBeGreaterThan(dark);
+    expect(ruleBlock(css, '[data-theme="dark"] .provider-icon')).toContain(
+      "var(--provider-brand-dark, var(--provider-brand",
+    );
+    expect(ruleBlock(css, '[data-theme="light"] .provider-icon')).not.toContain(
+      "--provider-brand-dark",
+    );
+
+    const floatbar = loadStylesheet("floatbar/FloatBar.css");
+    expect(ruleBlock(floatbar, ".floatbar .floatbar__provider-icon .provider-icon")).not.toContain(
+      "--provider-brand-dark",
+    );
+    expect(
+      ruleBlock(
+        floatbar,
+        ".floatbar--floating:not(.floatbar--light-bg) .floatbar__provider-icon .provider-icon",
+      ),
+    ).toContain("var(--provider-brand-dark, var(--provider-brand");
   });
 
   it("matches the Rust brand_color table for every provider", () => {
