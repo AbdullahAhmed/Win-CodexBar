@@ -141,16 +141,20 @@ signed-in console at `https://console.lithosai.cloud` with both session cookies,
 - The cookie source in Settings → Providers → LithosAI picks the session and
   defaults to Automatic. Automatic and Manual first use a header imported under
   Browser Cookies (from the browser you choose) or pasted there. Without one,
-  Automatic reads the `console.lithosai.cloud` cookies from the detected
-  browsers and Manual fails closed. Off reads nothing.
+  Automatic tries each detected browser holding both `console.lithosai.cloud`
+  cookies, in order, and moves to the next after a 401; Manual fails closed
+  and a pasted header is never swapped for a browser session. Off reads nothing.
 - Requests, in order: `GET /api/me` (active organization, email), then
   `GET /api/billing` and `GET /api/billing/spend?start=YYYY-MM-01&end=YYYY-MM-DD`
   (UTC month to date), both with `X-Organization-Id`.
 - The card shows the prepaid USD balance (1 USD = 1,000,000,000 nanos) as a
   "Prepaid credits" cost block and a **Billing** section: Balance, Payment card,
-  Account status, Today (UTC) and This month (UTC). There is no quota bar.
+  Account status, Today (UTC) and This month (UTC). There is no quota bar. A
+  negative balance has no cost block and stays visible as, for example,
+  "Balance: -$1.00" in the primary line and the Balance row.
 - A spend report that fails or does not parse shows "Spend: Unavailable" and
-  keeps the balance; a 401 anywhere reports an expired session.
+  keeps the balance; a 401 anywhere rejects that session, and an expired
+  session is reported once no candidate is left.
 - Response bodies and cookies are never echoed in errors or logs.
 
 ### llmman daemon
