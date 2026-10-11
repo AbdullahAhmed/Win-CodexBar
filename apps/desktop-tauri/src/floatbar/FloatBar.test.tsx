@@ -689,6 +689,30 @@ describe("FloatBar", () => {
     });
   });
 
+  it("follows a provider's Custom quota warnings and drops the tone when they are Off", async () => {
+    // 50% used is below the global 70% high threshold, but above a Custom 40%.
+    tauriMocks.getCachedProviders.mockResolvedValue([snapshot("claude", "Claude", 50)]);
+    const customWarnings: Partial<SettingsSnapshot> = {
+      providerQuotaWarnings: { claude: { session: { enabled: true, high: 40, critical: 90 } } },
+    };
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(customWarnings));
+    const custom = renderFloatBar(bootstrap(customWarnings));
+    await waitFor(() => {
+      expect(custom.container.querySelector(".floatbar__pill--warn")).not.toBeNull();
+    });
+    custom.unmount();
+
+    tauriMocks.getCachedProviders.mockResolvedValue([snapshot("claude", "Claude", 95)]);
+    const offWarnings: Partial<SettingsSnapshot> = {
+      providerQuotaWarnings: { claude: { session: { enabled: false } } },
+    };
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(offWarnings));
+    const off = renderFloatBar(bootstrap(offWarnings));
+    await waitFor(() => {
+      expect(off.container.querySelector(".floatbar__pill--ok")).not.toBeNull();
+    });
+  });
+
   it("applies critical tone when the provider is exhausted", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
       snapshot("claude", "Claude", 100, { exhausted: true }),

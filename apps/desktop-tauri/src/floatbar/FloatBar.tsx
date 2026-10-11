@@ -235,8 +235,9 @@ function ProviderPill({
     provider.providerId,
     (rateWindow.windowMinutes ?? 0) >= WEEK_MINUTES ? "weekly" : "session",
   );
-  const highRemaining = 100 - warning.high;
-  const critRemaining = 100 - warning.critical;
+  // A window set to Off keeps only the exhausted tone.
+  const highRemaining = warning.enabled ? 100 - warning.high : -1;
+  const critRemaining = warning.enabled ? 100 - warning.critical : -1;
   let tone: "ok" | "warn" | "crit" = "ok";
   if (state.isProblem) tone = "crit";
   else if (!informational) {
