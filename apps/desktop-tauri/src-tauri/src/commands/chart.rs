@@ -190,116 +190,127 @@ fn build_provider_chart_data_with_cancel(
     weekly_window: Option<RateWindowSnapshot>,
 ) -> ProviderChartData {
     let live_window = weekly_window.as_ref().map(rate_window_from_snapshot);
-    let provider_snapshot = codexbar::providers::chart::build_chart_snapshot(
-        &provider_id,
-        account_email.as_deref(),
-        live_window.as_ref(),
-        cancel.as_deref(),
-    );
-    let (cost_history, tokens_history, tokens_incomplete, local_usage) = if let Some(snapshot) =
-        provider_snapshot
-            .as_ref()
-            .filter(|_| provider_id == "claude")
-    {
-        let cost_history = snapshot
-            .daily_cost
-            .iter()
-            .cloned()
-            .map(|(date, value)| {
-                let incomplete_request_count = snapshot
-                    .daily_incomplete
-                    .iter()
-                    .find(|(day, _)| *day == date)
-                    .map(|(_, count)| *count);
-                DailyCostPoint {
-                    date,
-                    value,
-                    incomplete_request_count,
-                }
-            })
-            .collect();
-        let tokens_history = snapshot
-            .daily_tokens
-            .iter()
-            .cloned()
-            .map(|(date, tokens)| DailyTokenPoint { date, tokens })
-            .collect();
-        let period = current_reporting_period();
-        let local_usage = snapshot.local_summary.as_ref().and_then(|summary| {
-            let period_summary =
-                period_summary_for(&provider_id, period, summary, cancel.as_deref());
-            local_usage_summary_from_cost_summary(
-                &provider_id,
-                summary,
-                period,
-                period_summary.as_ref(),
-                snapshot.today.as_ref(),
-            )
-        });
-        store_local_usage_summary(&provider_id, local_usage.clone());
-        (
-            cost_history,
-            tokens_history,
-            snapshot.tokens_incomplete,
-            local_usage,
+    let build_snapshot = || {
+        codexbar::providers::chart::build_chart_snapshot(
+            &provider_id,
+            account_email.as_deref(),
+            live_window.as_ref(),
+            cancel.as_deref(),
         )
-    } else if provider_id == "muse" {
-        if cancel
-            .as_ref()
-            .is_some_and(|flag| flag.load(Ordering::Relaxed))
-        {
-            (Vec::new(), Vec::new(), true, None)
-        } else {
-            let report = muse_local_usage::scan(30, cancel.as_deref());
-            let tokens_history = report
-                .daily
+    };
+    // Claude's cost, token and local-usage series come from its snapshot, so it
+    // is built first. Every other snapshot is built after the local scans below.
+    let claude_snapshot = if provider_id == "claude" {
+        build_snapshot()
+    } else {
+        None
+    };
+    let (cost_history, tokens_history, tokens_incomplete, local_usage) =
+        if let Some(snapshot) = claude_snapshot.as_ref() {
+            let cost_history = snapshot
+                .daily_cost
                 .iter()
-                .map(|day| DailyTokenPoint {
-                    date: day.day.clone(),
-                    tokens: day.total_tokens,
+                .cloned()
+                .map(|(date, value)| {
+                    let incomplete_request_count = snapshot
+                        .daily_incomplete
+                        .iter()
+                        .find(|(day, _)| *day == date)
+                        .map(|(_, count)| *count);
+                    DailyCostPoint {
+                        date,
+                        value,
+                        incomplete_request_count,
+                    }
                 })
                 .collect();
+            let tokens_history = snapshot
+                .daily_tokens
+                .iter()
+                .cloned()
+                .map(|(date, tokens)| DailyTokenPoint { date, tokens })
+                .collect();
             let period = current_reporting_period();
-            let period_report = muse_period_report(period, &report, cancel.as_deref());
-            let local_usage = muse_local_usage_summary(
-                &report,
-                &period_report,
-                period,
-                locale::current_language(),
-            );
+            let local_usage = snapshot.local_summary.as_ref().and_then(|summary| {
+                let period_summary =
+                    period_summary_for(&provider_id, period, summary, cancel.as_deref());
+                local_usage_summary_from_cost_summary(
+                    &provider_id,
+                    summary,
+                    period,
+                    period_summary.as_ref(),
+                    snapshot.today.as_ref(),
+                )
+            });
+            store_local_usage_summary(&provider_id, local_usage.clone());
             (
-                Vec::new(),
+                cost_history,
                 tokens_history,
-                !report.is_complete(),
+                snapshot.tokens_incomplete,
                 local_usage,
             )
-        }
-    } else {
-        let raw_cost = get_daily_cost_history(&provider_id, 30);
-        let cost_history: Vec<DailyCostPoint> = raw_cost
-            .into_iter()
-            .map(|(date, value)| DailyCostPoint {
-                date,
-                value,
-                incomplete_request_count: None,
-            })
-            .collect();
-
-        let (raw_tokens, tokens_incomplete) = get_daily_token_history(&provider_id, 30);
-        let tokens_history: Vec<DailyTokenPoint> = raw_tokens
-            .into_iter()
-            .map(|(date, tokens)| DailyTokenPoint { date, tokens })
-            .collect();
-        let local_usage = if cancel
-            .as_deref()
-            .is_some_and(|flag| flag.load(Ordering::Relaxed))
-        {
-            None
+        } else if provider_id == "muse" {
+            if cancel
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Relaxed))
+            {
+                (Vec::new(), Vec::new(), true, None)
+            } else {
+                let report = muse_local_usage::scan(30, cancel.as_deref());
+                let tokens_history = report
+                    .daily
+                    .iter()
+                    .map(|day| DailyTokenPoint {
+                        date: day.day.clone(),
+                        tokens: day.total_tokens,
+                    })
+                    .collect();
+                let period = current_reporting_period();
+                let period_report = muse_period_report(period, &report, cancel.as_deref());
+                let local_usage = muse_local_usage_summary(
+                    &report,
+                    &period_report,
+                    period,
+                    locale::current_language(),
+                );
+                (
+                    Vec::new(),
+                    tokens_history,
+                    !report.is_complete(),
+                    local_usage,
+                )
+            }
         } else {
-            load_local_usage_summary_cached(&provider_id, cancel.as_deref())
+            let raw_cost = get_daily_cost_history(&provider_id, 30);
+            let cost_history: Vec<DailyCostPoint> = raw_cost
+                .into_iter()
+                .map(|(date, value)| DailyCostPoint {
+                    date,
+                    value,
+                    incomplete_request_count: None,
+                })
+                .collect();
+
+            let (raw_tokens, tokens_incomplete) = get_daily_token_history(&provider_id, 30);
+            let tokens_history: Vec<DailyTokenPoint> = raw_tokens
+                .into_iter()
+                .map(|(date, tokens)| DailyTokenPoint { date, tokens })
+                .collect();
+            let local_usage = if cancel
+                .as_deref()
+                .is_some_and(|flag| flag.load(Ordering::Relaxed))
+            {
+                None
+            } else {
+                load_local_usage_summary_cached(&provider_id, cancel.as_deref())
+            };
+            (cost_history, tokens_history, tokens_incomplete, local_usage)
         };
-        (cost_history, tokens_history, tokens_incomplete, local_usage)
-    };
+
+    // Codex quota-window history reads the Codex cost cache that
+    // get_daily_cost_history writes above. Building it before that scan left a
+    // cold start with an empty cache and the current window without totals.
+    let provider_snapshot = claude_snapshot.or_else(build_snapshot);
 
     let (credits_history, usage_breakdown) =
         load_openai_dashboard_chart_data(&provider_id, account_email.as_deref());
