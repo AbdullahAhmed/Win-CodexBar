@@ -1939,3 +1939,135 @@ fn stacked_tray_mode_survives_load_with_the_new_keys() {
     assert_eq!(reloaded.menu_bar_icon_style, MenuBarIconStyle::Percent);
     assert_eq!(reloaded.workday_tick_style, WorkdayTickStyle::HighContrast);
 }
+
+/// PR 4 / Q10: "Track costs" is on for new installs, and a file written before
+/// the key existed keeps scanning cost logs as it always did.
+#[test]
+fn cost_usage_enabled_defaults_on_for_new_installs_and_legacy_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let new_install = dir.path().join("missing.json");
+    let without_key = dir.path().join("settings.json");
+    std::fs::write(&without_key, r#"{ "enabled_providers": ["codex"] }"#).unwrap();
+
+    assert!(Settings::default().cost_usage_enabled);
+    assert!(Settings::load_from_path(Some(&new_install)).cost_usage_enabled);
+    assert!(Settings::load_from_path(Some(&without_key)).cost_usage_enabled);
+}
+
+#[test]
+fn cost_usage_enabled_off_round_trips_through_settings_persistence() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let settings = Settings {
+        cost_usage_enabled: false,
+        ..Settings::default()
+    };
+    settings.save_to_path(&path).unwrap();
+    assert!(!Settings::load_from_path(Some(&path)).cost_usage_enabled);
+}
+
+/// A file without `spend_dashboard_period` copies the menu period, so the
+/// dashboard keeps showing the range it showed before the split.
+#[test]
+fn spend_dashboard_period_copies_cost_reporting_period_when_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(
+        &path,
+        r#"{ "enabled_providers": [], "cost_reporting_period": "month-to-date" }"#,
+    )
+    .unwrap();
+    let loaded = Settings::load_from_path(Some(&path));
+    assert_eq!(
+        loaded.spend_dashboard_period,
+        CostReportingPeriod::MonthToDate
+    );
+    assert_eq!(
+        loaded.cost_reporting_period,
+        CostReportingPeriod::MonthToDate
+    );
+
+    let null_key: Settings = serde_json::from_str(
+        r#"{ "cost_reporting_period": "all", "spend_dashboard_period": null }"#,
+    )
+    .unwrap();
+    assert_eq!(
+        null_key.spend_dashboard_period,
+        CostReportingPeriod::AllAvailable
+    );
+
+    assert_eq!(
+        Settings::default().spend_dashboard_period,
+        CostReportingPeriod::Rolling(30)
+    );
+}
+
+#[test]
+fn spend_dashboard_period_round_trips_apart_from_cost_reporting_period() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    for period in [
+        CostReportingPeriod::Rolling(7),
+        CostReportingPeriod::Rolling(90),
+        CostReportingPeriod::MonthToDate,
+        CostReportingPeriod::AllAvailable,
+    ] {
+        let settings = Settings {
+            cost_reporting_period: CostReportingPeriod::Rolling(30),
+            spend_dashboard_period: period,
+            ..Settings::default()
+        };
+        settings.save_to_path(&path).unwrap();
+        let loaded = Settings::load_from_path(Some(&path));
+        assert_eq!(loaded.spend_dashboard_period, period);
+        assert_eq!(
+            loaded.cost_reporting_period,
+            CostReportingPeriod::Rolling(30)
+        );
+    }
+}
+
+/// An unreadable saved dashboard period reads as the default (`rolling:30`),
+/// like `cost_reporting_period`; it does not copy the menu period.
+#[test]
+fn unreadable_spend_dashboard_period_loads_as_the_default() {
+    let loaded: Settings = serde_json::from_str(
+        r#"{ "cost_reporting_period": "all", "spend_dashboard_period": "weekly" }"#,
+    )
+    .expect("an unreadable period must not fail the whole settings file");
+    assert_eq!(
+        loaded.spend_dashboard_period,
+        CostReportingPeriod::Rolling(30)
+    );
+}
+
+#[test]
+fn spend_dashboard_hidden_sources_default_empty_normalize_and_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(&path, r#"{ "enabled_providers": [] }"#).unwrap();
+    assert!(
+        Settings::load_from_path(Some(&path))
+            .spend_dashboard_hidden_source_ids
+            .is_empty()
+    );
+    assert!(
+        Settings::default()
+            .spend_dashboard_hidden_source_ids
+            .is_empty()
+    );
+
+    std::fs::write(
+        &path,
+        r#"{ "spend_dashboard_hidden_source_ids": ["pi", " Codex", "", "pi"] }"#,
+    )
+    .unwrap();
+    let loaded = Settings::load_from_path(Some(&path));
+    assert_eq!(loaded.spend_dashboard_hidden_source_ids, ["codex", "pi"]);
+
+    loaded.save_to_path(&path).unwrap();
+    assert_eq!(
+        Settings::load_from_path(Some(&path)).spend_dashboard_hidden_source_ids,
+        ["codex", "pi"]
+    );
+}

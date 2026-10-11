@@ -36,6 +36,7 @@ mod optional_details;
 mod preferences_document;
 mod provider_workspace;
 mod raw;
+mod spend_dashboard;
 mod status;
 mod types;
 
@@ -50,6 +51,7 @@ pub use optional_details::provider_has_optional_details;
 pub use preferences_document::*;
 pub use provider_workspace::*;
 use raw::RawSettings;
+pub use spend_dashboard::*;
 pub use status::*;
 pub use types::*;
 
@@ -457,6 +459,23 @@ pub struct Settings {
     /// zone (upstream 0.67.0 `tokenCostUsageBucketTimeZone`).
     #[serde(default)]
     pub cost_usage_bucket_time_zone: String,
+
+    /// "Track costs" in Usage & Spend (Mac `costUsageEnabled`). Off stops the
+    /// local cost-log scan, which blanks cost on the dashboard, cards and float
+    /// bar. True for new installs and for files written before the key existed.
+    #[serde(default = "default_true")]
+    pub cost_usage_enabled: bool,
+
+    /// Time range of the Usage & Spend dashboard, kept apart from
+    /// `cost_reporting_period` (menu, float bar, share exports). A file without
+    /// the key copies `cost_reporting_period`.
+    #[serde(default)]
+    pub spend_dashboard_period: CostReportingPeriod,
+
+    /// Usage & Spend sources (provider ids) left out of the stat strip, charts,
+    /// Copy JSON and Export JSON. Sorted and unique.
+    #[serde(default)]
+    pub spend_dashboard_hidden_source_ids: Vec<String>,
 }
 
 fn default_window_scale_percent() -> u16 {
@@ -706,6 +725,9 @@ impl Default for Settings {
             hide_native_codex_cost_when_open_codex_present: false,
             cost_reporting_period: CostReportingPeriod::default(),
             cost_usage_bucket_time_zone: String::new(),
+            cost_usage_enabled: true,
+            spend_dashboard_period: CostReportingPeriod::default(),
+            spend_dashboard_hidden_source_ids: Vec::new(),
         }
     }
 }

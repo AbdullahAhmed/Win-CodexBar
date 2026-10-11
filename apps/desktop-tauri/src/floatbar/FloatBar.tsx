@@ -440,8 +440,8 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     return () => {
       cancelled = true;
     };
-    // A History window change re-reads the local usage summaries.
-  }, [visibleCostTargets, settings.costReportingPeriod]);
+    // A History window or "Track costs" change re-reads the local usage summaries.
+  }, [visibleCostTargets, settings.costReportingPeriod, settings.costUsageEnabled]);
 
   const visibleCosts = visible
     .map((provider) => localCosts[providerCostKey(provider)])

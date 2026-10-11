@@ -103,6 +103,12 @@ pub struct SettingsUpdate {
     pub hide_native_codex_cost_when_open_codex_present: Option<bool>,
     /// History window: `rolling:N` (1..=365), `month-to-date`, or `all`.
     pub cost_reporting_period: Option<String>,
+    /// "Track costs" in Usage & Spend.
+    pub cost_usage_enabled: Option<bool>,
+    /// Usage & Spend time range, same format as `cost_reporting_period`.
+    pub spend_dashboard_period: Option<String>,
+    /// Usage & Spend sources left out of the dashboard; stored sorted and unique.
+    pub spend_dashboard_hidden_source_ids: Option<Vec<String>>,
 }
 
 impl SettingsUpdate {
@@ -122,6 +128,7 @@ impl SettingsUpdate {
             || self.adaptive_refresh.is_some()
             || self.codex_custom_sessions_dirs.is_some()
             || self.cost_reporting_period.is_some()
+            || self.cost_usage_enabled.is_some()
             || self.high_usage_threshold.is_some()
             || self.critical_usage_threshold.is_some()
             || self.provider_usage_thresholds.is_some()
@@ -198,6 +205,24 @@ impl SettingsUpdate {
             .and_then(codexbar::cost_reporting_period::CostReportingPeriod::parse)
         {
             settings.cost_reporting_period = v;
+        }
+        if let Some(v) = self
+            .spend_dashboard_period
+            .as_deref()
+            .and_then(codexbar::cost_reporting_period::CostReportingPeriod::parse)
+        {
+            settings.spend_dashboard_period = v;
+        }
+        if let Some(ids) = self.spend_dashboard_hidden_source_ids.clone() {
+            settings.spend_dashboard_hidden_source_ids =
+                codexbar::settings::normalize_spend_dashboard_hidden_source_ids(ids);
+        }
+        if let Some(v) = self.cost_usage_enabled {
+            if v && !settings.cost_usage_enabled {
+                // Mac pins the bucket zone when cost tracking is turned on.
+                settings.pin_cost_usage_bucket_time_zone();
+            }
+            settings.cost_usage_enabled = v;
         }
         if let Some(v) = self.open_codex_usage_logs_enabled {
             settings.open_codex_usage_logs_enabled = v;
@@ -505,6 +530,11 @@ impl SettingsUpdate {
         {
             return Err(format!("Invalid cost reporting period: {value}"));
         }
+        if let Some(value) = self.spend_dashboard_period.as_deref()
+            && codexbar::cost_reporting_period::CostReportingPeriod::parse(value).is_none()
+        {
+            return Err(format!("Invalid spend dashboard period: {value}"));
+        }
         if let Some(overrides) = &self.switcher_shortcuts {
             settings.switcher_shortcuts =
                 codexbar::switcher_shortcuts::normalize_overrides(overrides)
@@ -616,8 +646,9 @@ pub async fn update_settings(
     let mut settings = Settings::load();
     let notify_float_bar = patch.notifies_float_bar();
     let refresh_provider_data = patch.refreshes_provider_data();
-    let clear_local_usage_cache =
-        patch.codex_custom_sessions_dirs.is_some() || patch.cost_reporting_period.is_some();
+    let clear_local_usage_cache = patch.codex_custom_sessions_dirs.is_some()
+        || patch.cost_reporting_period.is_some()
+        || patch.cost_usage_enabled.is_some();
     let rebuild_tray_menu = patch.rebuilds_tray_menu();
     let refresh_tray_presentation = patch.refreshes_tray_presentation();
     let stay_awake_changed = patch.stay_awake_enabled.is_some();
@@ -837,6 +868,66 @@ mod tests {
         assert_eq!(
             settings.cost_reporting_period,
             CostReportingPeriod::MonthToDate
+        );
+    }
+
+    #[test]
+    fn spend_dashboard_updates_are_validated_and_applied() {
+        use codexbar::cost_reporting_period::CostReportingPeriod;
+
+        let mut settings = Settings::default();
+        let bad: SettingsUpdate =
+            serde_json::from_str(r#"{"spendDashboardPeriod":"fortnight"}"#).unwrap();
+        let error = bad
+            .apply_to(&mut settings)
+            .expect_err("unknown dashboard period must be rejected");
+        assert_eq!(error, "Invalid spend dashboard period: fortnight");
+
+        let good: SettingsUpdate = serde_json::from_str(
+            r#"{"spendDashboardPeriod":"rolling:90","spendDashboardHiddenSourceIds":["pi"," Codex","pi"]}"#,
+        )
+        .unwrap();
+        good.apply_to(&mut settings)
+            .expect("valid dashboard patch applies");
+        assert_eq!(
+            settings.spend_dashboard_period,
+            CostReportingPeriod::Rolling(90)
+        );
+        // The menu / float-bar period is a separate key.
+        assert_eq!(
+            settings.cost_reporting_period,
+            CostReportingPeriod::Rolling(30)
+        );
+        assert_eq!(settings.spend_dashboard_hidden_source_ids, ["codex", "pi"]);
+    }
+
+    #[test]
+    fn turning_cost_tracking_on_pins_the_bucket_zone_and_off_keeps_it() {
+        let mut settings = Settings {
+            cost_usage_enabled: false,
+            cost_usage_bucket_time_zone: String::new(),
+            ..Settings::default()
+        };
+        let on: SettingsUpdate = serde_json::from_str(r#"{"costUsageEnabled":true}"#).unwrap();
+        assert!(on.notifies_float_bar());
+        on.apply_to(&mut settings).expect("enable applies");
+        assert!(settings.cost_usage_enabled);
+        let mut expected = Settings {
+            cost_usage_bucket_time_zone: String::new(),
+            ..Settings::default()
+        };
+        expected.pin_cost_usage_bucket_time_zone();
+        assert_eq!(
+            settings.cost_usage_bucket_time_zone,
+            expected.cost_usage_bucket_time_zone
+        );
+
+        let off: SettingsUpdate = serde_json::from_str(r#"{"costUsageEnabled":false}"#).unwrap();
+        off.apply_to(&mut settings).expect("disable applies");
+        assert!(!settings.cost_usage_enabled);
+        assert_eq!(
+            settings.cost_usage_bucket_time_zone,
+            expected.cost_usage_bucket_time_zone
         );
     }
 

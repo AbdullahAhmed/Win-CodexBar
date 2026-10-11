@@ -71,6 +71,9 @@ fn customized_settings() -> Settings {
         float_bar_show_reset_inline: true,
         float_bar_show_cost: true,
         cost_reporting_period: CostReportingPeriod::MonthToDate,
+        cost_usage_enabled: false,
+        spend_dashboard_period: CostReportingPeriod::Rolling(90),
+        spend_dashboard_hidden_source_ids: vec!["claude".to_string(), "pi".to_string()],
         preferred_currency_code: "EUR".to_string(),
         switcher_shortcuts: BTreeMap::from([
             ("next".to_string(), "none".to_string()),
@@ -148,6 +151,12 @@ fn round_trips_every_allowlisted_preference() {
         target.cost_reporting_period,
         CostReportingPeriod::MonthToDate
     );
+    assert!(!target.cost_usage_enabled);
+    assert_eq!(
+        target.spend_dashboard_period,
+        CostReportingPeriod::Rolling(90)
+    );
+    assert_eq!(target.spend_dashboard_hidden_source_ids, ["claude", "pi"]);
     assert_eq!(target.preferred_currency_code, "EUR");
     assert_eq!(
         target
@@ -394,6 +403,31 @@ fn rejection_matrix_names_the_offending_key() {
             "unknown period",
             json!({ "cost_reporting_period": "fortnight" }),
             "cost_reporting_period",
+        ),
+        (
+            "unknown dashboard period",
+            json!({ "spend_dashboard_period": "fortnight" }),
+            "spend_dashboard_period",
+        ),
+        (
+            "track costs as text",
+            json!({ "cost_usage_enabled": "yes" }),
+            "cost_usage_enabled",
+        ),
+        (
+            "unsorted hidden sources",
+            json!({ "spend_dashboard_hidden_source_ids": ["codex", "claude"] }),
+            "spend_dashboard_hidden_source_ids",
+        ),
+        (
+            "duplicate hidden sources",
+            json!({ "spend_dashboard_hidden_source_ids": ["codex", "codex"] }),
+            "spend_dashboard_hidden_source_ids",
+        ),
+        (
+            "hidden sources not a list",
+            json!({ "spend_dashboard_hidden_source_ids": "codex" }),
+            "spend_dashboard_hidden_source_ids",
         ),
         (
             "unsupported currency",

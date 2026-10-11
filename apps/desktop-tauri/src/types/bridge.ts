@@ -309,6 +309,12 @@ export interface SettingsSnapshot {
    * `month-to-date`, or `all`. Absent from older backends.
    */
   costReportingPeriod?: string;
+  /** Usage & Spend "Track costs"; off stops the local cost-log scan. Absent from older backends. */
+  costUsageEnabled?: boolean;
+  /** Usage & Spend time range, same raw form as `costReportingPeriod`. */
+  spendDashboardPeriod?: string;
+  /** Usage & Spend sources (row `providerId`s) hidden from the dashboard; sorted and unique. */
+  spendDashboardHiddenSourceIds?: string[];
   /** Per-provider accent color overrides (CLI name → hex color, #2972). */
   providerAccentColors: Record<string, string>;
 }
@@ -419,6 +425,10 @@ export interface SettingsUpdate {
   hideNativeCodexCostWhenOpenCodexPresent?: boolean;
   /** `rolling:N` (1..=365), `month-to-date`, or `all`; the backend rejects other values. */
   costReportingPeriod?: string;
+  costUsageEnabled?: boolean;
+  /** Same format as `costReportingPeriod`. */
+  spendDashboardPeriod?: string;
+  spendDashboardHiddenSourceIds?: string[];
   providerAccentColors?: Record<string, string | null>;
 }
 
@@ -470,6 +480,8 @@ export interface UsageSpendSummary {
   reportingPeriod: string;
   reportingDay: string;
   dashboardTimezone: string;
+  /** False when "Track costs" is off: nothing was scanned and the summary is empty. */
+  costTrackingEnabled?: boolean;
 }
 
 export type CostProvenance = "listPriceEstimate" | "vendorMetered" | "mixed" | "unknown";
