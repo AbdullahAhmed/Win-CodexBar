@@ -33,6 +33,7 @@ fn customized_settings() -> Settings {
         refresh_all_providers_on_menu_open: true,
         low_power_mode_preference: crate::settings::LowPowerModePreference::Automatic,
         show_notifications: false,
+        session_quota_notifications_enabled: false,
         sound_enabled: false,
         high_usage_threshold: 55.5,
         critical_usage_threshold: 80.0,
@@ -136,6 +137,8 @@ fn round_trips_every_allowlisted_preference() {
     assert_eq!(again, exported);
     assert_eq!(target.window_scale_percent, 150);
     assert_eq!(target.ui_language, Language::Japanese);
+    // Portable like the Mac PreferencesDocument: depleted/restored alerts travel.
+    assert!(!target.session_quota_notifications_enabled);
     assert_eq!(
         target.cost_reporting_period,
         CostReportingPeriod::MonthToDate
@@ -615,4 +618,25 @@ fn file_round_trip_and_size_bound() {
         PreferencesDocument::read_file(&dir.path().join("missing.json")),
         Err(PreferencesError::Io(_))
     ));
+}
+
+#[test]
+fn tray_scale_document_bounds_match_the_settings_clamp() {
+    use crate::settings::{
+        TRAY_SCALE_PERCENT_MAX, TRAY_SCALE_PERCENT_MIN, clamp_tray_scale_percent,
+    };
+    assert_eq!(clamp_tray_scale_percent(0), TRAY_SCALE_PERCENT_MIN);
+    assert_eq!(clamp_tray_scale_percent(u16::MAX), TRAY_SCALE_PERCENT_MAX);
+    for accepted in [TRAY_SCALE_PERCENT_MIN, TRAY_SCALE_PERCENT_MAX] {
+        assert!(
+            parse(json!({ "tray_scale_percent": accepted })).is_ok(),
+            "{accepted} should be accepted"
+        );
+    }
+    for rejected in [TRAY_SCALE_PERCENT_MIN - 1, TRAY_SCALE_PERCENT_MAX + 1] {
+        assert!(
+            parse(json!({ "tray_scale_percent": rejected })).is_err(),
+            "{rejected} should be rejected"
+        );
+    }
 }

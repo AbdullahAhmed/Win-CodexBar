@@ -12,6 +12,9 @@
  */
 :root {
   color-scheme: dark;
+  /* Hover and fill tint for controls: white on dark surfaces, black on light
+     ones (light theme and the light tray panel). */
+  --surface-tint-rgb: 255, 255, 255;
   --font-ui: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
   font-family: var(--font-ui);
   text-rendering: optimizeLegibility;
@@ -222,6 +225,7 @@
 
 [data-theme="light"] {
   color-scheme: light;
+  --surface-tint-rgb: 0, 0, 0;
 
   --app-bg: #f5f5f7;
   --app-bg-gradient-top: transparent;
@@ -827,9 +831,9 @@ html {
 
 .credential-btn {
   padding: 5px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(var(--surface-tint-rgb), 0.1);
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(var(--surface-tint-rgb), 0.06);
   color: var(--text-secondary);
   font-size: 0.78rem;
   font-weight: 600;
@@ -839,9 +843,9 @@ html {
 }
 
 .credential-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(var(--surface-tint-rgb), 0.1);
   color: var(--text-primary);
-  border-color: rgba(255, 255, 255, 0.18);
+  border-color: rgba(var(--surface-tint-rgb), 0.18);
 }
 
 .credential-btn:disabled {
@@ -1509,7 +1513,7 @@ body:has(.tray-panel-reveal),
 }
 
 .update-banner__action:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(var(--surface-tint-rgb), 0.06);
 }
 
 /* ── Provider detail: org label ─────────────────────────────────────── */
@@ -1671,75 +1675,6 @@ body:has(.tray-panel-reveal),
   display: flex;
   flex-direction: column;
   gap: 16px;
-}
-
-/* ── Mini bar chart ─────────────────────────────────────────────────── */
-
-.mini-chart {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.mini-chart--empty {
-  opacity: 0.5;
-}
-
-.mini-chart__label {
-  /* Match upstream `.font(.body).fontWeight(.medium)` — same weight as the
-     "Cost" / "Pace" group titles. Not uppercase, not eyebrow-tinted. */
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.mini-chart__empty-msg {
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  font-style: italic;
-}
-
-.mini-chart__svg {
-  display: block;
-  border-radius: 4px;
-  overflow: visible;
-  max-width: 100%;
-}
-
-.mini-chart__axis {
-  position: relative;
-  font-size: 0.68rem;
-  color: var(--text-muted);
-  font-family: "Cascadia Code", "Fira Code", monospace;
-  padding: 0 2px;
-}
-
-.mini-chart__axis > span {
-  position: absolute;
-  transform: translateX(-50%);
-  white-space: nowrap;
-}
-
-.mini-chart__legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 12px;
-  margin-top: 2px;
-}
-
-.mini-chart__legend-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 0.72rem;
-  color: var(--text-secondary);
-}
-
-.mini-chart__legend-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-  flex-shrink: 0;
 }
 
 /* ── Providers tab – sidebar + detail layout ─────────────────────── */
@@ -3472,6 +3407,7 @@ html:has(.menu-surface--tray) {
   --pace-track-expected-fg: rgba(0, 122, 255, 0.45);
   --chart-cost-fg: #007aff;
   --chart-credits-fg: var(--chart-credits);
+  --surface-tint-rgb: 0, 0, 0;
 
   color-scheme: light;
   display: flex;
@@ -3529,32 +3465,12 @@ html:has(.menu-surface--tray) {
   border-radius: 6px;
   padding: 4px 4px;
 }
-.menu-surface--tray .menu-card__copy-btn:hover {
-  background: rgba(0, 0, 0, 0.06);
-}
 .menu-surface--tray .provider-grid__item .provider-icon {
   filter: brightness(0);
-}
-.menu-surface--tray .provider-grid__item--more .provider-grid__icon-overview {
-  background: rgba(0, 0, 0, 0.06);
-}
-.menu-surface--tray .provider-grid__item--more:hover .provider-grid__icon-overview {
-  background: rgba(0, 0, 0, 0.1);
-}
-.menu-surface--tray .update-banner__action:hover {
-  background: rgba(0, 0, 0, 0.06);
 }
 .menu-surface--tray .update-banner--available,
 .menu-surface--tray .update-banner--ready {
   color: var(--provider-status-ok);
-}
-.menu-surface--tray .credential-btn {
-  border-color: rgba(0, 0, 0, 0.12);
-  background: rgba(0, 0, 0, 0.05);
-}
-.menu-surface--tray .credential-btn:hover:not(:disabled) {
-  border-color: rgba(0, 0, 0, 0.18);
-  background: rgba(0, 0, 0, 0.08);
 }
 /* Tray grid — flush with no background container, matching macOS */
 .menu-surface--tray .provider-grid {
@@ -3597,43 +3513,6 @@ html:has(.menu-surface--tray) {
   padding-bottom: var(--menu-card-section-y);
 }
 
-/* Tray name-group — row layout like macOS: HStack { name — Spacer — email } */
-.menu-surface--tray .menu-card__name-group {
-  flex-direction: row;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 6px;
-  width: 100%;
-}
-
-/* Tray name + email — macOS: .font(.headline) = 13pt semibold */
-.menu-surface--tray .menu-card__name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.menu-surface--tray .menu-card__email {
-  flex: 0 1 auto;
-  text-align: right;
-  max-width: 55%;
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-/* Tray subtitle + error — match macOS .footnote=10pt */
-.menu-surface--tray .menu-card__subtitle,
-.menu-surface--tray .menu-card__error-text {
-  font-size: 10px;
-}
-/* Tray "Updated just now" — secondary color like macOS */
-.menu-surface--tray .menu-card__subtitle:not(.menu-card__subtitle--error) {
-  color: var(--text-secondary);
-}
-
 /* Copy-to-clipboard button — matches macOS CopyIconButton (doc.on.doc, 18×18) */
 .menu-card__copy-btn {
   display: inline-flex;
@@ -3654,17 +3533,7 @@ html:has(.menu-surface--tray) {
 }
 .menu-card__copy-btn:hover {
   opacity: 1;
-  background: rgba(255, 255, 255, 0.08);
-}
-
-/* Tray plan badge — plain text like macOS (not a pill) */
-.menu-surface--tray .menu-card__plan-badge {
-  background: none;
-  padding: 0;
-  border-radius: 0;
-  font-size: 10px;
-  font-weight: 400;
-  color: var(--text-secondary);
+  background: rgba(var(--surface-tint-rgb), 0.08);
 }
 
 /* Hide status dots in tray grid — macOS shows weekly indicators only on hover,
@@ -3690,76 +3559,13 @@ html:has(.menu-surface--tray) {
   font-size: 13px;
   font-weight: 500;
 }
-/* macOS: UsageProgressBar .frame(height: 6) */
-.menu-surface--tray .menu-metric__bar {
-  height: 6px;
-  border-radius: 3px;
-  width: 100%;
-  box-sizing: border-box;
-  max-width: 100%;
-}
+
 .menu-surface--tray .menu-metric__pct,
 .menu-surface--tray .menu-metric__reset,
 .menu-surface--tray .menu-metric__meta,
 .menu-surface--tray .menu-metric__status,
 .menu-surface--tray .menu-metric__detail {
   font-size: 10px;
-}
-/* Secondary charts and pace are available inside the Usage details disclosure. */
-.menu-surface--tray .menu-card__local-grid {
-  gap: 9px 20px;
-}
-.menu-surface--tray .menu-card__local-usage {
-  padding-top: 2px;
-}
-.menu-surface--tray .menu-card__local-note {
-  font-size: 10px;
-  line-height: 1.25;
-}
-
-.menu-card__local-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px 28px;
-}
-.menu-card__local-grid > div,
-.menu-card__local-note {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.menu-card__local-label,
-.menu-card__local-note {
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-.menu-card__local-grid strong {
-  font-size: 13px;
-  line-height: 1.15;
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
-}
-.menu-card__local-chart {
-  display: flex;
-  align-items: flex-end;
-  gap: 5px;
-  height: 68px;
-  margin-top: 2px;
-}
-.menu-card__local-chart span {
-  width: 8px;
-  border-radius: 2px 2px 0 0;
-  background: #bf8337;
-}
-.menu-card__local-note strong {
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-.menu-card__local-note span {
-  overflow: visible;
-  text-overflow: initial;
-  white-space: normal;
-  line-height: 1.3;
 }
 
 /* ── Provider card — direct mirror of UsageMenuCardView ─────────────── */
@@ -3786,103 +3592,10 @@ html:has(.menu-surface--tray) {
 
 /* ── Multi-account Codex lanes (ADR 0003, option A) ─────────────────── */
 
-.codex-menu-accounts {
-  margin-top: 4px;
-  border-top: 1px solid var(--divider, var(--provider-row-divider, rgba(128, 128, 128, 0.18)));
-  padding-top: 4px;
-}
-
-.codex-menu-accounts__summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  cursor: pointer;
-  font-size: 0.72rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--provider-row-text-secondary);
-  user-select: none;
-}
-
-.codex-menu-accounts__summary::-webkit-details-marker {
-  display: none;
-}
-
-.codex-menu-accounts__summary::before {
-  content: "▸";
-  display: inline-block;
-  width: 0.8em;
-  color: var(--provider-row-text-secondary);
-  transition: transform 0.12s;
-}
-
-.codex-menu-accounts[open] > .codex-menu-accounts__summary::before {
-  transform: rotate(90deg);
-}
-
-.codex-menu-accounts__count {
-  margin-left: auto;
-  font-size: 0.68rem;
-  font-weight: 500;
-  text-transform: none;
-  letter-spacing: 0;
-  color: var(--provider-row-text-secondary);
-}
-
 .codex-menu-accounts__error {
   margin-top: 6px;
   font-size: 0.72rem;
   color: var(--provider-status-error);
-}
-
-.codex-menu-accounts__list {
-  list-style: none;
-  margin: 6px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.codex-menu-accounts__row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.codex-menu-accounts__row--active .codex-menu-accounts__email {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.codex-menu-accounts__meta {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.codex-menu-accounts__email {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 0.74rem;
-  color: var(--provider-row-text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.codex-menu-accounts__badge {
-  font-size: 0.6rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--provider-status-ok, #4ade80);
 }
 
 .codex-menu-accounts__usage {
@@ -3931,200 +3644,9 @@ html:has(.menu-surface--tray) {
   background: var(--usage-bar-exhausted, var(--accent));
 }
 
-.codex-menu-accounts__switch {
-  flex-shrink: 0;
-  font-size: 0.68rem;
-  font-weight: 600;
-  padding: 2px 6px;
-  white-space: nowrap;
-  border-radius: 5px;
-  color: var(--text-primary);
-  background: transparent;
-  border: 1px solid var(--provider-row-divider, rgba(128, 128, 128, 0.3));
-  cursor: pointer;
-}
-
-.codex-menu-accounts__row-actions {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  flex-shrink: 0;
-  gap: 4px;
-}
-
-.codex-menu-accounts__switch:hover:not(:disabled) {
-  border-color: var(--accent, currentColor);
-}
-
-.codex-menu-accounts__switch:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-/* Header VStack(spacing: 4) with two HStacks */
-.menu-card__header {
-  display: flex;
-  flex-direction: column;
-  gap: var(--menu-card-header-line-gap);
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-}
-
-.menu-card__title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--menu-card-header-column-gap);
-}
-
-.menu-card__refresh-btn {
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
-/* Provider brand badge + display name cluster. Tauri-only addition that
-   gives each card a recognizable provider mark before the name. */
-.menu-card__name-group {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.menu-card__provider-icon {
-  flex-shrink: 0;
-}
-
-/* providerName: Font.headline + .semibold — use 500 on Windows for parity */
-.menu-card__name {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* email: Font.subheadline secondary ≈ 12px */
-.menu-card__email {
-  font-size: 12px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 60%;
-  text-align: right;
-}
-
-.menu-card__subtitle-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--menu-card-header-column-gap);
-}
-
-/* When subtitle-row contains error text, align to top (macOS: .top) */
-.menu-card__subtitle-row:has(.menu-card__subtitle--error) {
-  align-items: flex-start;
-  min-width: 0;
-}
-
-/* Error block — simple block layout that respects parent width for text wrapping.
-   Avoids the flex sizing issues that cause text to overflow the panel. */
-.menu-card__error-block {
-  display: block;
-  position: relative;
-  overflow: clip;
-  max-width: 100%;
-  box-sizing: border-box;
-  padding: 4px 0 2px;
-}
-.menu-card__error-text {
-  display: block;
-  font-size: 11px;
-  color: var(--provider-status-error);
-  line-height: 1.4;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-  white-space: normal;
-  padding-right: 20px; /* space for copy button */
-  box-sizing: border-box;
-}
-.menu-card__error-block .menu-card__copy-btn {
-  position: absolute;
-  top: 0;
-  right: 0;
-}
-
-/* subtitle: Font.footnote secondary ≈ 11px */
-.menu-card__subtitle {
-  flex: 1;
-  min-width: 0;
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* Error subtitle must wrap — override base truncation.
-   width:0 + flex-grow:1 forces the flex item to respect container bounds
-   instead of sizing to content width and overflowing. */
-.menu-card__subtitle.menu-card__subtitle--error {
-  width: 0;
-  flex-grow: 1;
-  white-space: normal;
-  overflow: hidden;
-  text-overflow: unset;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-/* plan: Font.footnote secondary ≈ 11px, no special weight upstream */
-.menu-card__plan {
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.menu-card__error {
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: var(--surface-elevated);
-  color: var(--provider-status-error);
-  font-size: 11px;
-  line-height: 1.35;
-}
-
 /* SwiftUI Divider() — single hairline using the system separator. */
 .menu-card__divider {
   margin: 4px 0;
-}
-
-.menu-card__pricing-status {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--divider, var(--provider-row-divider, rgba(128, 128, 128, 0.18)));
-  color: var(--text-secondary);
-  font-size: 10px;
-  line-height: 1.35;
-  font-variant-numeric: tabular-nums;
-}
-
-.menu-card__pricing-status strong {
-  color: var(--text-primary);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.menu-card__pricing-status small {
-  margin-top: 2px;
-  color: var(--text-tertiary, var(--text-secondary));
-  line-height: 1.4;
 }
 
 .menu-card__content {
@@ -4169,21 +3691,6 @@ html:has(.menu-surface--tray) {
 .menu-metric__head .menu-metric__reset {
   margin-left: auto;
   max-width: 100%;
-}
-
-/* UsageProgressBar — Capsule track + Capsule fill, .frame(height: 6) */
-.menu-metric__bar {
-  height: 6px;
-  border-radius: 3px;
-  background: var(--usage-bar-track);
-  overflow: hidden;
-}
-
-.menu-metric__bar-fill {
-  height: 100%;
-  border-radius: 3px;
-  background: var(--provider-accent, var(--usage-bar-normal));
-  transition: width 0.3s ease;
 }
 
 .menu-metric__progress {
@@ -4245,17 +3752,6 @@ html:has(.menu-surface--tray) {
   flex: 0 0 auto;
 }
 
-/* A live forecast is its own full-width row. Release the base percent label's
-   no-shrink rule so refreshed text is constrained by the row and tail-truncated
-   inside the fixed tray width instead of painting past it. */
-.menu-metric__forecast .menu-metric__pct {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* Detail-backed window description (for example spend amounts): its own
    secondary line under the metric row, never reset wording. */
 .menu-metric__detail {
@@ -4298,48 +3794,6 @@ html:has(.menu-surface--tray) {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.menu-metric__budget {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.menu-metric__budget-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 10px;
-  cursor: pointer;
-}
-
-.menu-metric__budget-header span:last-child {
-  color: var(--text-secondary);
-}
-
-.menu-metric__budget-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.menu-metric__budget-pill {
-  padding: 2px 6px;
-  border: 1px solid var(--usage-bar-track);
-  border-radius: 999px;
-  background: var(--surface-elevated);
-  color: var(--text-secondary);
-  font-size: 9px;
-  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -4413,83 +3867,7 @@ html:has(.menu-surface--tray) {
 
 /* ── Cost section (upstream `tokenUsage` block) ─────────────────────── */
 
-.menu-card__cost-line {
-  font-size: 11px; /* upstream: .font(.footnote) */
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
-}
-
-.menu-card__cost-line--muted {
-  color: var(--text-secondary);
-}
-
 /* ── Pace section (Tauri-only; sits below cost in the same card) ────── */
-
-.menu-card__pace {
-  gap: 4px;
-}
-
-.menu-card__pace-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.menu-card__pace-label {
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.menu-card__pace-label[data-pace="slow"] { color: var(--pace-slow-fg); }
-.menu-card__pace-label[data-pace="steady"] { color: var(--pace-steady-fg); }
-.menu-card__pace-label[data-pace="racing"] { color: var(--pace-racing-fg); }
-.menu-card__pace-label[data-pace="burning"] { color: var(--pace-burning-fg); }
-
-.menu-card__pace-bars {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.menu-card__pace-track {
-  height: 5px;
-  border-radius: 3px;
-  background: var(--usage-bar-track);
-  overflow: hidden;
-}
-
-.menu-card__pace-fill {
-  height: 100%;
-  border-radius: 3px;
-  background: var(--usage-bar-normal);
-  transition: width 0.3s ease;
-}
-
-.menu-card__pace-fill[data-pace="slow"] { background: var(--pace-slow-fg); }
-.menu-card__pace-fill[data-pace="steady"] { background: var(--pace-steady-fg); }
-.menu-card__pace-fill[data-pace="racing"] { background: var(--pace-racing-fg); }
-.menu-card__pace-fill[data-pace="burning"] { background: var(--pace-burning-fg); }
-
-.menu-card__pace-fill--expected {
-  background: var(--pace-track-expected-fg) !important;
-}
-
-.menu-card__pace-eta {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--pace-racing-fg);
-}
-
-.menu-card__pace-ok {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--pace-steady-fg);
-}
-
-.menu-card__charts {
-  gap: 10px;
-}
 
 /* ════════════════════════════════════════════════════════════════════
  * macOS PARITY OVERLAY  (last cascade — wins over earlier rules)
@@ -4822,22 +4200,6 @@ html:has(.menu-surface--tray) {
   color: var(--text-primary);
 }
 
-/* ── Menu card / metric row tightening ────────────────────────────── */
-.menu-card__name {
-  font-size: var(--font-headline);
-  /* upstream .semibold (600) renders too heavy on Windows; 500 is visually closer */
-  font-weight: 500;
-  letter-spacing: -0.005em;
-}
-.menu-card__email,
-.menu-card__plan,
-.menu-card__subtitle {
-  font-size: var(--font-caption);
-  font-weight: 400;
-}
-.menu-card__email {
-  color: var(--text-secondary);
-}
 .menu-card__group-title,
 .menu-metric__title {
   font-size: var(--font-body);
@@ -4922,19 +4284,6 @@ html:has(.menu-surface--tray) {
   font-size: var(--font-caption);
   font-variant-numeric: tabular-nums;
 }
-.menu-metric__bar,
-.menu-card__pace-track {
-  height: var(--bar-height);
-  border-radius: var(--bar-radius);
-  background: var(--usage-bar-track);
-  overflow: hidden;
-}
-.menu-metric__bar-fill,
-.menu-card__pace-fill {
-  height: 100%;
-  border-radius: var(--bar-radius);
-  transition: width 0.3s ease;
-}
 
 /* Upstream UsageProgressBar uses the provider brand color (which the
    chart palette covers) but the menu defaults to a green-when-healthy
@@ -4956,12 +4305,6 @@ html:has(.menu-surface--tray) {
 .menu-metric__reset,
 .menu-metric__status,
 .menu-metric__detail {
-  font-size: var(--font-caption);
-}
-.menu-card__cost-line,
-.menu-card__pace-label,
-.menu-card__pace-eta,
-.menu-card__pace-ok {
   font-size: var(--font-caption);
 }
 
@@ -5623,17 +4966,7 @@ html:has(.menu-surface--tray) {
   text-align: center;
 }
 
-/* ── macOS parity: inline error subtitle, divider spacing, footer icon
-      opacity, and card bottom padding (final overlay) ─────────────────── */
-.menu-card__subtitle--error {
-  color: var(--provider-status-error);
-  line-height: 1.3;
-  white-space: normal;
-  overflow: hidden;
-  text-overflow: unset;
-  font-size: 11px;
-}
-
+/* ── macOS parity: divider spacing and card bottom padding (final overlay) ── */
 .menu-card__divider {
   margin: 4px 0;
 }
@@ -5643,38 +4976,6 @@ html:has(.menu-surface--tray) {
 }
 
 /* ── Provider tab status dots removed (replaced by .provider-grid__dot) */
-
-/* ── Plan badge pill ────────────────────────────────────────────────── */
-.menu-card__plan-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 8px;
-  font-size: 11px;
-  font-weight: 600;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.12);
-  color: var(--text-secondary);
-  white-space: nowrap;
-  flex-shrink: 0;
-  line-height: 1.4;
-}
-[data-theme="light"] .menu-card__plan-badge {
-  background: rgba(0, 0, 0, 0.08);
-}
-
-/* ── Card header: name + badge on same row ──────────────────────────── */
-.menu-card__title-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--menu-card-header-column-gap);
-}
-.menu-card__name-group {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
 
 /* ── Windows QA polish: stable provider grid and compact heights ─── */
 .provider-grid {
@@ -5761,15 +5062,14 @@ html:has(.menu-surface--tray) {
   width: 17px;
   height: 17px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.10);
+  background: rgba(var(--surface-tint-rgb), 0.1);
   font-size: 14px;
   font-weight: 600;
 }
 
 .provider-grid__item--more:hover .provider-grid__icon-overview {
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(var(--surface-tint-rgb), 0.16);
 }
-
 
 .settings-tabs {
   gap: 4px;
@@ -5928,16 +5228,10 @@ html:has(.menu-surface--tray) {
   color: inherit;
 }
 
-/* ── Mistral monthly spend row (#2821, #2947) ──────────────────── */
-.menu-card__monthly-spend {
-  margin-top: 4px;
-  font-weight: 500;
-}
 /* Shared Windows typography and control sizing. */
 button, input, select, textarea {
   font-family: var(--font-ui);
 }
-
 
 .select, .number-input, .text-input {
   min-height: 28px;
@@ -5946,27 +5240,8 @@ button, input, select, textarea {
   max-width: 240px;
 }
 
-/* Account login actions follow each provider's account list. */
-.codex-menu-accounts__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
-}
 .codex-menu-accounts__usage {
   flex-wrap: wrap;
   white-space: normal;
 }
 
-.codex-menu-accounts__action {
-  min-height: 28px;
-  padding: 3px 10px;
-  border: 1px solid var(--panel-border);
-  border-radius: 5px;
-  background: transparent;
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-.codex-menu-accounts__action:disabled { opacity: 0.5; cursor: default; }
