@@ -670,6 +670,7 @@ impl From<RawSettings> for Settings {
         }
         // Migration #5: legacy per-provider threshold overrides move into
         // `provider_configs.<id>.quota_warnings`; only the new key is saved.
+        let legacy_usage_thresholds_pending = !raw.provider_usage_thresholds.is_empty();
         super::types::migrate_legacy_usage_thresholds(
             &mut provider_configs,
             raw.provider_usage_thresholds,
@@ -803,6 +804,7 @@ impl From<RawSettings> for Settings {
             hide_native_codex_cost_when_open_codex_present: raw
                 .hide_native_codex_cost_when_open_codex_present,
             codex_external_oauth_sources_allowed: raw.codex_external_oauth_sources_allowed,
+            legacy_usage_thresholds_pending,
             cost_reporting_period: raw.cost_reporting_period,
             cost_usage_bucket_time_zone: super::normalize_cost_usage_bucket_time_zone(
                 &raw.cost_usage_bucket_time_zone,

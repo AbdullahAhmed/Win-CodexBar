@@ -474,6 +474,11 @@ pub struct Settings {
     /// Copy JSON and Export JSON. Sorted and unique.
     #[serde(default)]
     pub spend_dashboard_hidden_source_ids: Vec<String>,
+
+    /// Set when the loaded file still carried legacy `provider_usage_thresholds`;
+    /// the desktop shell saves once at startup so only the new key stays on disk.
+    #[serde(skip)]
+    pub(crate) legacy_usage_thresholds_pending: bool,
 }
 
 fn default_window_scale_percent() -> u16 {
@@ -717,6 +722,7 @@ impl Default for Settings {
             weekly_progress_work_days: None,
             alibaba_token_plan_region: default_alibaba_token_plan_region(),
             codex_external_oauth_sources_allowed: false,
+            legacy_usage_thresholds_pending: false,
             cost_summary_display_style: CostSummaryDisplayStyle::default(),
             open_codex_usage_logs_enabled: false,
             hide_native_codex_cost_when_open_codex_present: false,
@@ -906,6 +912,28 @@ impl Settings {
             if let Err(error) = std::fs::write(marker, b"1") {
                 tracing::warn!("Failed to write display mode fold marker: {error}");
             }
+        }
+    }
+
+    /// Migration #5 write-back: when the loaded file still had legacy
+    /// `provider_usage_thresholds` (already folded into `quota_warnings` on
+    /// read), save once so the file holds only the new key. The desktop shell
+    /// calls this at startup; tests and helpers that only load never write.
+    pub fn apply_quota_warning_migration(&mut self) {
+        self.apply_quota_warning_migration_with(Self::save);
+    }
+
+    fn apply_quota_warning_migration_with(
+        &mut self,
+        persist: impl FnOnce(&Self) -> anyhow::Result<()>,
+    ) {
+        if !self.legacy_usage_thresholds_pending {
+            return;
+        }
+        match persist(self) {
+            Ok(()) => self.legacy_usage_thresholds_pending = false,
+            // The legacy key stays readable, so the write retries next launch.
+            Err(error) => tracing::warn!("Failed to persist quota warning migration: {error}"),
         }
     }
 

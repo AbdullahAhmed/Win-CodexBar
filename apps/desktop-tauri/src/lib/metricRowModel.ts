@@ -7,6 +7,7 @@ import type {
   WindowPaceSnapshot,
   WorkdayTickStyle,
 } from "../types/bridge";
+import { type QuotaWarningSettings, resolveQuotaWarning } from "./quotaWarnings";
 import { resetDescriptionFallback } from "./usageWindows";
 
 type Translate = (key: LocaleKey) => string;
@@ -15,10 +16,7 @@ export type MetricLane = "primary" | "secondary" | "tertiary" | "extra";
 
 type PaceKind = "session" | "weekly";
 
-export type UsageThresholdSettings = Pick<
-  SettingsSnapshot,
-  "highUsageThreshold" | "criticalUsageThreshold" | "providerUsageThresholds"
->;
+export type UsageThresholdSettings = QuotaWarningSettings;
 
 interface LanePolicy {
   thresholdWindow: "session" | "weekly" | null;
@@ -238,20 +236,6 @@ function paceMetaText(pace: WindowPaceSnapshot, kind: PaceKind, t: Translate): s
   return right ? `${left} · ${right}` : left;
 }
 
-function threshold(
-  settings: UsageThresholdSettings,
-  providerId: string,
-  window: "session" | "weekly",
-  field: "high" | "critical",
-): number {
-  const overrides = settings.providerUsageThresholds ?? {};
-  return (
-    overrides[`${providerId}:${window}`]?.[field] ??
-    overrides[providerId]?.[field] ??
-    (field === "high" ? settings.highUsageThreshold : settings.criticalUsageThreshold)
-  );
-}
-
 function normalizedMarkerPercents(values: number[]): number[] {
   const kept: number[] = [];
   for (const value of values.map(clampPercent)) {
@@ -266,13 +250,17 @@ function barMarkers(input: MetricRowInput): UsageBarMarker[] {
   const policy = LANE_POLICY[input.lane];
   const window = policy.thresholdWindow;
   const settings = input.usageThresholds;
-  const warnings =
+  // A window set to Off for this provider shows no warning markers (Mac parity).
+  const resolved =
     window && settings && input.quotaWarningMarkersVisible
+      ? resolveQuotaWarning(settings, input.providerId, window)
+      : null;
+  const warnings =
+    resolved?.enabled
       ? normalizedMarkerPercents(
-          (["high", "critical"] as const).map((field) => {
-            const usedThreshold = threshold(settings, input.providerId, window, field);
-            return input.showAsUsed ? usedThreshold : 100 - usedThreshold;
-          }),
+          [resolved.high, resolved.critical].map((usedThreshold) =>
+            input.showAsUsed ? usedThreshold : 100 - usedThreshold,
+          ),
         )
       : [];
   const workDays = input.weeklyProgressWorkDays;

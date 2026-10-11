@@ -49,7 +49,7 @@ function input(overrides: Partial<MetricRowInput> = {}): MetricRowInput {
     showAsUsed: false,
     showResetWhenExhausted: false,
     paceEnabled: true,
-    usageThresholds: { highUsageThreshold: 70, criticalUsageThreshold: 90, providerUsageThresholds: {} },
+    usageThresholds: { highUsageThreshold: 70, criticalUsageThreshold: 90, providerQuotaWarnings: {} },
     weeklyProgressWorkDays: null,
     quotaWarningMarkersVisible: true,
     workdayTickStyle: "subtle",
@@ -299,13 +299,12 @@ describe("metricRowPresentation bar", () => {
     ]);
   });
 
-  it("resolves window, provider and global thresholds per field", () => {
-    const providerUsageThresholds = {
-      claude: { high: 75 },
-      "claude:weekly": { critical: 95 },
-      codex: { high: 50, critical: 60 },
+  it("resolves Custom quota warnings per window and field, falling back to global", () => {
+    const providerQuotaWarnings = {
+      claude: { session: { high: 75 }, weekly: { high: 75, critical: 95 } },
+      codex: { session: { high: 50, critical: 60 } },
     };
-    const usageThresholds = { ...thresholds(70), providerUsageThresholds };
+    const usageThresholds = { ...thresholds(70), providerQuotaWarnings };
     const weeklyRow = metricRowPresentation(
       input({ lane: "secondary", snap: weekly(), showAsUsed: true, usageThresholds }),
       en,
@@ -318,6 +317,23 @@ describe("metricRowPresentation bar", () => {
       en,
     );
     expect(tertiaryRow.bar.markers.map((m) => m.percent)).toEqual([75, 95]);
+  });
+
+  it("hides warning markers for a window whose quota warnings are Off", () => {
+    const usageThresholds = {
+      ...thresholds(70),
+      providerQuotaWarnings: { claude: { session: { enabled: false, high: 40, critical: 60 } } },
+    };
+    expect(
+      metricRowPresentation(input({ showAsUsed: true, usageThresholds }), en).bar.markers,
+    ).toEqual([]);
+    const weeklyRow = metricRowPresentation(
+      input({ lane: "secondary", snap: weekly(), showAsUsed: true, usageThresholds }),
+      en,
+    );
+    expect(weeklyRow.bar.markers.filter((m) => m.kind === "warning").map((m) => m.percent)).toEqual([
+      70, 90,
+    ]);
   });
 
   it("drops edge and duplicate thresholds and never marks extra lanes", () => {

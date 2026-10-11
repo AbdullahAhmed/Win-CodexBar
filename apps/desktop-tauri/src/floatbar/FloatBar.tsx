@@ -24,6 +24,7 @@ import { costPeriodShortLabel } from "../lib/costPeriod";
 import { describeProviderState } from "../lib/providerState";
 import { resetDescriptionFallback, windowDetailText } from "../lib/usageWindows";
 import { localizeProviderText } from "../lib/providerText";
+import { type QuotaWarningSettings, resolveQuotaWarning } from "../lib/quotaWarnings";
 import type {
   BootstrapState,
   ProviderLocalUsageSummary,
@@ -32,6 +33,8 @@ import type {
 } from "../types/bridge";
 import { FLOAT_BAR_CONFIG_CHANGED_EVENT, resizeFloatBar } from "./api";
 import "./FloatBar.css";
+
+const WEEK_MINUTES = 7 * 24 * 60;
 
 function ResetIcon({ size }: { size: number }) {
   return (
@@ -199,8 +202,7 @@ function brandStyle(brand: string): CSSProperties {
  */
 function ProviderPill({
   provider,
-  highRemaining,
-  critRemaining,
+  thresholds,
   showAsUsed,
   scale,
   showResetInline,
@@ -210,8 +212,7 @@ function ProviderPill({
   stateLabel,
 }: {
   provider: ProviderUsageSnapshot;
-  highRemaining: number;
-  critRemaining: number;
+  thresholds: QuotaWarningSettings;
   showAsUsed: boolean;
   scale: number;
   showResetInline: boolean;
@@ -228,6 +229,14 @@ function ProviderPill({
   const displayPercent = showAsUsed ? used : remaining;
   const displaySuffix = showAsUsed ? usedSuffix : remainingSuffix;
   const state = describeProviderState(provider.errorState);
+  // Tone follows this provider's quota warning thresholds for the shown window.
+  const warning = resolveQuotaWarning(
+    thresholds,
+    provider.providerId,
+    (rateWindow.windowMinutes ?? 0) >= WEEK_MINUTES ? "weekly" : "session",
+  );
+  const highRemaining = 100 - warning.high;
+  const critRemaining = 100 - warning.critical;
   let tone: "ok" | "warn" | "crit" = "ok";
   if (state.isProblem) tone = "crit";
   else if (!informational) {
@@ -513,8 +522,6 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     [],
   );
 
-  const highRemaining = 100 - settings.highUsageThreshold;
-  const critRemaining = 100 - settings.criticalUsageThreshold;
   const opacityFraction = Math.max(0.3, Math.min(1, settings.floatBarOpacity / 100));
 
   return (
@@ -543,8 +550,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
             <ProviderPill
               key={providerCostKey(p)}
               provider={p}
-              highRemaining={highRemaining}
-              critRemaining={critRemaining}
+              thresholds={settings}
               showAsUsed={settings.showAsUsed}
               scale={scale}
               showResetInline={showResetInline}

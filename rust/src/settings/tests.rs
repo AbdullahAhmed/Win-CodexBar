@@ -2238,3 +2238,77 @@ fn spend_dashboard_hidden_sources_default_empty_normalize_and_round_trip() {
         ["codex", "pi"]
     );
 }
+
+#[test]
+fn quota_warning_migration_saves_a_legacy_file_once_without_the_old_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("settings.json");
+    std::fs::write(
+        &path,
+        r#"{ "provider_usage_thresholds": { "codex:session": { "high": 80.0 } } }"#,
+    )
+    .expect("seed legacy file");
+    let mut settings = Settings::load_from_path(Some(&path));
+    assert!(settings.legacy_usage_thresholds_pending);
+
+    let mut saves = 0;
+    settings.apply_quota_warning_migration_with(|s| {
+        saves += 1;
+        s.save_to_path(&path)
+    });
+    assert_eq!(saves, 1);
+    assert!(!settings.legacy_usage_thresholds_pending);
+    let saved: serde_json::Value =
+        serde_json::from_str(&crate::secure_file::read_string(&path).expect("read back"))
+            .expect("saved json");
+    assert!(saved.get("provider_usage_thresholds").is_none());
+    assert_eq!(
+        saved["provider_configs"]["codex"]["quota_warnings"]["session"]["high"],
+        serde_json::json!(80.0)
+    );
+
+    // The rewritten file no longer asks for a save.
+    let mut reloaded = Settings::load_from_path(Some(&path));
+    assert!(!reloaded.legacy_usage_thresholds_pending);
+    reloaded.apply_quota_warning_migration_with(|_| {
+        saves += 1;
+        Ok(())
+    });
+    assert_eq!(saves, 1);
+}
+
+#[test]
+fn quota_warning_migration_retries_after_a_failed_save() {
+    let mut settings = load_settings_json(r#"{ "provider_usage_thresholds": { "claude": {} } }"#);
+    assert!(settings.legacy_usage_thresholds_pending);
+    settings.apply_quota_warning_migration_with(|_| Err(anyhow::anyhow!("disk full")));
+    assert!(settings.legacy_usage_thresholds_pending);
+    assert!(!Settings::default().legacy_usage_thresholds_pending);
+}
+
+#[test]
+fn custom_quota_warnings_with_explicit_enabled_round_trip() {
+    let mut settings = Settings::default();
+    let window = QuotaWarningWindow {
+        enabled: Some(true),
+        high: Some(55.0),
+        critical: Some(85.0),
+    };
+    settings.set_quota_warnings(
+        ProviderId::Codex,
+        ProviderQuotaWarnings {
+            session: window,
+            weekly: QuotaWarningWindow::default(),
+        },
+    );
+    let reloaded = load_settings_json(&serde_json::to_string(&settings).expect("serialize"));
+    assert_eq!(reloaded.quota_warnings(ProviderId::Codex).session, window);
+    assert!(reloaded.quota_warning_enabled(ProviderId::Codex, "session"));
+    assert_eq!(
+        reloaded.usage_thresholds(ProviderId::Codex, "session"),
+        UsageThresholds {
+            high: 55.0,
+            critical: 85.0,
+        }
+    );
+}
