@@ -705,6 +705,46 @@ fn detail_backed_flag_stays_out_of_json_output() {
 }
 
 #[test]
+fn copilot_monthly_windows_get_reset_window_pace_in_json_and_text() {
+    use chrono::Duration;
+    // Copilot windows have a reset date and no length: the CLI scores them
+    // against the calendar month ending at the reset, as the Mac does.
+    let reset = Utc::now() + Duration::days(10);
+    let cycle_minutes = f64::from(RateWindow::calendar_month_window_minutes(reset).unwrap());
+    let expected = 100.0 * (cycle_minutes - 10.0 * 1440.0) / cycle_minutes;
+    let usage = UsageSnapshot::new(RateWindow::with_details(5.0, None, Some(reset), None))
+        .with_secondary(RateWindow::with_details(5.0, None, Some(reset), None));
+
+    let json = render_json_result(ProviderId::Copilot, fetch_result(usage.clone()), None, None);
+    let primary = json["pace"]["primary"]["expectedUsedPercent"]
+        .as_f64()
+        .expect("copilot primary pace");
+    assert!((primary - expected).abs() < 0.01, "{primary} vs {expected}");
+    let secondary = json["pace"]["secondary"]["expectedUsedPercent"]
+        .as_f64()
+        .expect("copilot secondary pace");
+    // Without the capability the secondary would use a 7-day fallback and a
+    // 10-day reset would give no pace at all.
+    assert!(
+        (secondary - expected).abs() < 0.01,
+        "{secondary} vs {expected}"
+    );
+
+    let text = render_text_with_status(
+        ProviderId::Copilot,
+        &fetch_result(usage.clone()),
+        None,
+        false,
+        None,
+    );
+    assert_eq!(text.matches("  Pace:").count(), 2, "{text}");
+
+    // Codex has no reset-window capability: a length-less primary has no pace.
+    let codex = render_json_result(ProviderId::Codex, fetch_result(usage), None, None);
+    assert!(codex["pace"].is_null() || codex["pace"]["primary"].is_null());
+}
+
+#[test]
 fn json_pace_follows_weekly_work_days() {
     use chrono::{Datelike, Duration, Local, TimeZone};
     // Weekly window ending at the next local Monday 00:00, so it covers the

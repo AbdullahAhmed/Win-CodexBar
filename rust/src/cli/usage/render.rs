@@ -31,24 +31,30 @@ pub fn render_json_result(
     pace_work_days: Option<u8>,
 ) -> serde_json::Value {
     let usage = &result.usage;
-    let primary_pace = usage
-        .primary
-        .window_minutes
-        .is_some_and(|m| m == crate::core::SESSION_WINDOW_MINUTES)
-        .then(|| {
-            UsagePace::weekly(
-                &usage.primary,
-                None,
-                crate::core::SESSION_WINDOW_MINUTES,
-                pace_work_days,
-            )
-        })
-        .flatten()
-        .map(pace_json);
+    let primary_pace = lane_pace(provider_id, &usage.primary, pace_work_days, || {
+        usage
+            .primary
+            .window_minutes
+            .is_some_and(|m| m == crate::core::SESSION_WINDOW_MINUTES)
+            .then(|| {
+                UsagePace::weekly(
+                    &usage.primary,
+                    None,
+                    crate::core::SESSION_WINDOW_MINUTES,
+                    pace_work_days,
+                )
+            })
+            .flatten()
+    })
+    .map(pace_json);
     let secondary_pace = usage
         .secondary
         .as_ref()
-        .and_then(|w| UsagePace::weekly(w, None, w.window_minutes.unwrap_or(10080), pace_work_days))
+        .and_then(|w| {
+            lane_pace(provider_id, w, pace_work_days, || {
+                UsagePace::weekly(w, None, w.window_minutes.unwrap_or(10080), pace_work_days)
+            })
+        })
         .map(pace_json);
 
     let mut json_result = serde_json::json!({
@@ -157,6 +163,24 @@ pub(super) fn is_terminal() -> bool {
 
 /// Render usage as text with optional status. `pace_work_days` is
 /// `Settings::weekly_progress_work_days` (weekly pace only).
+/// Pace of one card lane. Providers that opt into reset-window pace score the
+/// lane against their resolved reset window (upstream `CLIRenderer.computePace`);
+/// every other window keeps the lane's own rule, `fallback`.
+fn lane_pace(
+    provider: ProviderId,
+    window: &RateWindow,
+    pace_work_days: Option<u8>,
+    fallback: impl FnOnce() -> Option<UsagePace>,
+) -> Option<UsagePace> {
+    let capability = provider.pace_capability();
+    let now = Utc::now();
+    if capability.supports_reset_window_pace(window, now) {
+        capability.reset_window_pace(window, now, pace_work_days)
+    } else {
+        fallback()
+    }
+}
+
 pub fn render_text_with_status(
     provider: ProviderId,
     result: &ProviderFetchResult,
@@ -172,6 +196,7 @@ pub fn render_text_with_status(
     append_account_lines(&mut lines, &result.usage);
     append_usage_window_lines(
         &mut lines,
+        provider,
         &result.usage,
         &metadata,
         use_color,
@@ -248,6 +273,7 @@ fn append_account_lines(lines: &mut Vec<String>, usage: &UsageSnapshot) {
 
 fn append_usage_window_lines(
     lines: &mut Vec<String>,
+    provider: ProviderId,
     usage: &UsageSnapshot,
     metadata: &crate::core::ProviderMetadata,
     use_color: bool,
@@ -263,9 +289,11 @@ fn append_usage_window_lines(
         *minutes == crate::core::SESSION_WINDOW_MINUTES
             || *minutes >= crate::core::WEEKLY_WINDOW_MINUTES
     });
-    if let Some(minutes) = pace_minutes
-        && let Some(pace) = UsagePace::weekly(&usage.primary, None, minutes, pace_work_days)
-    {
+    let primary_pace = lane_pace(provider, &usage.primary, pace_work_days, || {
+        pace_minutes
+            .and_then(|minutes| UsagePace::weekly(&usage.primary, None, minutes, pace_work_days))
+    });
+    if let Some(pace) = primary_pace {
         lines.push(format!(
             "  Pace:    {} {}",
             pace.stage.emoji(),
@@ -274,6 +302,7 @@ fn append_usage_window_lines(
     }
     append_secondary_window_line(
         lines,
+        provider,
         usage.secondary.as_ref(),
         usage
             .secondary_label
@@ -386,6 +415,7 @@ fn append_window_line(lines: &mut Vec<String>, label: &str, window: &RateWindow,
 
 fn append_secondary_window_line(
     lines: &mut Vec<String>,
+    provider: ProviderId,
     secondary: Option<&RateWindow>,
     label: &str,
     use_color: bool,
@@ -394,7 +424,10 @@ fn append_secondary_window_line(
     if let Some(secondary) = secondary {
         append_window_line(lines, label, secondary, use_color);
         let window_minutes = secondary.window_minutes.unwrap_or(10080);
-        if let Some(pace) = UsagePace::weekly(secondary, None, window_minutes, pace_work_days) {
+        let pace = lane_pace(provider, secondary, pace_work_days, || {
+            UsagePace::weekly(secondary, None, window_minutes, pace_work_days)
+        });
+        if let Some(pace) = pace {
             lines.push(format!(
                 "  Pace:    {} {}",
                 pace.stage.emoji(),
