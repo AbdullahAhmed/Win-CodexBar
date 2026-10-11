@@ -218,6 +218,25 @@ fn tray_pace_color_defaults_off_and_round_trips() {
 }
 
 #[test]
+fn providers_sorted_alphabetically_defaults_off_and_round_trips() {
+    assert!(!Settings::default().providers_sorted_alphabetically);
+
+    let legacy: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
+        .expect("legacy file without the sidebar sort key");
+    assert!(!legacy.providers_sorted_alphabetically);
+
+    let sorted = Settings {
+        providers_sorted_alphabetically: true,
+        ..Settings::default()
+    };
+    let json = serde_json::to_string(&sorted).expect("serialize sidebar sort");
+    assert!(json.contains(r#""providers_sorted_alphabetically":true"#));
+
+    let loaded: Settings = serde_json::from_str(&json).expect("deserialize sidebar sort");
+    assert!(loaded.providers_sorted_alphabetically);
+}
+
+#[test]
 fn cost_reporting_period_defaults_to_thirty_days_and_round_trips() {
     let defaulted: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
         .expect("missing cost_reporting_period defaults");

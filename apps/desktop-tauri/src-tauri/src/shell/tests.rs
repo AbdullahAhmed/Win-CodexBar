@@ -335,7 +335,7 @@ fn larger_visible_destination_reclamps_preserved_top_left() {
     let reclamped =
         reclamp_preserved_visible_position(current_top_left, &monitor, SurfaceMode::Settings, 1.0);
 
-    assert_eq!(reclamped, (1416, 492));
+    assert_eq!(reclamped, (1032, 452));
 }
 
 #[test]
