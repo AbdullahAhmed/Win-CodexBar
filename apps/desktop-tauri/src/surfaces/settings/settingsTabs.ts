@@ -43,6 +43,72 @@ export function parseSettingsTabRequest(raw: string | null | undefined): Setting
 }
 
 /** The `open_settings_window` argument that opens Settings > Providers on one provider. */
-export function providersTabRequest(providerId: string): string {
+export function providersTabRequest(providerId: string): `providers:${string}` {
   return `providers:${providerId}`;
+}
+
+/** macOS system colors behind the white glyph of a sidebar pane chip. */
+export type SidebarChipColor = "gray" | "green" | "red" | "blue" | "teal" | "purple";
+
+export interface SidebarPane {
+  id: Exclude<SettingsTabId, "providers">;
+  labelKey: LocaleKey;
+  /** `null` shows the app icon instead of a chip (About). */
+  chip: SidebarChipColor | null;
+}
+
+/**
+ * App panes in the Settings sidebar, in the macOS 0.70 order
+ * (`PreferencesSidebar.swift` appPanesSection). iCloud Sync, Plugins and Debug
+ * have no Windows pane; Hooks arrives with its own pane later.
+ */
+export const SIDEBAR_PANES: SidebarPane[] = [
+  { id: "general", labelKey: "TabGeneral", chip: "gray" },
+  { id: "usageSpend", labelKey: "TabUsageSpend", chip: "green" },
+  { id: "notifications", labelKey: "TabNotifications", chip: "red" },
+  { id: "menuBar", labelKey: "TabMenuBar", chip: "blue" },
+  { id: "menu", labelKey: "TabMenu", chip: "teal" },
+  { id: "advanced", labelKey: "TabAdvanced", chip: "purple" },
+  { id: "about", labelKey: "TabAbout", chip: null },
+];
+
+interface NamedProvider {
+  id: string;
+  displayName: string;
+}
+
+/** Case-insensitive match on display name or id; a blank query keeps every provider. */
+export function filterProvidersByQuery<T extends NamedProvider>(providers: T[], query: string): T[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return providers;
+  return providers.filter(
+    (provider) =>
+      provider.displayName.toLocaleLowerCase().includes(needle) ||
+      provider.id.toLocaleLowerCase().includes(needle),
+  );
+}
+
+/**
+ * Enabled providers first, then by display name ignoring case, then by id
+ * (macOS `CodexBarConfig.alphabeticalProviderOrder`). Display only: the saved
+ * provider order is never rewritten.
+ */
+export function sortProvidersAlphabetically<T extends NamedProvider>(
+  providers: T[],
+  enabled: ReadonlySet<string>,
+): T[] {
+  return [...providers].sort((lhs, rhs) => {
+    const lhsOn = enabled.has(lhs.id);
+    if (lhsOn !== enabled.has(rhs.id)) return lhsOn ? -1 : 1;
+    const byName = lhs.displayName.localeCompare(rhs.displayName, undefined, {
+      sensitivity: "base",
+    });
+    if (byName !== 0) return byName;
+    return lhs.id < rhs.id ? -1 : lhs.id > rhs.id ? 1 : 0;
+  });
+}
+
+/** Reordering is only meaningful in the saved order with nothing filtered out (macOS). */
+export function canReorderProviders(sortedAlphabetically: boolean, query: string): boolean {
+  return !sortedAlphabetically && query.trim() === "";
 }
