@@ -62,6 +62,7 @@ fn fake_snapshot_with(
         }),
         plan_name: None,
         account_email: None,
+        account_label: None,
         subscription: None,
         source_label: String::new(),
         has_successful_claude_cli_quota: false,

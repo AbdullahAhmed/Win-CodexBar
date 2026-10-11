@@ -307,6 +307,10 @@ pub struct ProviderUsageSnapshot {
     pub plan_name: Option<String>,
     #[serde(default)]
     pub account_email: Option<String>,
+    /// Header-only label of the active token account (upstream shows it when
+    /// the provider reports no email). Never used for history or warning keys.
+    #[serde(default)]
+    pub account_label: Option<String>,
     #[serde(default)]
     pub subscription: Option<SubscriptionMetadataSnapshot>,
     #[serde(default = "default_source_label")]
@@ -569,6 +573,7 @@ impl ProviderUsageSnapshot {
             }),
             plan_name: usage.login_method.clone(),
             account_email: usage.account_email.clone(),
+            account_label: None,
             subscription: usage.subscription.as_ref().map(|subscription| {
                 SubscriptionMetadataSnapshot {
                     starts_at: subscription.starts_at.map(|date| date.to_rfc3339()),
@@ -630,6 +635,7 @@ impl ProviderUsageSnapshot {
             cost: None,
             plan_name: None,
             account_email: None,
+            account_label: None,
             subscription: None,
             source_label: String::new(),
             has_successful_claude_cli_quota: false,
