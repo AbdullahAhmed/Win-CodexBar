@@ -51,6 +51,11 @@ fn serve(responses: Vec<(u16, String)>) -> (LithosAIProvider, JoinHandle<Vec<Str
     )
 }
 
+/// For sessions that must never read a browser.
+fn no_browser() -> Result<Vec<(String, String)>, ProviderError> {
+    panic!("the browser must not be read")
+}
+
 fn context(header: &str) -> FetchContext {
     FetchContext {
         source_mode: SourceMode::Web,
@@ -63,7 +68,9 @@ async fn fetch(
     responses: Vec<(u16, String)>,
 ) -> (Result<ProviderFetchResult, ProviderError>, Vec<String>) {
     let (provider, server) = serve(responses);
-    let result = provider.fetch_web(&context(SESSION_HEADER), now()).await;
+    let result = provider
+        .fetch_web(&context(SESSION_HEADER), &no_browser, now())
+        .await;
     (result, server.join().expect("test server thread"))
 }
 
@@ -185,16 +192,24 @@ async fn the_parity_pack_payload_shows_balance_and_month_spend() {
 #[tokio::test]
 async fn zero_debt_and_subcent_balances_are_not_invented_quotas() {
     for (balance, cost_balance, shown) in [
-        ("0", 0.0, "$0.00"),
-        // The shared cost block floors balances at zero; the debt stays
-        // visible in the Balance row.
-        ("-1000000000", 0.0, "-$1.00"),
-        ("1000000", 0.001, "Less than $0.01"),
+        ("0", Some(0.0), "$0.00"),
+        // The shared cost block floors balances at zero, so a debt has no
+        // cost block and stays visible in the primary line and Balance row.
+        ("-1000000000", None, "-$1.00"),
+        ("1000000", Some(0.001), "Less than $0.01"),
     ] {
         let (result, _) = fetch(ok_responses(balance, EMPTY_SPEND)).await;
         let result = result.expect(balance);
-        assert_eq!(result.cost.as_ref().unwrap().balance, Some(cost_balance));
+        assert_eq!(
+            result.cost.as_ref().map(|cost| cost.balance),
+            cost_balance.map(Some),
+            "{balance}"
+        );
         assert!(result.usage.primary.is_informational);
+        assert_eq!(
+            result.usage.primary.reset_description.as_deref(),
+            Some(format!("Balance: {shown}").as_str())
+        );
         let rows = rows(&result);
         assert_eq!(rows[0], ("Balance".to_owned(), shown.to_owned()));
         assert_eq!(rows[3], ("Today (UTC)".to_owned(), "$0.00".to_owned()));
@@ -308,7 +323,7 @@ async fn an_expired_session_at_any_request_is_reported_as_expired() {
         responses[at - 1] = (401, "{}".to_owned());
         let (provider, server) = serve(responses);
         let error = provider
-            .fetch_web(&context(SESSION_HEADER), now())
+            .fetch_web(&context(SESSION_HEADER), &no_browser, now())
             .await
             .expect_err("expired");
         server.join().expect("test server thread");
@@ -335,7 +350,7 @@ async fn non_authentication_failures_map_to_upstream_messages() {
     ] {
         let (provider, server) = serve(vec![(status, "{}".to_owned())]);
         let error = provider
-            .fetch_web(&context(SESSION_HEADER), now())
+            .fetch_web(&context(SESSION_HEADER), &no_browser, now())
             .await
             .expect_err(message);
         server.join().expect("test server thread");
@@ -413,7 +428,7 @@ async fn both_console_cookies_are_required_before_any_request() {
         "session=other",
     ] {
         let error = provider
-            .fetch_web(&context(header), now())
+            .fetch_web(&context(header), &no_browser, now())
             .await
             .expect_err(header);
         assert!(
@@ -428,9 +443,155 @@ async fn both_console_cookies_are_required_before_any_request() {
         ..FetchContext::default()
     };
     assert!(matches!(
-        provider.fetch_web(&ctx, now()).await,
+        provider.fetch_web(&ctx, &no_browser, now()).await,
         Err(ProviderError::BrowserSignInRequired { .. })
     ));
+}
+
+const SESSION_A: &str = "__Host-console_session=fixture-a; __Host-console_csrf=csrf-a";
+const SESSION_B: &str = "__Host-console_session=fixture-b; __Host-console_csrf=csrf-b";
+
+fn browser_context() -> FetchContext {
+    FetchContext {
+        source_mode: SourceMode::Auto,
+        ..FetchContext::default()
+    }
+}
+
+fn two_browsers() -> Result<Vec<(String, String)>, ProviderError> {
+    Ok(vec![
+        ("Chrome".to_owned(), SESSION_A.to_owned()),
+        ("Edge".to_owned(), SESSION_B.to_owned()),
+    ])
+}
+
+#[tokio::test]
+async fn automatic_import_skips_a_browser_without_both_console_cookies() {
+    let (provider, server) = serve(ok_responses("4707099860", EMPTY_SPEND));
+    let browser = || {
+        Ok(vec![
+            (
+                "Chrome".to_owned(),
+                "__Host-console_session=fixture-a".to_owned(),
+            ),
+            ("Edge".to_owned(), SESSION_B.to_owned()),
+        ])
+    };
+    let result = provider
+        .fetch_web(&browser_context(), &browser, now())
+        .await;
+    let requests = server.join().expect("test server thread");
+    assert_eq!(rows(&result.expect("usage"))[0].1, "$4.71");
+    assert_eq!(requests.len(), 3);
+    for request in &requests {
+        assert_eq!(header(request, "cookie"), Some(SESSION_B));
+        assert_eq!(header(request, "x-console-csrf"), Some("csrf-b"));
+    }
+}
+
+#[tokio::test]
+async fn an_expired_browser_session_advances_to_the_next_browser() {
+    // Upstream `expired session advances to the next profile`: a 401 at any
+    // of the three requests rejects that session.
+    for at in 0..3 {
+        let mut responses = vec![(200, ME.to_owned()), (200, billing("4707099860"))];
+        responses.truncate(at);
+        responses.push((401, "{}".to_owned()));
+        responses.extend(ok_responses("4707099860", EMPTY_SPEND));
+        let (provider, server) = serve(responses);
+        let result = provider
+            .fetch_web(&browser_context(), &two_browsers, now())
+            .await;
+        let requests = server.join().expect("test server thread");
+        assert_eq!(rows(&result.expect("usage"))[0].1, "$4.71", "{at}");
+        assert_eq!(requests.len(), at + 4, "{at}");
+        for request in &requests[..=at] {
+            assert_eq!(header(request, "x-console-csrf"), Some("csrf-a"), "{at}");
+        }
+        assert_eq!(
+            requests[at + 1].lines().next(),
+            Some("GET /api/me HTTP/1.1")
+        );
+        for request in &requests[at + 1..] {
+            assert_eq!(header(request, "x-console-csrf"), Some("csrf-b"), "{at}");
+            assert_eq!(header(request, "cookie"), Some(SESSION_B), "{at}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn every_expired_browser_session_reports_an_expired_session() {
+    let (provider, server) = serve(vec![(401, "{}".to_owned()), (401, "{}".to_owned())]);
+    let error = provider
+        .fetch_web(&browser_context(), &two_browsers, now())
+        .await
+        .expect_err("expired");
+    assert_eq!(server.join().expect("test server thread").len(), 2);
+    assert_eq!(
+        error.to_string(),
+        "LithosAI session expired. Sign in again or paste fresh cookies."
+    );
+    assert_eq!(
+        provider.error_state_kind(&error),
+        ProviderStateKind::ExpiredSession
+    );
+}
+
+#[tokio::test]
+async fn a_non_authentication_failure_does_not_try_the_next_browser() {
+    let (provider, server) = serve(vec![(403, "{}".to_owned())]);
+    let error = provider
+        .fetch_web(&browser_context(), &two_browsers, now())
+        .await
+        .expect_err("denied");
+    assert_eq!(server.join().expect("test server thread").len(), 1);
+    assert_eq!(error.to_string(), "LithosAI console access was denied.");
+}
+
+#[tokio::test]
+async fn an_expired_manual_header_never_reads_a_browser() {
+    let (provider, server) = serve(vec![(401, "{}".to_owned())]);
+    let error = provider
+        .fetch_web(&context(SESSION_HEADER), &no_browser, now())
+        .await
+        .expect_err("expired");
+    assert_eq!(server.join().expect("test server thread").len(), 1);
+    assert_eq!(
+        error.to_string(),
+        "LithosAI session expired. Sign in again or paste fresh cookies."
+    );
+}
+
+#[tokio::test]
+async fn a_browser_read_failure_is_reported_when_no_session_is_usable() {
+    let provider = LithosAIProvider::with_client("http://127.0.0.1:9/", Client::new());
+    let blocked = || {
+        Err(ProviderError::Other(
+            "Failed to read browser cookies: synthetic app-bound encryption".to_owned(),
+        ))
+    };
+    assert_eq!(
+        provider
+            .fetch_web(&browser_context(), &blocked, now())
+            .await
+            .unwrap_err()
+            .to_string(),
+        "Failed to read browser cookies: synthetic app-bound encryption"
+    );
+    let no_cookies = || Err(ProviderError::NoCookies);
+    let csrf_only = || {
+        Ok(vec![(
+            "Chrome".to_owned(),
+            "__Host-console_csrf=csrf-a".to_owned(),
+        )])
+    };
+    for browser in [&no_cookies as &BrowserCookieHeaders, &csrf_only] {
+        let error = provider
+            .fetch_web(&browser_context(), browser, now())
+            .await
+            .expect_err("no usable session");
+        assert!(matches!(error, ProviderError::BrowserSignInRequired { .. }));
+    }
 }
 
 #[tokio::test]
@@ -495,6 +656,7 @@ fn metadata_matches_the_upstream_descriptor() {
         Some("https://console.lithosai.cloud")
     );
     assert!(!metadata.default_enabled);
+    assert!(provider.owns_browser_cookie_resolution());
     assert_eq!(
         provider.available_sources(),
         vec![SourceMode::Auto, SourceMode::Web]

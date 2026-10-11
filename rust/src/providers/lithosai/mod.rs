@@ -5,9 +5,10 @@
 //! key for billing: the console session cookies `__Host-console_session` and
 //! `__Host-console_csrf` read `/api/me`, `/api/billing` and the optional
 //! `/api/billing/spend`. The CSRF cookie value is echoed as `X-Console-Csrf`.
-//! Upstream imports only Chrome; Windows uses the shell's explicit browser
-//! selection or a pasted Cookie header. Response bodies are never echoed in
-//! errors and the cookies are never logged.
+//! A pasted or imported Cookie header is the only session tried. Without one,
+//! Automatic tries every detected browser holding both console cookies, in
+//! order, and moves to the next after a 401 (upstream `rejectCookie`).
+//! Response bodies are never echoed in errors and the cookies are never logged.
 
 mod model;
 #[cfg(test)]
@@ -40,11 +41,13 @@ const SIGN_IN_URL: &str = "https://console.lithosai.cloud";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RESPONSE_BYTES: usize = 512 * 1024;
 
-/// Upstream's message after every offered session answered 401. Windows has
-/// one session per refresh, so a 401 always ends here.
+/// Upstream's message after every offered session answered 401.
 const SESSION_EXPIRED: &str = "LithosAI session expired. Sign in again or paste fresh cookies.";
 const MISSING_SESSION: &str = "Sign in to console.lithosai.cloud in the selected browser, or paste its Cookie header with __Host-console_session and __Host-console_csrf.";
 const COOKIES_OFF: &str = "LithosAI cookies are disabled.";
+
+/// Every detected browser's Cookie header for the console, in browser order.
+type BrowserCookieHeaders = dyn Fn() -> Result<Vec<(String, String)>, ProviderError> + Sync;
 
 pub struct LithosAIProvider {
     metadata: ProviderMetadata,
@@ -88,48 +91,69 @@ impl LithosAIProvider {
         }
     }
 
+    /// Tries each candidate session in order. Only an expired session moves
+    /// on to the next candidate; any other failure ends the fetch.
     async fn fetch_web(
         &self,
         ctx: &FetchContext,
+        browser: &BrowserCookieHeaders,
         now: DateTime<Utc>,
     ) -> Result<ProviderFetchResult, ProviderError> {
-        let session = session(ctx)?;
+        let (sessions, browser_error) = sessions(ctx, browser);
+        if sessions.is_empty() {
+            return Err(browser_error.unwrap_or_else(missing_session));
+        }
         let client = self.client.as_ref().ok_or_else(|| {
             ProviderError::Other("Could not create a secure LithosAI HTTP client.".into())
         })?;
-        let console = Console {
-            client,
-            base_url: &self.base_url,
-            session: &session,
-            timeout: Duration::from_secs(ctx.web_timeout.max(1)).min(REQUEST_TIMEOUT),
-        };
-
-        let me = console.get("/api/me", None).await?;
-        let account = model::parse_me(&me)?;
-        let billing = console
-            .get("/api/billing", Some(&account.organization_id))
-            .await?;
-        let billing = model::parse_billing(&billing)?;
-
-        // Spend is optional: a broken report must not discard an
-        // authenticated balance, but an expired session still ends the fetch.
-        let (start, end) = model::spend_range(now);
-        let spend = match console
-            .get(
-                &format!("/api/billing/spend?start={start}&end={end}"),
-                Some(&account.organization_id),
-            )
-            .await
-        {
-            Ok(report) => model::parse_spend(&report, &start, &end).ok(),
-            Err(error) if is_session_expired(&error) => return Err(error),
-            Err(error) => {
-                tracing::debug!(%error, "LithosAI spend report is unavailable");
-                None
+        let timeout = Duration::from_secs(ctx.web_timeout.max(1)).min(REQUEST_TIMEOUT);
+        let mut last_error = None;
+        for session in &sessions {
+            let console = Console {
+                client,
+                base_url: &self.base_url,
+                session,
+                timeout,
+            };
+            match fetch_session(&console, now).await {
+                Err(error) if is_session_expired(&error) => last_error = Some(error),
+                result => return result,
             }
-        };
-        Ok(model::result(&account, &billing, spend))
+        }
+        Err(last_error.unwrap_or_else(missing_session))
     }
+}
+
+/// One session's me → billing → spend sequence.
+async fn fetch_session(
+    console: &Console<'_>,
+    now: DateTime<Utc>,
+) -> Result<ProviderFetchResult, ProviderError> {
+    let me = console.get("/api/me", None).await?;
+    let account = model::parse_me(&me)?;
+    let billing = console
+        .get("/api/billing", Some(&account.organization_id))
+        .await?;
+    let billing = model::parse_billing(&billing)?;
+
+    // Spend is optional: a broken report must not discard an authenticated
+    // balance, but an expired session still rejects this session.
+    let (start, end) = model::spend_range(now);
+    let spend = match console
+        .get(
+            &format!("/api/billing/spend?start={start}&end={end}"),
+            Some(&account.organization_id),
+        )
+        .await
+    {
+        Ok(report) => model::parse_spend(&report, &start, &end).ok(),
+        Err(error) if is_session_expired(&error) => return Err(error),
+        Err(error) => {
+            tracing::debug!(%error, "LithosAI spend report is unavailable");
+            None
+        }
+    };
+    Ok(model::result(&account, &billing, spend))
 }
 
 impl Default for LithosAIProvider {
@@ -150,7 +174,14 @@ impl Provider for LithosAIProvider {
 
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         match ctx.source_mode {
-            SourceMode::Auto | SourceMode::Web => self.fetch_web(ctx, Utc::now()).await,
+            SourceMode::Auto | SourceMode::Web => {
+                self.fetch_web(
+                    ctx,
+                    &|| crate::providers::browser_cookie_headers_for_domain(COOKIE_DOMAIN),
+                    Utc::now(),
+                )
+                .await
+            }
             // The shell maps an Off cookie source to Cli for web-only
             // providers; upstream reports that cookies are disabled.
             SourceMode::Cli => Err(ProviderError::Other(COOKIES_OFF.into())),
@@ -172,6 +203,12 @@ impl Provider for LithosAIProvider {
         ManualEmptyCookiePolicy::FailClosedWeb
     }
 
+    /// The shell would import only the first browser's cookies; the provider
+    /// reads every browser so an expired session can move to the next one.
+    fn owns_browser_cookie_resolution(&self) -> bool {
+        true
+    }
+
     fn error_state_kind(&self, error: &ProviderError) -> ProviderStateKind {
         if is_session_expired(error) {
             ProviderStateKind::ExpiredSession
@@ -191,26 +228,45 @@ struct Session {
     csrf: String,
 }
 
-/// The pasted or shell-resolved Cookie header, else the selected browser's
-/// console cookies. Upstream requires both console cookies.
-fn session(ctx: &FetchContext) -> Result<Session, ProviderError> {
-    let header = match ctx.manual_cookie_header.as_deref() {
-        Some(header) => crate::providers::normalize_cookie_header(header),
-        None if ctx.manual_cookie_missing => None,
-        None => match crate::providers::browser_cookie_header(&[COOKIE_DOMAIN]) {
-            Ok(header) => crate::providers::normalize_cookie_header(&header),
-            Err(error) => {
-                tracing::debug!(%error, "LithosAI browser session is unavailable");
-                None
-            }
-        },
-    };
-    header
-        .and_then(|header| session_from_header(&header))
-        .ok_or_else(|| ProviderError::BrowserSignInRequired {
-            message: MISSING_SESSION.into(),
-            sign_in_url: SIGN_IN_URL.into(),
-        })
+fn missing_session() -> ProviderError {
+    ProviderError::BrowserSignInRequired {
+        message: MISSING_SESSION.into(),
+        sign_in_url: SIGN_IN_URL.into(),
+    }
+}
+
+/// Candidate sessions in upstream's order, plus a browser read failure worth
+/// reporting when no candidate is usable. A pasted or shell-resolved Cookie
+/// header is used alone, an empty Manual source offers nothing, and otherwise
+/// every browser holding both console cookies is a candidate.
+fn sessions(
+    ctx: &FetchContext,
+    browser: &BrowserCookieHeaders,
+) -> (Vec<Session>, Option<ProviderError>) {
+    if let Some(header) = ctx.manual_cookie_header.as_deref() {
+        let session = crate::providers::normalize_cookie_header(header)
+            .and_then(|header| session_from_header(&header));
+        return (session.into_iter().collect(), None);
+    }
+    if ctx.manual_cookie_missing {
+        return (Vec::new(), None);
+    }
+    match browser() {
+        Ok(headers) => (
+            headers
+                .iter()
+                .filter_map(|(_, header)| crate::providers::normalize_cookie_header(header))
+                .filter_map(|header| session_from_header(&header))
+                .collect(),
+            None,
+        ),
+        // No browser holds console cookies: the sign-in hint is clearer.
+        Err(ProviderError::NoCookies) => (Vec::new(), None),
+        Err(error) => {
+            tracing::debug!(%error, "LithosAI browser sessions are unavailable");
+            (Vec::new(), Some(error))
+        }
+    }
 }
 
 fn session_from_header(header: &str) -> Option<Session> {

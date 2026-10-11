@@ -131,16 +131,11 @@ impl IBMBobProvider {
     }
 
     async fn fetch_api(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
-        let token = normalize_api_key(&crate::providers::resolve_api_key(
+        let token = api_key_from(crate::providers::resolve_api_key(
             ctx.api_key.as_deref(),
             CREDENTIAL_TARGET,
             &[API_KEY_ENV],
-        )?)
-        .ok_or_else(|| {
-            ProviderError::NotInstalled(
-                "Missing IBM Bob API key. Add one in Settings or set BOBSHELL_API_KEY.".into(),
-            )
-        })?;
+        ))?;
         let client = self.client.as_ref().ok_or_else(|| {
             ProviderError::Other("Could not create a secure IBM Bob HTTP client.".into())
         })?;
@@ -214,6 +209,21 @@ impl Provider for IBMBobProvider {
 
     fn available_sources(&self) -> Vec<SourceMode> {
         vec![SourceMode::Auto, SourceMode::OAuth]
+    }
+}
+
+/// Normalize a resolved key; a missing or blank key gets upstream's
+/// `IBMBobUsageFetcher` message instead of the shared generic one.
+fn api_key_from(resolved: Result<String, ProviderError>) -> Result<String, ProviderError> {
+    let missing = || {
+        ProviderError::NotInstalled(
+            "Missing IBM Bob API key. Add one in Settings or set BOBSHELL_API_KEY.".into(),
+        )
+    };
+    match resolved {
+        Ok(raw) => normalize_api_key(&raw).ok_or_else(missing),
+        Err(ProviderError::NotInstalled(_)) => Err(missing()),
+        Err(error) => Err(error),
     }
 }
 

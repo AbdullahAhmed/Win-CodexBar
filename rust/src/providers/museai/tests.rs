@@ -65,17 +65,16 @@ fn the_maximum_plan_maps_weekly_usage_tokens_renewal_and_top_up() {
     );
     assert_eq!(usage.login_method.as_deref(), Some("Maximum"));
     assert!(usage.secondary.is_none());
-    assert_eq!(usage.extra_rate_windows.len(), 1);
-    let top_up = &usage.extra_rate_windows[0];
-    assert_eq!(top_up.id, "topup");
-    assert_eq!(top_up.title, "Additional tokens");
-    assert_eq!(top_up.window.used_percent, 25.0);
-    assert_eq!(
-        top_up.window.reset_description.as_deref(),
-        Some("1.5B tokens left")
-    );
-    assert!(top_up.window.description_is_detail);
-    assert!(top_up.window.resets_at.is_none());
+    // Upstream returns the top-up as a detail row, never as a quota bar.
+    assert!(usage.extra_rate_windows.is_empty());
+    assert_eq!(result.display_details().len(), 1);
+    let top_up = &result.display_details()[0];
+    assert_eq!(top_up.id(), "topup");
+    assert_eq!(top_up.title(), "Additional tokens");
+    assert_eq!(top_up.value(), "1.5B tokens left");
+    assert!(top_up.section_title().is_none());
+    let progress = top_up.progress().expect("top-up progress");
+    assert_eq!(progress.used() / progress.total(), 0.25);
     assert_eq!(result.source_label, "web");
 }
 
@@ -91,25 +90,18 @@ fn an_unlabeled_top_up_shows_its_micro_dollar_balance_in_usd() {
             r#""topupBalance":80000000,"topupTotal":80000000"#,
         );
     let result = result(&body).expect("unlabeled top-up");
-    let top_up = &result.usage.extra_rate_windows[0];
-    assert_eq!(
-        top_up.window.reset_description.as_deref(),
-        Some("$80.00 left")
-    );
-    assert_eq!(top_up.window.used_percent, 0.0);
+    assert!(result.usage.extra_rate_windows.is_empty());
+    let top_up = &result.display_details()[0];
+    assert_eq!(top_up.value(), "$80.00 left");
+    let progress = top_up.progress().expect("top-up progress");
+    assert_eq!(progress.used() / progress.total(), 0.0);
 }
 
 #[test]
 fn a_top_up_label_without_a_token_count_is_kept_verbatim() {
     let body = MAXIMUM.replace("25% used (1.5B tokens left)", "25% used");
     let result = result(&body).expect("plain top-up label");
-    assert_eq!(
-        result.usage.extra_rate_windows[0]
-            .window
-            .reset_description
-            .as_deref(),
-        Some("25% used")
-    );
+    assert_eq!(result.display_details()[0].value(), "25% used");
 }
 
 #[test]
@@ -156,7 +148,11 @@ fn the_parity_pack_payload_maps_to_power_at_34_percent() {
         Some("1.9B tokens left")
     );
     assert_eq!(result.usage.login_method.as_deref(), Some("Power"));
-    assert_eq!(result.usage.extra_rate_windows[0].window.used_percent, 25.0);
+    assert!(result.usage.extra_rate_windows.is_empty());
+    let progress = result.display_details()[0]
+        .progress()
+        .expect("top-up progress");
+    assert_eq!(progress.used() / progress.total(), 0.25);
 }
 
 #[test]
@@ -178,13 +174,9 @@ fn usage_is_clamped_and_the_plan_falls_back_to_the_usage_row_label() {
 #[test]
 fn a_zero_top_up_total_hides_the_top_up() {
     let body = MAXIMUM.replace(r#""topupTotal":80000000"#, r#""topupTotal":0"#);
-    assert!(
-        result(&body)
-            .expect("zero total")
-            .usage
-            .extra_rate_windows
-            .is_empty()
-    );
+    let result = result(&body).expect("zero total");
+    assert!(result.usage.extra_rate_windows.is_empty());
+    assert!(result.display_details().is_empty());
 }
 
 #[test]

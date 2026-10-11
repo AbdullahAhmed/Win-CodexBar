@@ -245,12 +245,157 @@ fn weekly_cost_with_next_regen_amount_drives_the_weekly_regen_line() {
     assert!(weekly.description_is_detail);
     assert_eq!(weekly.window_minutes, None);
     assert_eq!(result.usage.login_method.as_deref(), Some("Pro"));
-    let cost = result.cost.expect("weekly cost");
-    assert_eq!(cost.period, "Weekly");
-    assert_eq!(cost.currency_code, "USD");
-    assert_eq!(cost.used, 400.0);
-    assert_eq!(cost.limit, Some(1000.0));
-    assert_eq!(cost.resets_at, at(NOW + 86_400));
+    // The Mac card hides Synthetic's cost block, so the credits never reach
+    // the result.
+    assert!(result.cost.is_none());
+}
+
+/// Upstream `ProviderPluginParityTests` "Synthetic fixture matches the
+/// cut-over golden" payload.
+const CUT_OVER_GOLDEN: &str = r#"{
+  "plan": "Starter",
+  "weeklyTokenLimit": {
+    "nextRegenAt": "2026-04-17T05:19:30.000Z",
+    "percentRemaining": 98.05884722222223,
+    "maxCredits": "$36.00",
+    "remainingCredits": "$35.30",
+    "nextRegenCredits": "$0.72"
+  },
+  "rollingFiveHourLimit": {
+    "nextTickAt": "2026-04-17T03:44:11.000Z",
+    "tickPercent": 0.05,
+    "remaining": 600,
+    "max": 750,
+    "limited": false
+  },
+  "search": {
+    "hourly": {
+      "limit": 250,
+      "requests": 2,
+      "renewsAt": "2026-04-17T04:30:01.494Z"
+    }
+  }
+}"#;
+
+fn at_millis(millis: i64) -> Option<DateTime<Utc>> {
+    Utc.timestamp_millis_opt(millis).single()
+}
+
+#[test]
+fn cut_over_golden_parses_like_upstream() {
+    let payload: Value = serde_json::from_str(CUT_OVER_GOLDEN).expect("golden is JSON");
+    let parsed = parse_quotas(&payload).expect("golden parses");
+
+    let five_hour = parsed.primary.as_ref().expect("five-hour lane");
+    assert_eq!(five_hour.used_percent, 20.0);
+    assert_eq!(five_hour.window_minutes, None);
+    assert_eq!(five_hour.resets_at, at(1_776_397_451));
+    assert_eq!(five_hour.next_regen_percent, Some(5.0));
+
+    let weekly = parsed.secondary.as_ref().expect("weekly lane");
+    // Upstream asserts 1.9411527777777735 (100 - 98.05884722222223). serde_json
+    // without `float_roundtrip` reads 98.05884722222223 one ULP high, so the
+    // difference here is 1.4e-14 and never visible on the card.
+    assert_eq!(weekly.used_percent, 1.9411527777777593);
+    assert_eq!(weekly.window_minutes, None);
+    assert_eq!(weekly.resets_at, at(1_776_403_170));
+
+    let search = parsed.tertiary.as_ref().expect("search lane");
+    assert_eq!(search.used_percent, 0.8);
+    assert_eq!(search.window_minutes, None);
+    assert_eq!(search.resets_at, at_millis(1_776_400_201_494));
+
+    assert_eq!(parsed.plan.as_deref(), Some("Starter"));
+    // Upstream's providerCost numbers; parsed, but kept off the result.
+    assert_eq!(
+        parsed.cost,
+        Some(QuotaCost {
+            used: 0.7000000000000028,
+            limit: 36.0,
+            next_regen_amount: Some(0.72),
+        })
+    );
+}
+
+#[test]
+fn cut_over_golden_result_matches_the_mac_card() {
+    let payload: Value = serde_json::from_str(CUT_OVER_GOLDEN).expect("golden is JSON");
+    let result = parse_quotas(&payload).expect("golden parses").into_result();
+    let usage = &result.usage;
+
+    // 80% left + 5% per tick; 20 / 5 = 4 ticks to full.
+    assert_eq!(usage.primary.used_percent, 20.0);
+    assert_eq!(usage.primary.window_minutes, None);
+    assert_eq!(usage.primary.resets_at, at(1_776_397_451));
+    assert_eq!(
+        usage.primary.reset_description.as_deref(),
+        Some("85% after next regen · Full in ~4 regens")
+    );
+    assert!(usage.primary.description_is_detail);
+
+    // $0.72 / $36 = 2% per regen; $0.70 / $0.72 is under 1.5 ticks.
+    let weekly = usage.secondary.as_ref().expect("weekly lane");
+    assert_eq!(weekly.used_percent, 1.9411527777777593);
+    assert_eq!(weekly.window_minutes, None);
+    assert_eq!(weekly.resets_at, at(1_776_403_170));
+    assert_eq!(
+        weekly.reset_description.as_deref(),
+        Some("100% after next regen · Full in ~1 regen")
+    );
+    assert!(weekly.description_is_detail);
+
+    assert!(usage.tertiary.is_none());
+    assert_eq!(usage.extra_rate_windows.len(), 1);
+    let search = &usage.extra_rate_windows[0];
+    assert_eq!(search.id, "synthetic-search-hourly");
+    assert_eq!(search.title, "Search hourly");
+    assert_eq!(search.window.used_percent, 0.8);
+    assert_eq!(search.window.resets_at, at_millis(1_776_400_201_494));
+    assert!(!search.window.description_is_detail);
+
+    assert_eq!(usage.login_method.as_deref(), Some("Starter"));
+    assert!(result.cost.is_none());
+}
+
+/// Upstream `SyntheticPluginGoldenTests` "missing rolling lane keeps weekly
+/// and search slots".
+#[test]
+fn missing_rolling_lane_keeps_weekly_and_search_slots() {
+    let payload = serde_json::json!({
+        "weeklyTokenLimit": {
+            "nextRegenAt": "2026-04-17T05:19:30.000Z",
+            "percentRemaining": 98.0,
+            "maxCredits": "$36.00",
+            "remainingCredits": "$35.30",
+            "nextRegenCredits": "$0.72"
+        },
+        "search": {
+            "hourly": {
+                "limit": 250,
+                "requests": 2,
+                "renewsAt": "2026-04-17T04:30:01.494Z"
+            }
+        }
+    });
+    let parsed = parse_quotas(&payload).expect("payload parses");
+    assert!(parsed.primary.is_none());
+    assert_eq!(
+        parsed.cost.as_ref().map(|cost| (cost.used, cost.limit)),
+        Some((0.7000000000000028, 36.0))
+    );
+
+    let result = parsed.into_result();
+    let usage = &result.usage;
+    assert!(usage.primary.is_informational);
+    let weekly = usage.secondary.as_ref().expect("weekly lane");
+    assert_eq!(weekly.used_percent, 2.0);
+    assert_eq!(
+        weekly.reset_description.as_deref(),
+        Some("100% after next regen · Full in ~1 regen")
+    );
+    assert_eq!(usage.extra_rate_windows.len(), 1);
+    assert_eq!(usage.extra_rate_windows[0].window.used_percent, 0.8);
+    assert!(result.cost.is_none());
 }
 
 #[test]
@@ -367,8 +512,7 @@ fn keyed_context() -> FetchContext {
 
 #[tokio::test]
 async fn sends_a_bearer_request_and_parses_the_pack_payload() {
-    let now = Utc::now().timestamp();
-    let (provider, server) = provider_serving("200 OK", pack_payload(now).to_string());
+    let (provider, server) = provider_serving("200 OK", pack_payload(NOW).to_string());
 
     let result = provider
         .fetch_usage(&keyed_context())

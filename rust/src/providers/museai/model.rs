@@ -10,7 +10,8 @@ use regex_lite::Regex;
 use serde_json::Value;
 
 use crate::core::{
-    ProviderError, ProviderFetchResult, RateWindow, SubscriptionMetadata, UsageSnapshot,
+    ProviderDisplayDetail, ProviderError, ProviderFetchResult, RateWindow, SubscriptionMetadata,
+    UsageSnapshot,
 };
 use crate::providers::format;
 
@@ -130,22 +131,21 @@ fn string<'a>(object: &'a Value, key: &str) -> Option<&'a str> {
 }
 
 /// The top-up balance (purchased or referral tokens outside the weekly
-/// allowance), when muse.ai reports a positive total.
-fn top_up(subscription: &Value) -> Option<RateWindow> {
+/// allowance), when muse.ai reports a positive total. Upstream returns it as
+/// a detail row with a progress bar, not as a quota window.
+fn top_up(subscription: &Value) -> Option<ProviderDisplayDetail> {
     let balance = subscription.get("topupBalance")?.as_f64()?;
     let total = subscription.get("topupTotal")?.as_f64()?;
     if total <= 0.0 {
         return None;
     }
+    let title = string(subscription, "topupRowLabel").unwrap_or("Additional tokens");
     let label = string(subscription, "topupRowValueLabel");
     let value = tokens_left(label)
         .or_else(|| label.map(str::to_owned))
         .unwrap_or_else(|| format!("{} left", format::usd(balance / MICRO_DOLLARS_PER_USD)));
     let used = ((total - balance) / total).clamp(0.0, 1.0);
-    Some(
-        RateWindow::with_details(used * 100.0, None, None, Some(value))
-            .with_description_as_detail(),
-    )
+    ProviderDisplayDetail::new("topup", title, value)?.with_progress(used, 1.0)
 }
 
 /// Maps the subscription server-action response to the card.
@@ -192,9 +192,5 @@ pub(super) fn result(body: &str) -> Result<ProviderFetchResult, ProviderError> {
         usage =
             usage.with_subscription(Some(SubscriptionMetadata::new(None, None, Some(renews_at))));
     }
-    if let Some(window) = top_up(&subscription) {
-        let title = string(&subscription, "topupRowLabel").unwrap_or("Additional tokens");
-        usage = usage.with_extra_rate_window("topup", title, window);
-    }
-    Ok(ProviderFetchResult::new(usage, "web"))
+    Ok(ProviderFetchResult::new(usage, "web").with_display_detail(top_up(&subscription)))
 }
