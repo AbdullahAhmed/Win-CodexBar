@@ -431,6 +431,39 @@ describe("TrayPanel provider grid", () => {
     expect(screen.queryByRole("button", { name: "UsageSpendShare" })).not.toBeInTheDocument();
   });
 
+  it("hides overview spend when Track costs is off", async () => {
+    tauriMocks.getUsageSpendSummary.mockResolvedValue({
+      contract: {},
+      reportingPeriod: "rolling:30",
+      reportingDay: "2026-09-19",
+      dashboardTimezone: "UTC",
+      costTrackingEnabled: false,
+      rows: [
+        {
+          providerId: "codex",
+          displayName: "Codex",
+          sevenDay: 1,
+          thirtyDay: 2,
+          periodCost: 2,
+          periodTokens: null,
+          currency: "USD",
+          source: "local",
+          includedInOverview: true,
+        },
+      ],
+    });
+
+    const { container } = renderTrayPanel([provider("codex", "Codex", 35)]);
+
+    await waitFor(() => {
+      expect(container.querySelector(".tray-panel-reveal--ready")).not.toBeNull();
+    });
+    await waitFor(() => expect(tauriMocks.getUsageSpendSummary).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(screen.queryByText(/providers have spend/)).not.toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/\$2\.00/);
+  });
+
   it("dismisses the tray panel on unmodified Escape", async () => {
     const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
 

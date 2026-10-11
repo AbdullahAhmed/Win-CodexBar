@@ -203,7 +203,10 @@ function OverviewSpendSummary({
 
   // Overview consumes the same backend spend catalog as Usage & Spend. Do not
   // restrict accounting to whichever cards happen to be rendered in this tray.
-  const overviewSummary = summary ? filterUsageSpendSummaryForOverview(summary) : null;
+  // Track costs off: no local estimates anywhere, so no Overview spend either.
+  const overviewSummary = summary && summary.costTrackingEnabled !== false
+    ? filterUsageSpendSummaryForOverview(summary)
+    : null;
 
   if (!overviewSummary) return null;
   // The summary names the History window its period columns cover.
