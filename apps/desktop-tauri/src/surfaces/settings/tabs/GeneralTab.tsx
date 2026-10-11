@@ -2,9 +2,22 @@ import { useCallback, useEffect, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { getAppInfo, playNotificationSound, quitApp } from "../../../lib/tauri";
+import {
+  getAppInfo,
+  playNotificationSound,
+  quitApp,
+  registerGlobalShortcut,
+  unregisterGlobalShortcut,
+} from "../../../lib/tauri";
 import type { AppInfoBridge } from "../../../types/bridge";
-import { Field, NumberInput, Select, Toggle } from "../../../components/FormControls";
+import {
+  Field,
+  NumberInput,
+  Select,
+  SettingsGroup,
+  Toggle,
+} from "../../../components/FormControls";
+import { ShortcutCapture } from "../../../components/ShortcutCapture";
 import type {
   Language,
   LanguageOption,
@@ -17,6 +30,8 @@ import type {
 import type { LocaleKey } from "../../../i18n/keys";
 import { CURRENCY_PICKER_OPTIONS } from "../../../lib/currency";
 import type { TabProps } from "../settingsTabs";
+import PreferencesTransferSection from "./PreferencesTransferSection";
+import SwitcherShortcutsDialog from "../SwitcherShortcutsDialog";
 
 const FALLBACK_LANGUAGE_OPTIONS: LanguageOption[] = [
   { value: "english", display: "English" },
@@ -31,14 +46,17 @@ const FALLBACK_LANGUAGE_OPTIONS: LanguageOption[] = [
   { value: "ukrainian", display: "Українська" },
 ];
 
+// Mac order (Manual, minutes, Adaptive last) plus the Windows "1 hour",
+// which existing installs may have saved.
 const REFRESH_CADENCE_OPTIONS: { value: string; labelKey: LocaleKey }[] = [
   { value: "0", labelKey: "RefreshIntervalManual" },
-  { value: "adaptive", labelKey: "RefreshIntervalAdaptive" },
   { value: "60", labelKey: "RefreshInterval1Min" },
+  { value: "120", labelKey: "RefreshInterval2Min" },
   { value: "300", labelKey: "RefreshInterval5Min" },
   { value: "900", labelKey: "RefreshInterval15Min" },
   { value: "1800", labelKey: "RefreshInterval30Min" },
   { value: "3600", labelKey: "RefreshInterval1Hour" },
+  { value: "adaptive", labelKey: "RefreshIntervalAdaptive" },
 ];
 
 const NOTIFICATION_SOUND_THEME_OPTIONS: {
@@ -109,7 +127,7 @@ const THEME_OPTIONS: { value: ThemePreference; labelKey: LocaleKey }[] = [
   { value: "auto", labelKey: "ThemeAutoOption" },
   { value: "light", labelKey: "ThemeLightOption" },
   { value: "dark", labelKey: "ThemeDarkOption" },
-]
+];
 
 function fileName(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
@@ -193,6 +211,8 @@ export default function GeneralTab({
   const { t } = useLocale();
   const [playingSound, setPlayingSound] = useState<NotificationSoundEvent | null>(null);
   const [soundError, setSoundError] = useState<string | null>(null);
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
   const [languageOptions, setLanguageOptions] = useState<LanguageOption[]>(
     FALLBACK_LANGUAGE_OPTIONS,
   );
@@ -262,206 +282,409 @@ export default function GeneralTab({
     [set, settings.notificationSoundPaths],
   );
 
+  const commitShortcut = useCallback(
+    async (accelerator: string) => {
+      setShortcutError(null);
+      try {
+        await registerGlobalShortcut(accelerator).catch(() => {});
+        set({ globalShortcut: accelerator });
+      } catch (err: unknown) {
+        setShortcutError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [set],
+  );
+
+  const clearShortcut = useCallback(async () => {
+    setShortcutError(null);
+    try {
+      await unregisterGlobalShortcut().catch(() => {});
+      set({ globalShortcut: "" });
+    } catch (err: unknown) {
+      setShortcutError(err instanceof Error ? err.message : String(err));
+    }
+  }, [set]);
+
+  if (mode === "notifications") {
+    return (
+      <NotificationsPane
+        settings={settings}
+        set={set}
+        saving={saving}
+        playingSound={playingSound}
+        soundError={soundError}
+        onTestSound={handleTestSound}
+        onChooseSound={(pathKey) => void handleChooseSound(pathKey)}
+        onClearSound={handleClearSound}
+      />
+    );
+  }
+
+  const refreshValue = settings.adaptiveRefresh
+    ? "adaptive"
+    : String(settings.refreshIntervalSecs);
+  const refreshOptions = REFRESH_CADENCE_OPTIONS.map((o) => ({
+    value: o.value,
+    label: t(o.labelKey),
+  }));
+  // A saved interval outside the menu (for example 30 s from an older build)
+  // stays visible instead of the menu silently showing another value.
+  if (!refreshOptions.some((o) => o.value === refreshValue)) {
+    refreshOptions.push({
+      value: refreshValue,
+      label: `${settings.refreshIntervalSecs} s`,
+    });
+  }
+  const manualRefresh = !settings.adaptiveRefresh && settings.refreshIntervalSecs === 0;
+
   return (
     <>
-      {mode === "general" && <section className="settings-section">
-        <h3 className="settings-section__title">{t("SectionLanguage")}</h3>
-        <div className="settings-section__group">
-          <Field label={t("InterfaceLanguage")}>
-            <Select
-              value={settings.uiLanguage}
-              disabled={saving}
-              options={languageOptions.map((opt) => ({
-                value: opt.value,
-                label: opt.display,
-              }))}
-              onChange={(v) => set({ uiLanguage: v as Language })}
-            />
-          </Field>
-          <Field label={t("PreferredCurrencyLabel")} description={t("PreferredCurrencyHelper")}>
-            <Select
-              value={settings.preferredCurrencyCode ?? "AUTO"}
-              disabled={saving}
-              ariaLabel={t("PreferredCurrencyLabel")}
-              options={[
-                { value: "AUTO", label: "AUTO" },
-                ...CURRENCY_PICKER_OPTIONS,
-              ]}
-              onChange={(value) => set({ preferredCurrencyCode: value })}
-            />
-          </Field>
-        </div>
-      </section>}
+      <SettingsGroup title={t("StartupSettings")}>
+        <Field label={t("InterfaceLanguage")} description={t("GeneralLanguageHelper")}>
+          <Select
+            variant="menu"
+            value={settings.uiLanguage}
+            disabled={saving}
+            options={languageOptions.map((opt) => ({
+              value: opt.value,
+              label: opt.display,
+            }))}
+            onChange={(v) => set({ uiLanguage: v as Language })}
+          />
+        </Field>
+        <Field label={t("PreferredCurrencyLabel")} description={t("PreferredCurrencyHelper")}>
+          <Select
+            variant="menu"
+            value={settings.preferredCurrencyCode ?? "AUTO"}
+            disabled={saving}
+            ariaLabel={t("PreferredCurrencyLabel")}
+            options={[
+              { value: "AUTO", label: "AUTO" },
+              ...CURRENCY_PICKER_OPTIONS,
+            ]}
+            onChange={(value) => set({ preferredCurrencyCode: value })}
+          />
+        </Field>
+        <Field label={t("Appearance")} description={t("ThemeHelper")}>
+          <Select
+            variant="menu"
+            value={settings.theme}
+            disabled={saving}
+            ariaLabel={t("ThemeLabel")}
+            options={THEME_OPTIONS.map((option) => ({
+              value: option.value,
+              label: t(option.labelKey),
+            }))}
+            onChange={(value) => set({ theme: value as ThemePreference })}
+          />
+        </Field>
+        <Field label={t("StartAtLogin")}>
+          <Toggle
+            variant="switch"
+            checked={settings.startAtLogin}
+            disabled={saving}
+            onChange={(v) => set({ startAtLogin: v })}
+          />
+        </Field>
+        <Field label={t("StartMinimized")} description={t("StartMinimizedHelper")}>
+          <Toggle
+            variant="switch"
+            checked={settings.startMinimized}
+            disabled={saving}
+            onChange={(v) => set({ startMinimized: v })}
+          />
+        </Field>
+      </SettingsGroup>
 
-      {mode === "general" && <section className="settings-section">
-        <h3 className="settings-section__title">{t("SectionTheme")}</h3>
-        <div className="settings-section__group">
-          <Field label={t("ThemeLabel")} description={t("ThemeHelper")}>
-            <Select
-              value={settings.theme}
+      <SettingsGroup
+        title={t("SectionRefreshing")}
+        footer={manualRefresh ? <p>{t("RefreshManualFooter")}</p> : undefined}
+      >
+        <Field label={t("RefreshIntervalLabel")}>
+          <Select
+            variant="menu"
+            value={refreshValue}
+            disabled={saving}
+            options={refreshOptions}
+            onChange={(v) => {
+              if (v === "adaptive") {
+                set({ adaptiveRefresh: true });
+                return;
+              }
+              set({
+                adaptiveRefresh: false,
+                refreshIntervalSecs: Number(v),
+              });
+            }}
+          />
+        </Field>
+        <Field label={t("RefreshAllProvidersOnMenuOpen")}>
+          <Toggle
+            variant="switch"
+            checked={settings.refreshAllProvidersOnMenuOpen}
+            disabled={saving}
+            onChange={(v) => set({ refreshAllProvidersOnMenuOpen: v })}
+          />
+        </Field>
+        <Field label={t("LowPowerMode")} description={t("LowPowerModeHelper")}>
+          <Select
+            variant="menu"
+            value={settings.lowPowerModePreference ?? (settings.lowPowerMode ? "on" : "off")}
+            disabled={saving}
+            options={[
+              { value: "off", label: t("LowPowerModeOff") },
+              { value: "on", label: t("LowPowerModeOn") },
+              { value: "automatic", label: t("LowPowerModeAutomatic") },
+            ]}
+            onChange={(v) => set({
+              lowPowerModePreference: v as "off" | "on" | "automatic",
+            })}
+          />
+        </Field>
+      </SettingsGroup>
+
+      <PreferencesTransferSection onOpenSwitcherShortcuts={() => setSwitcherOpen(true)} />
+
+      <SettingsGroup
+        title={t("SectionKeyboard")}
+        footer={
+          <>
+            {shortcutError && (
+              <p className="settings-group__error" role="alert">{shortcutError}</p>
+            )}
+            <p>{t("ShortcutRecordingHint")}</p>
+          </>
+        }
+      >
+        <Field label={t("GlobalShortcutFieldLabel")}>
+          <ShortcutCapture
+            value={settings.globalShortcut}
+            disabled={saving}
+            onCommit={(accel) => void commitShortcut(accel)}
+            onClear={() => void clearShortcut()}
+          />
+        </Field>
+      </SettingsGroup>
+
+      <div className="settings-pane-footer">
+        <span>
+          {appVersion &&
+            `${t("Version")} ${appVersion.version}${
+              appVersion.buildNumber !== "dev" ? ` (${appVersion.buildNumber})` : ""
+            }`}
+        </span>
+        <button
+          type="button"
+          className="credential-btn credential-btn--primary"
+          onClick={() => void quitApp()}
+        >
+          {t("QuitCodexBar")}
+        </button>
+      </div>
+
+      {switcherOpen && (
+        <SwitcherShortcutsDialog
+          settings={settings}
+          set={set}
+          saving={saving}
+          onClose={() => setSwitcherOpen(false)}
+        />
+      )}
+    </>
+  );
+}
+
+function NotificationsPane({
+  settings,
+  set,
+  saving,
+  playingSound,
+  soundError,
+  onTestSound,
+  onChooseSound,
+  onClearSound,
+}: TabProps & {
+  playingSound: NotificationSoundEvent | null;
+  soundError: string | null;
+  onTestSound: (event: NotificationSoundEvent) => void;
+  onChooseSound: (pathKey: NotificationSoundPathKey) => void;
+  onClearSound: (pathKey: NotificationSoundPathKey) => void;
+}) {
+  const { t } = useLocale();
+  // `show_notifications` still gates credential and pace alerts in the
+  // backend, so their switches lock (keeping their saved state) while
+  // threshold warnings are off. Quota depleted & restored has its own key.
+  const alertsMuted = !settings.showNotifications;
+  const values = settings.providerUsageThresholds ?? {};
+
+  return (
+    <>
+      <SettingsGroup title={t("SectionAlerts")}>
+        <Field
+          label={t("CredentialExpiryNotifications")}
+          description={t("CredentialExpiryNotificationsHelper")}
+        >
+          <Toggle
+            variant="switch"
+            checked={settings.credentialExpiryNotificationsEnabled}
+            ariaLabel={t("CredentialExpiryNotifications")}
+            disabled={saving || alertsMuted}
+            onChange={(v) => set({ credentialExpiryNotificationsEnabled: v })}
+          />
+        </Field>
+        <Field
+          label={t("SessionQuotaNotifications")}
+          description={t("SessionQuotaNotificationsHelper")}
+        >
+          <Toggle
+            variant="switch"
+            checked={
+              settings.sessionQuotaNotificationsEnabled ?? settings.showNotifications
+            }
+            ariaLabel={t("SessionQuotaNotifications")}
+            disabled={saving}
+            onChange={(v) => set({ sessionQuotaNotificationsEnabled: v })}
+          />
+        </Field>
+        <Field label={t("ShowNotifications")} description={t("ShowNotificationsHelper")}>
+          <Toggle
+            variant="switch"
+            checked={settings.showNotifications}
+            ariaLabel={t("ShowNotifications")}
+            disabled={saving}
+            onChange={(v) => set({ showNotifications: v })}
+          />
+        </Field>
+        <Field
+          label={t("PredictivePaceWarnings")}
+          description={t("PredictivePaceWarningsHelper")}
+        >
+          <Toggle
+            variant="switch"
+            checked={settings.predictivePaceWarningEnabled}
+            ariaLabel={t("PredictivePaceWarnings")}
+            disabled={saving || alertsMuted}
+            onChange={(v) => set({ predictivePaceWarningEnabled: v })}
+          />
+        </Field>
+      </SettingsGroup>
+
+      {settings.showNotifications && (
+        <SettingsGroup footer={<p>{t("ThresholdsCaption")}</p>}>
+          <Field label={t("WarningAtPercentUsed")}>
+            <NumberInput
+              value={settings.highUsageThreshold}
+              min={0}
+              max={100}
+              step={5}
               disabled={saving}
-              ariaLabel={t("ThemeLabel")}
-              options={THEME_OPTIONS.map((option) => ({
+              onChange={(v) => set({ highUsageThreshold: v })}
+            />
+          </Field>
+          <Field label={t("CriticalAtPercentUsed")}>
+            <NumberInput
+              value={settings.criticalUsageThreshold}
+              min={0}
+              max={100}
+              step={5}
+              disabled={saving}
+              onChange={(v) => set({ criticalUsageThreshold: v })}
+            />
+          </Field>
+        </SettingsGroup>
+      )}
+
+      <SettingsGroup>
+        <Field label={t("SoundEnabled")} description={t("SoundEnabledHelper")}>
+          <Toggle
+            variant="switch"
+            checked={settings.soundEnabled}
+            ariaLabel={t("SoundEnabled")}
+            disabled={saving}
+            onChange={(v) => set({ soundEnabled: v })}
+          />
+        </Field>
+        {settings.soundEnabled && (
+          <Field
+            label={t("NotificationSoundTheme")}
+            description={t("NotificationSoundThemeHelper")}
+          >
+            <Select
+              variant="menu"
+              value={settings.notificationSoundTheme}
+              disabled={saving}
+              ariaLabel={t("NotificationSoundTheme")}
+              minWidth={NOTIFICATION_SOUND_THEME_SELECT_MIN_WIDTH}
+              options={NOTIFICATION_SOUND_THEME_OPTIONS.map((option) => ({
                 value: option.value,
                 label: t(option.labelKey),
               }))}
-              onChange={(value) => set({ theme: value as ThemePreference })}
+              onChange={(value) => {
+                if (isNotificationSoundTheme(value)) {
+                  set({ notificationSoundTheme: value });
+                }
+              }}
             />
           </Field>
-        </div>
-      </section>}
-      {mode === "general" && <section className="settings-section">
-        <h3 className="settings-section__title">{t("StartupSettings")}</h3>
-        <div className="settings-section__group">
-          <Field label={t("StartAtLogin")} description={t("StartAtLoginHelper")} leading>
-            <Toggle
-              checked={settings.startAtLogin}
-              disabled={saving}
-              onChange={(v) => set({ startAtLogin: v })}
-            />
-          </Field>
-          <Field
-            label={t("StartMinimized")}
-            description={t("StartMinimizedHelper")}
-            leading
-          >
-            <Toggle
-              checked={settings.startMinimized}
-              disabled={saving}
-              onChange={(v) => set({ startMinimized: v })}
-            />
-          </Field>
-        </div>
-      </section>}
-
-      {mode === "notifications" && <section className="settings-section">
-        <h3 className="settings-section__title">
-          {t("SectionNotifications")}
-        </h3>
-        <div className="settings-section__group">
-          <Field
-            label={t("ShowNotifications")}
-            description={t("ShowNotificationsHelper")}
-            leading
-          >
-            <Toggle
-              checked={settings.showNotifications}
-              disabled={saving}
-              onChange={(v) => set({ showNotifications: v })}
-            />
-          </Field>
-          <Field
-            label={t("PredictivePaceWarnings")}
-            description={t("PredictivePaceWarningsHelper")}
-            leading
-          >
-            <Toggle
-              checked={settings.predictivePaceWarningEnabled}
-              ariaLabel={t("PredictivePaceWarnings")}
-              disabled={saving}
-              onChange={(v) => set({ predictivePaceWarningEnabled: v })}
-            />
-          </Field>
-          <Field
-            label={t("CredentialExpiryNotifications")}
-            description={t("CredentialExpiryNotificationsHelper")}
-            leading
-          >
-            <Toggle
-              checked={settings.credentialExpiryNotificationsEnabled}
-              ariaLabel={t("CredentialExpiryNotifications")}
-              disabled={saving}
-              onChange={(v) => set({ credentialExpiryNotificationsEnabled: v })}
-            />
-          </Field>
-          <Field label={t("SoundEnabled")} description={t("SoundEnabledHelper")} leading>
-            <Toggle
-              checked={settings.soundEnabled}
-              disabled={saving}
-              onChange={(v) => set({ soundEnabled: v })}
-            />
-          </Field>
-          {settings.soundEnabled && (
-            <>
-              <Field
-                label={t("NotificationSoundTheme")}
-                description={t("NotificationSoundThemeHelper")}
-              >
-                <Select
-                  value={settings.notificationSoundTheme}
-                  disabled={saving}
-                  ariaLabel={t("NotificationSoundTheme")}
-                  minWidth={NOTIFICATION_SOUND_THEME_SELECT_MIN_WIDTH}
-                  options={NOTIFICATION_SOUND_THEME_OPTIONS.map((option) => ({
-                    value: option.value,
-                    label: t(option.labelKey),
-                  }))}
-                  onChange={(value) => {
-                    if (isNotificationSoundTheme(value)) {
-                      set({ notificationSoundTheme: value });
-                    }
-                  }}
-                />
-              </Field>
-              {NOTIFICATION_SOUND_EVENTS.map((sound) => {
-                const path = settings.notificationSoundPaths[sound.pathKey];
-                const label = t(sound.labelKey);
-                return (
-                  <Field
-                    key={sound.event}
-                    label={label}
-                    description={t(sound.helperKey)}
+        )}
+        {settings.soundEnabled &&
+          NOTIFICATION_SOUND_EVENTS.map((sound) => {
+            const path = settings.notificationSoundPaths[sound.pathKey];
+            const label = t(sound.labelKey);
+            return (
+              <Field key={sound.event} label={label} description={t(sound.helperKey)}>
+                <div className="notification-sound-row">
+                  <button
+                    type="button"
+                    className="shortcut-capture__button shortcut-capture__button--ghost notification-sound-file"
+                    aria-label={`${label}: ${path ? `${fileName(path)}, ` : ""}${t("NotificationSoundChooseFile")}`}
+                    title={path ?? t("NotificationSoundUsesTheme")}
+                    disabled={saving}
+                    onClick={() => onChooseSound(sound.pathKey)}
                   >
-                    <div className="notification-sound-row">
-                      <button
-                        type="button"
-                        className="shortcut-capture__button shortcut-capture__button--ghost notification-sound-file"
-                        aria-label={`${label}: ${path ? `${fileName(path)}, ` : ""}${t("NotificationSoundChooseFile")}`}
-                        title={path ?? t("NotificationSoundUsesTheme")}
-                        disabled={saving}
-                        onClick={() => void handleChooseSound(sound.pathKey)}
-                      >
-                        {path ? fileName(path) : t("NotificationSoundChooseFile")}
-                      </button>
-                      <button
-                        type="button"
-                        className="shortcut-capture__button shortcut-capture__button--ghost"
-                        aria-label={`${label}: ${t("NotificationTestSound")}`}
-                        disabled={saving || playingSound !== null}
-                        onClick={() => handleTestSound(sound.event)}
-                      >
-                        {playingSound === sound.event
-                          ? t("NotificationTestSoundPlaying")
-                          : t("NotificationTestSound")}
-                      </button>
-                      {path && (
-                        <button
-                          type="button"
-                          className="shortcut-capture__button shortcut-capture__button--ghost"
-                          aria-label={`${label}: ${t("NotificationSoundClearFile")}`}
-                          disabled={saving}
-                          onClick={() => handleClearSound(sound.pathKey)}
-                        >
-                          {t("NotificationSoundClearFile")}
-                        </button>
-                      )}
-                    </div>
-                  </Field>
-                );
-              })}
-              {soundError && (
-                <p className="settings-section__error" role="alert">
-                  {soundError}
-                </p>
-              )}
-            </>
-          )}
-        </div>
-        <div className="settings-section__group">
+                    {path ? fileName(path) : t("NotificationSoundChooseFile")}
+                  </button>
+                  <button
+                    type="button"
+                    className="shortcut-capture__button shortcut-capture__button--ghost"
+                    aria-label={`${label}: ${t("NotificationTestSound")}`}
+                    disabled={saving || playingSound !== null}
+                    onClick={() => onTestSound(sound.event)}
+                  >
+                    {playingSound === sound.event
+                      ? t("NotificationTestSoundPlaying")
+                      : t("NotificationTestSound")}
+                  </button>
+                  {path && (
+                    <button
+                      type="button"
+                      className="shortcut-capture__button shortcut-capture__button--ghost"
+                      aria-label={`${label}: ${t("NotificationSoundClearFile")}`}
+                      disabled={saving}
+                      onClick={() => onClearSound(sound.pathKey)}
+                    >
+                      {t("NotificationSoundClearFile")}
+                    </button>
+                  )}
+                </div>
+              </Field>
+            );
+          })}
+        {soundError && (
+          <p className="settings-group__error" role="alert">
+            {soundError}
+          </p>
+        )}
+      </SettingsGroup>
+
+      {settings.showNotifications && (
+        <SettingsGroup
+          title={t("ThresholdOverridesTitle")}
+          footer={<p>{t("ThresholdOverridesCaption")}</p>}
+        >
           {(["codex", "claude"] as const).flatMap((provider) =>
             (["provider", "session", "weekly"] as const).map((window) => {
               const key = window === "provider" ? provider : `${provider}:${window}`;
-              const values = settings.providerUsageThresholds ?? {};
               const providerLabel =
                 provider === "codex"
                   ? t("ProviderNameCodex")
@@ -505,127 +728,7 @@ export default function GeneralTab({
               );
             }),
           )}
-        </div>
-      </section>}
-
-      {mode === "notifications" && <section className="settings-section">
-        <h3 className="settings-section__title">
-          {t("SectionUsageThresholds")}
-        </h3>
-        <div className="settings-section__group">
-          <Field
-            label={t("HighUsageAlert")}
-            description={t("HighUsageWarningHelper")}
-          >
-            <NumberInput
-              value={settings.highUsageThreshold}
-              min={0}
-              max={100}
-              step={5}
-              disabled={saving}
-              onChange={(v) => set({ highUsageThreshold: v })}
-            />
-          </Field>
-          <Field
-            label={t("CriticalUsageAlert")}
-            description={t("CriticalUsageWarningHelper")}
-          >
-            <NumberInput
-              value={settings.criticalUsageThreshold}
-              min={0}
-              max={100}
-              step={5}
-              disabled={saving}
-              onChange={(v) => set({ criticalUsageThreshold: v })}
-            />
-          </Field>
-        </div>
-      </section>}
-
-      {/* ── Automation ───────────────────────────────────────────── */}
-      {mode === "general" && <section className="settings-section">
-        <h3 className="settings-section__title">{t("SectionRefresh")}</h3>
-        <div className="settings-section__group">
-          <Field
-            label={t("RefreshIntervalLabel")}
-            description={t("RefreshIntervalHelper")}
-          >
-            <Select
-              value={
-                settings.adaptiveRefresh
-                  ? "adaptive"
-                  : String(settings.refreshIntervalSecs)
-              }
-              disabled={saving}
-              options={REFRESH_CADENCE_OPTIONS.map((o) => ({
-                value: o.value,
-                label: t(o.labelKey),
-              }))}
-              onChange={(v) => {
-                if (v === "adaptive") {
-                  set({ adaptiveRefresh: true });
-                  return;
-                }
-                set({
-                  adaptiveRefresh: false,
-                  refreshIntervalSecs: Number(v),
-                });
-              }}
-            />
-          </Field>
-          <Field
-            label={t("RefreshAllProvidersOnMenuOpen")}
-            description={t("RefreshAllProvidersOnMenuOpenHelper")}
-            leading
-          >
-            <Toggle
-              checked={settings.refreshAllProvidersOnMenuOpen}
-              disabled={saving}
-              onChange={(v) => set({ refreshAllProvidersOnMenuOpen: v })}
-            />
-          </Field>
-          <Field
-            label={t("LowPowerMode")}
-            description={t("LowPowerModeHelper")}
-          >
-            <Select
-              value={settings.lowPowerModePreference ?? (settings.lowPowerMode ? "on" : "off")}
-              disabled={saving}
-              options={[
-                { value: "off", label: t("LowPowerModeOff") },
-                { value: "on", label: t("LowPowerModeOn") },
-                { value: "automatic", label: t("LowPowerModeAutomatic") },
-              ]}
-              onChange={(v) => set({
-                lowPowerModePreference: v as "off" | "on" | "automatic",
-              })}
-            />
-          </Field>
-          <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 8 }}>
-            <button
-              type="button"
-              className="credential-btn credential-btn--primary"
-              onClick={() => void quitApp()}
-            >
-              {t("MenuQuit")}
-            </button>
-          </div>
-        </div>
-      </section>}
-
-      {/* ── Running version (upstream 0.64.0 #3806) ─────────────── */}
-      {mode === "general" && appVersion && (
-        <section className="settings-section">
-          <h3 className="settings-section__title">{t("Version")}</h3>
-          <div className="settings-section__group">
-            <Field label={appVersion.name}>
-              <span className="about-version">
-                {appVersion.version}
-                {appVersion.buildNumber !== "dev" && ` (${appVersion.buildNumber})`}
-              </span>
-            </Field>
-          </div>
-        </section>
+        </SettingsGroup>
       )}
     </>
   );
