@@ -3421,6 +3421,10 @@ html:has(.menu-surface--tray) {
   fill: color-mix(in srgb, var(--text-primary) 30%, transparent);
 }
 
+.menu-metric__progress-workday--high-contrast {
+  fill: color-mix(in srgb, var(--text-primary) 85%, transparent);
+}
+
 .menu-metric__progress-pace {
   fill: var(--mac-pace-ok, #34c759);
 }

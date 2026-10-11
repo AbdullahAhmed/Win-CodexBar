@@ -75,6 +75,10 @@ export type OverviewLayout = "detailed" | "compact";
 
 /** How cost is rendered on provider MenuCards (#2976). */
 export type CostSummaryDisplayStyle = "compact" | "detailed" | "hidden";
+/** Settings > Menu Bar > Menu bar style (`menu_bar_icon_style`). */
+export type MenuBarIconStyle = "bars" | "percent";
+/** Settings > Menu > Workday tick appearance (`workday_tick_style`). */
+export type WorkdayTickStyle = "hidden" | "subtle" | "high_contrast";
 export type FloatBarOrientation = "horizontal" | "vertical";
 export type FloatBarStyle = "floating" | "taskbar";
 
@@ -204,7 +208,13 @@ export interface SettingsSnapshot {
   stackedTrayBottomProvider?: string | null;
   switcherShowsIcons: boolean;
   menuBarShowsHighestUsage: boolean;
+  /** Legacy mirror of `menuBarIconStyle === "percent"`; kept one release. */
   menuBarShowsPercent: boolean;
+  menuBarIconStyle: MenuBarIconStyle;
+  /** Overview cards, at most 6; empty means the first 6 enabled providers. */
+  mergedOverviewSelectedProviders: string[];
+  quotaWarningMarkersVisible: boolean;
+  workdayTickStyle: WorkdayTickStyle;
   menuBarColorPace: boolean;
   /** Settings sidebar lists providers alphabetically, enabled first. Display only. */
   providersSortedAlphabetically: boolean;
@@ -287,7 +297,7 @@ export interface SettingsSnapshot {
    * Snapshot-side null and absent are equivalent.
    */
   copilotSeatCreditEntitlement?: number | null;
-  /** Optional work-week length [2,6] for session-equivalent weekly forecast. */
+  /** Optional work-week length [2,7]; null or absent means Automatic. */
   weeklyProgressWorkDays?: number | null;
   /** How cost is rendered on provider cards (#2976). */
   costSummaryDisplayStyle: CostSummaryDisplayStyle;
@@ -339,6 +349,10 @@ export interface SettingsUpdate {
   switcherShowsIcons?: boolean;
   menuBarShowsHighestUsage?: boolean;
   menuBarShowsPercent?: boolean;
+  menuBarIconStyle?: MenuBarIconStyle;
+  mergedOverviewSelectedProviders?: string[];
+  quotaWarningMarkersVisible?: boolean;
+  workdayTickStyle?: WorkdayTickStyle;
   menuBarColorPace?: boolean;
   providersSortedAlphabetically?: boolean;
   showAsUsed?: boolean;
@@ -398,6 +412,7 @@ export interface SettingsUpdate {
   alibabaTokenPlanRegion?: string;
   /** Optional user-entered Copilot seat AI-credit allowance; null clears it. */
   copilotSeatCreditEntitlement?: number | null;
+  /** 2..=7 work days; null selects Automatic. */
   weeklyProgressWorkDays?: number | null;
   costSummaryDisplayStyle?: CostSummaryDisplayStyle;
   openCodexUsageLogsEnabled?: boolean;

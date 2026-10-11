@@ -90,7 +90,9 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
               selectedProviderId === null && settings.overviewLayout !== "detailed",
             costSummaryDisplayStyle: settings.costSummaryDisplayStyle,
             usageThresholds: settings,
+            quotaWarningMarkersVisible: settings.quotaWarningMarkersVisible ?? true,
             weeklyProgressWorkDays: settings.weeklyProgressWorkDays ?? null,
+            workdayTickStyle: settings.workdayTickStyle ?? "subtle",
           }}
           accentColor={settings.providerAccentColors[p.providerId]}
           onLayoutChange={requestLayout}

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -97,7 +97,7 @@ describe("UsageSpendTab History window", () => {
     );
   });
 
-  it("scans once with the saved window and shows it selected", async () => {
+  it("scans once with the saved window and labels the period with it", async () => {
     render(<UsageSpendTab {...props} />);
 
     await waitFor(() => expect(tauriMocks.getUsageSpendSummary).toHaveBeenCalledTimes(1));
@@ -105,8 +105,6 @@ describe("UsageSpendTab History window", () => {
       period: "month-to-date",
       forceRefresh: false,
     });
-    const select = screen.getByLabelText("CostPeriodHistoryWindow") as HTMLSelectElement;
-    expect(select.value).toBe("month-to-date");
     // The period column is labelled with the window and shows its numbers.
     expect(await screen.findByRole("columnheader", { name: "Month to date" })).toBeTruthy();
     expect(screen.getByText(/900/)).toBeTruthy();
@@ -119,9 +117,6 @@ describe("UsageSpendTab History window", () => {
 
     await waitFor(() => expect(tauriMocks.getUsageSpendSummary).toHaveBeenCalled());
     expect(lastScanPeriod()).toBe("rolling:30");
-    expect((screen.getByLabelText("CostPeriodHistoryWindow") as HTMLSelectElement).value).toBe(
-      "rolling:30",
-    );
   });
 
   it("falls back to 30 days when the saved window is unreadable", async () => {
@@ -135,100 +130,12 @@ describe("UsageSpendTab History window", () => {
     expect(lastScanPeriod()).toBe("rolling:30");
   });
 
-  it("persists a preset choice and rescans with it", async () => {
+  it("leaves the History window and Cost summary pickers to Settings > Menu", async () => {
     render(<UsageSpendTab {...props} />);
     await waitFor(() => expect(tauriMocks.getUsageSpendSummary).toHaveBeenCalledTimes(1));
 
-    fireEvent.change(screen.getByLabelText("CostPeriodHistoryWindow"), {
-      target: { value: "rolling:90" },
-    });
-
-    await waitFor(() =>
-      expect(tauriMocks.updateSettings).toHaveBeenCalledWith({ costReportingPeriod: "rolling:90" }),
-    );
-    await waitFor(() => expect(lastScanPeriod()).toBe("rolling:90"));
-    expect(await screen.findByRole("columnheader", { name: "Last 90 days" })).toBeTruthy();
-  });
-
-  it("offers a custom day count and persists one valid value on blur", async () => {
-    render(<UsageSpendTab {...props} />);
-    await waitFor(() => expect(tauriMocks.getUsageSpendSummary).toHaveBeenCalledTimes(1));
-
-    fireEvent.change(screen.getByLabelText("CostPeriodHistoryWindow"), {
-      target: { value: "custom" },
-    });
-    const input = screen.getByLabelText("CostPeriodCustomDays") as HTMLInputElement;
-
-    fireEvent.change(input, { target: { value: "400" } });
-    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(screen.queryByLabelText("CostPeriodHistoryWindow")).toBeNull();
+    expect(screen.queryByText("CostSummaryDisplayStyle")).toBeNull();
     expect(tauriMocks.updateSettings).not.toHaveBeenCalled();
-
-    fireEvent.change(input, { target: { value: "0" } });
-    expect(tauriMocks.updateSettings).not.toHaveBeenCalled();
-
-    // Typing "1" on the way to "14" saves nothing and keeps the input open.
-    fireEvent.change(input, { target: { value: "1" } });
-    expect(tauriMocks.updateSettings).not.toHaveBeenCalled();
-    expect(screen.getByLabelText("CostPeriodCustomDays")).toBe(input);
-
-    fireEvent.change(input, { target: { value: "14" } });
-    expect(tauriMocks.updateSettings).not.toHaveBeenCalled();
-    fireEvent.blur(input);
-    await waitFor(() =>
-      expect(tauriMocks.updateSettings).toHaveBeenCalledWith({ costReportingPeriod: "rolling:14" }),
-    );
-    expect(tauriMocks.updateSettings).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(lastScanPeriod()).toBe("rolling:14"));
-    expect(input.getAttribute("aria-invalid")).toBe("false");
-    expect(await screen.findByRole("columnheader", { name: "Last 14 days" })).toBeTruthy();
-  });
-
-  it("commits a valid custom day count on Enter", async () => {
-    render(<UsageSpendTab {...props} />);
-    await waitFor(() => expect(tauriMocks.getUsageSpendSummary).toHaveBeenCalledTimes(1));
-
-    fireEvent.change(screen.getByLabelText("CostPeriodHistoryWindow"), {
-      target: { value: "custom" },
-    });
-    const input = screen.getByLabelText("CostPeriodCustomDays") as HTMLInputElement;
-    fireEvent.change(input, { target: { value: "45" } });
-    expect(tauriMocks.updateSettings).not.toHaveBeenCalled();
-
-    fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() =>
-      expect(tauriMocks.updateSettings).toHaveBeenCalledWith({ costReportingPeriod: "rolling:45" }),
-    );
-    expect(tauriMocks.updateSettings).toHaveBeenCalledTimes(1);
-  });
-
-  it("starts in custom mode for a saved count that is not a preset", async () => {
-    tauriMocks.getSettingsSnapshot.mockResolvedValue({
-      costReportingPeriod: "rolling:14",
-      costSummaryDisplayStyle: "compact",
-    });
-    render(<UsageSpendTab {...props} />);
-
-    const input = (await screen.findByLabelText("CostPeriodCustomDays")) as HTMLInputElement;
-    expect(input.value).toBe("14");
-    expect((screen.getByLabelText("CostPeriodHistoryWindow") as HTMLSelectElement).value).toBe(
-      "custom",
-    );
-  });
-
-  it("reverts the picker and shows the error when saving fails", async () => {
-    tauriMocks.updateSettings.mockRejectedValue(new Error("Invalid cost reporting period: x"));
-    render(<UsageSpendTab {...props} />);
-    await waitFor(() => expect(tauriMocks.getUsageSpendSummary).toHaveBeenCalledTimes(1));
-
-    fireEvent.change(screen.getByLabelText("CostPeriodHistoryWindow"), {
-      target: { value: "all" },
-    });
-
-    expect(await screen.findByText("Invalid cost reporting period: x")).toBeTruthy();
-    await waitFor(() =>
-      expect((screen.getByLabelText("CostPeriodHistoryWindow") as HTMLSelectElement).value).toBe(
-        "month-to-date",
-      ),
-    );
   });
 });
