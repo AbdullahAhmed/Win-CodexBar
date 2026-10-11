@@ -15,7 +15,7 @@ import {
   shareUsageSpendPng,
 } from "../../../lib/usageSpendSharing";
 import { buildSpendProviderGroups, findSpendDay, formatSpendDay } from "../../../lib/usageSpendBreakdown";
-import type { CostSummaryDisplayStyle, SettingsSnapshot, SpendContract, UsageSpendSummary } from "../../../types/bridge";
+import type { SpendContract, UsageSpendSummary } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
 import {
   DEFAULT_COST_PERIOD,
@@ -23,7 +23,6 @@ import {
   normalizeCostPeriod,
 } from "../../../lib/costPeriod";
 import type { TabProps } from "../settingsTabs";
-import CostPeriodControl from "./CostPeriodControl";
 import ProjectConversations from "./ProjectConversations";
 import { UsageSpendProviderGroups } from "./UsageSpendProviderGroups";
 import { UsageSpendTrendPanel } from "./UsageSpendTrendPanel";
@@ -34,7 +33,6 @@ export default function UsageSpendTab(_props: TabProps) {
   // Null until the saved History window is known, so the first scan uses it
   // instead of scanning the default and then rescanning.
   const [period, setPeriod] = useState<string | null>(null);
-  const [periodError, setPeriodError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
@@ -73,20 +71,6 @@ export default function UsageSpendTab(_props: TabProps) {
       if (!silent) setLoading(false);
     }
   }, [hideNativeCodex, includeOpenCodex, period]);
-
-  const onPeriodChange = useCallback(
-    (next: string) => {
-      const previous = period;
-      setPeriodError(null);
-      setPeriod(next);
-      void updateSettings({ costReportingPeriod: next }).catch((err: unknown) => {
-        setPeriod(previous);
-        // Kept apart from `error`: the rescan for the restored window clears it.
-        setPeriodError(err instanceof Error ? err.message : String(err));
-      });
-    },
-    [period],
-  );
 
   useEffect(() => {
     load(false);
@@ -209,8 +193,6 @@ export default function UsageSpendTab(_props: TabProps) {
         </button>
       </div>
 
-      {period !== null && <CostPeriodControl value={period} onChange={onPeriodChange} t={t} />}
-
       <div className="settings-section__group" style={{ marginBottom: 12, display: "flex", gap: 8 }}>
         <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <input
@@ -246,9 +228,6 @@ export default function UsageSpendTab(_props: TabProps) {
         )}
       </div>
 
-      <CostSummaryStyleControl t={t} />
-
-      {periodError && <p className="settings-section__error">{periodError}</p>}
       {error && <p className="settings-section__error">{error}</p>}
       {shareError && <p className="settings-section__error">{shareError}</p>}
 
@@ -501,55 +480,6 @@ function ProjectsPanel({
           })}
         </div>
       )}
-    </div>
-  );
-}
-
-function CostSummaryStyleControl({ t }: { t: (key: LocaleKey) => string }) {
-  const [style, setStyle] = useState<CostSummaryDisplayStyle>("compact");
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    void getSettingsSnapshot().then((snap: SettingsSnapshot) => {
-      setStyle(snap.costSummaryDisplayStyle);
-      setLoading(false);
-    }).catch(() => setLoading(false));
-  }, []);
-
-  const handleChange = useCallback(async (value: CostSummaryDisplayStyle) => {
-    setStyle(value);
-    try {
-      await updateSettings({ costSummaryDisplayStyle: value });
-    } catch {
-      /* best-effort; revert handled by next settings refresh */
-    }
-  }, []);
-
-  const options: { value: CostSummaryDisplayStyle; label: string }[] = [
-    { value: "compact", label: t("CostSummaryStyleCompact") },
-    { value: "detailed", label: t("CostSummaryStyleDetailed") },
-    { value: "hidden", label: t("CostSummaryStyleHidden") },
-  ];
-
-  return (
-    <div className="settings-section__group" style={{ marginBottom: 16 }}>
-      <label className="settings-section__label" htmlFor="cost-summary-style">
-        {t("CostSummaryDisplayStyle")}
-      </label>
-      <p className="settings-section__caption">{t("CostSummaryDisplayStyleHelper")}</p>
-      <select
-        id="cost-summary-style"
-        className="settings-select"
-        value={style}
-        disabled={loading}
-        onChange={(e) => void handleChange(e.target.value as CostSummaryDisplayStyle)}
-      >
-        {options.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
     </div>
   );
 }

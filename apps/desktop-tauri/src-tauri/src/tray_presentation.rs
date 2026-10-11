@@ -63,8 +63,8 @@ impl<'a> TrayPresentationPlan<'a> {
             .filter(|snapshot| snapshot.error.is_none())
             .collect::<Vec<_>>();
         let has_error = healthy.is_empty() && !snapshots.is_empty();
-        let prefer_highest =
-            settings.menu_bar_shows_highest_usage || settings.menu_bar_display_mode == "minimal";
+        // The retired Display mode "minimal" is folded into this flag once on load.
+        let prefer_highest = settings.menu_bar_shows_highest_usage;
         let selected = pick_tray_provider(&healthy, prefer_highest);
         let icon_pace = tray_pace_color(settings, selected);
 
@@ -202,7 +202,7 @@ fn resolve_single_provider_icon_plan(
     secondary_percent: Option<f64>,
     has_error: bool,
 ) -> TrayIconPlan {
-    if settings.menu_bar_shows_percent {
+    if settings.menu_bar_icon_style == codexbar::settings::MenuBarIconStyle::Percent {
         TrayIconPlan::Percent {
             percent: primary_percent,
             has_error,

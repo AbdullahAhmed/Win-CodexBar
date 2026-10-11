@@ -15,10 +15,6 @@ function parseCodexSessionsDirs(value: string): string[] {
     .filter(Boolean);
 }
 
-function parseSshHosts(value: string): string[] {
-  return value.split(/[,\n]/).map((host) => host.trim()).filter(Boolean);
-}
-
 export default function AdvancedTab({ settings, set, saving }: TabProps) {
   const { t } = useLocale();
   const [diagnosticsStatus, setDiagnosticsStatus] = useState<string | null>(
@@ -26,9 +22,6 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
   );
   const [codexDirsDraft, setCodexDirsDraft] = useState(() =>
     formatCodexSessionsDirs(settings.codexCustomSessionsDirs),
-  );
-  const [sshHostsDraft, setSshHostsDraft] = useState(() =>
-    (settings.agentSessionSshHosts ?? []).join(", "),
   );
   const [proxyUrlDraft, setProxyUrlDraft] = useState(() =>
     settings.httpProxyUrl ?? "",
@@ -59,10 +52,6 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
       setCodexDirsDraft(formatCodexSessionsDirs(settings.codexCustomSessionsDirs));
     }
   }, [saving, settings.codexCustomSessionsDirs]);
-
-  useEffect(() => {
-    if (!saving) setSshHostsDraft((settings.agentSessionSshHosts ?? []).join(", "));
-  }, [saving, settings.agentSessionSshHosts]);
 
   useEffect(() => {
     if (!saving) setProxyUrlDraft(settings.httpProxyUrl ?? "");
@@ -153,50 +142,6 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
               if (event.key === "Enter") {
                 event.currentTarget.blur();
               }
-            }}
-          />
-        </Field>
-      </SettingsGroup>
-
-      <SettingsGroup title={t("AgentSessionsTitle")}>
-        <Field
-          label={t("AgentSessionsEnableLabel")}
-          description={t("AgentSessionsEnableHelper")}
-        >
-          <Toggle
-            variant="switch"
-            checked={settings.agentSessionsEnabled ?? false}
-            ariaLabel={t("AgentSessionsEnableLabel")}
-            disabled={saving}
-            onChange={(v) => set({ agentSessionsEnabled: v })}
-          />
-        </Field>
-        <Field
-          label={t("AgentSessionsStayAwakeLabel")}
-          description={t("AgentSessionsStayAwakeHelper")}
-        >
-          <Toggle
-            variant="switch"
-            checked={settings.stayAwakeEnabled ?? false}
-            ariaLabel={t("AgentSessionsStayAwakeLabel")}
-            disabled={saving}
-            onChange={(v) => set({ stayAwakeEnabled: v })}
-          />
-        </Field>
-        <Field
-          label={t("AgentSessionsSshHostsLabel")}
-          description={t("AgentSessionsSshHostsHelper")}
-        >
-          <input
-            type="text"
-            className="text-input"
-            value={sshHostsDraft}
-            aria-label={t("AgentSessionsSshHostsLabel")}
-            disabled={saving || !settings.agentSessionsEnabled}
-            onChange={(event) => setSshHostsDraft(event.target.value)}
-            onBlur={() => set({ agentSessionSshHosts: parseSshHosts(sshHostsDraft) })}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") event.currentTarget.blur();
             }}
           />
         </Field>

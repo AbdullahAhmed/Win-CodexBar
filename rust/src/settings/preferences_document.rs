@@ -72,6 +72,15 @@ const ALLOWED_PREFERENCES: &[(&str, Validator)] = &[
     ("hide_personal_info", typed::<bool>),
     ("menu_bar_shows_highest_usage", typed::<bool>),
     ("menu_bar_shows_percent", typed::<bool>),
+    ("menu_bar_icon_style", |v| one_of(v, &["bars", "percent"])),
+    (
+        "merged_overview_selected_providers",
+        merged_overview_selection,
+    ),
+    ("quota_warning_markers_visible", typed::<bool>),
+    ("workday_tick_style", |v| {
+        one_of(v, &["hidden", "subtle", "high_contrast"])
+    }),
     ("tray_icon_mode", typed::<super::TrayIconMode>),
     ("switcher_shows_icons", typed::<bool>),
     ("providers_sorted_alphabetically", typed::<bool>),
@@ -221,6 +230,13 @@ fn provider_id_list(value: &Value) -> bool {
         item.as_str()
             .is_some_and(|id| known.contains(id) && seen.insert(id))
     })
+}
+
+fn merged_overview_selection(value: &Value) -> bool {
+    value
+        .as_array()
+        .is_some_and(|items| items.len() <= super::MERGED_OVERVIEW_PROVIDER_LIMIT)
+        && provider_id_list(value)
 }
 
 fn provider_metrics(value: &Value) -> bool {

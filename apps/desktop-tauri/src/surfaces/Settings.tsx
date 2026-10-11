@@ -21,7 +21,8 @@ import {
 } from "./settings/settingsTabs";
 import { SettingsSidebar } from "./settings/SettingsSidebar";
 import GeneralTab from "./settings/tabs/GeneralTab";
-import DisplayTab from "./settings/tabs/DisplayTab";
+import MenuBarTab from "./settings/tabs/MenuBarTab";
+import MenuTab from "./settings/tabs/MenuTab";
 import AdvancedTab from "./settings/tabs/AdvancedTab";
 import AboutTab from "./settings/tabs/AboutTab";
 import ProvidersTab from "./settings/tabs/ProvidersTab";
@@ -225,8 +226,7 @@ export default function Settings({
               <GeneralTab mode="notifications" settings={settings} set={set} saving={saving} />
             )}
             {activeTab === "menuBar" && (
-              <DisplayTab
-                mode="menuBar"
+              <MenuBarTab
                 settings={settings}
                 providers={catalog}
                 set={set}
@@ -234,7 +234,7 @@ export default function Settings({
               />
             )}
             {activeTab === "menu" && (
-              <DisplayTab mode="menu" settings={settings} set={set} saving={saving} />
+              <MenuTab settings={settings} set={set} saving={saving} />
             )}
             {activeTab === "usageSpend" && (
               <UsageSpendTab settings={settings} set={set} saving={saving} />

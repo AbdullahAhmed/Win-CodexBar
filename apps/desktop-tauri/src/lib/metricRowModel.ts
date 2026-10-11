@@ -5,6 +5,7 @@ import type {
   RateWindowSnapshot,
   SettingsSnapshot,
   WindowPaceSnapshot,
+  WorkdayTickStyle,
 } from "../types/bridge";
 import { resetDescriptionFallback } from "./usageWindows";
 
@@ -82,7 +83,11 @@ export interface MetricRowInput {
   showResetWhenExhausted: boolean;
   paceEnabled: boolean;
   usageThresholds: UsageThresholdSettings | null;
+  /** Settings > Menu > Show quota warning markers. */
+  quotaWarningMarkersVisible: boolean;
   weeklyProgressWorkDays: number | null;
+  /** Settings > Menu > Workday tick appearance; "hidden" draws no workday ticks. */
+  workdayTickStyle: WorkdayTickStyle;
   now: number;
 }
 
@@ -98,6 +103,8 @@ export interface UsageBarModel {
   pacePercent: number | null;
   paceDeficit: boolean;
   markers: UsageBarMarker[];
+  /** How `workday` markers are drawn. */
+  workdayTickStyle: Exclude<WorkdayTickStyle, "hidden">;
 }
 
 export interface MetricRowPresentation {
@@ -260,7 +267,7 @@ function barMarkers(input: MetricRowInput): UsageBarMarker[] {
   const window = policy.thresholdWindow;
   const settings = input.usageThresholds;
   const warnings =
-    window && settings
+    window && settings && input.quotaWarningMarkersVisible
       ? normalizedMarkerPercents(
           (["high", "critical"] as const).map((field) => {
             const usedThreshold = threshold(settings, input.providerId, window, field);
@@ -271,6 +278,7 @@ function barMarkers(input: MetricRowInput): UsageBarMarker[] {
   const workDays = input.weeklyProgressWorkDays;
   const showsWorkdays =
     policy.workdayTicks &&
+    input.workdayTickStyle !== "hidden" &&
     input.snap.windowMinutes === WEEK_MINUTES &&
     workDays != null &&
     workDays >= 2 &&
@@ -333,6 +341,7 @@ export function metricRowPresentation(input: MetricRowInput, t: Translate): Metr
       pacePercent,
       paceDeficit: visible ? visible.pace.actualUsedPercent > visible.pace.expectedUsedPercent : false,
       markers,
+      workdayTickStyle: input.workdayTickStyle === "high_contrast" ? "high_contrast" : "subtle",
     },
   };
 }

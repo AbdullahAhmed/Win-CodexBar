@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { RateWindowSnapshot } from "../../types/bridge";
+import type { RateWindowSnapshot, WorkdayTickStyle } from "../../types/bridge";
 import { useLocale } from "../../hooks/useLocale";
 import {
   useFormattedResetTime,
@@ -32,7 +32,9 @@ export interface MetricRowDisplay {
   compactOverview?: boolean;
   monthlyLimitBlockNow?: number;
   usageThresholds?: UsageThresholdSettings | null;
+  quotaWarningMarkersVisible?: boolean;
   weeklyProgressWorkDays?: number | null;
+  workdayTickStyle?: WorkdayTickStyle;
 }
 
 function useCountdownNow(ticking: boolean): number {
@@ -74,7 +76,9 @@ export default function CardMetricRow({
     compactOverview = false,
     monthlyLimitBlockNow,
     usageThresholds = null,
+    quotaWarningMarkersVisible = true,
     weeklyProgressWorkDays = null,
+    workdayTickStyle = "subtle",
   } = display;
   // Upstream 0.69.0 #4091: a longer exhausted pool (Kimi's monthly membership)
   // blocks this window until the pool resets. Raw percentages stay untouched.
@@ -132,7 +136,9 @@ export default function CardMetricRow({
       showResetWhenExhausted,
       paceEnabled: showPace,
       usageThresholds,
+      quotaWarningMarkersVisible,
       weeklyProgressWorkDays,
+      workdayTickStyle,
       now,
     },
     t,

@@ -34,6 +34,10 @@ const settings: SettingsSnapshot = {
   switcherShowsIcons: true,
   menuBarShowsHighestUsage: true,
   menuBarShowsPercent: true,
+  menuBarIconStyle: "percent",
+  mergedOverviewSelectedProviders: [],
+  quotaWarningMarkersVisible: true,
+  workdayTickStyle: "subtle",
   menuBarColorPace: false,
   providersSortedAlphabetically: false,
   showAsUsed: false,
@@ -188,26 +192,11 @@ describe("AdvancedTab", () => {
     expect(screen.getAllByText("HooksEnableLabel")).toHaveLength(1);
   });
 
-  it("toggles Stay Awake independently of agent session discovery", () => {
-    const set = vi.fn();
-    render(
-      <AdvancedTab
-        settings={{ ...settings, agentSessionsEnabled: false, stayAwakeEnabled: false }}
-        set={set}
-        saving={false}
-      />,
-    );
-
-    const toggle = screen
-      .getByText("AgentSessionsStayAwakeLabel")
-      .closest(".settings-field")
-      ?.querySelector('input[type="checkbox"]');
-    expect(toggle).not.toBeNull();
-    expect(toggle).not.toBeDisabled();
-    expect(toggle).not.toBeChecked();
-
-    fireEvent.click(toggle as Element);
-    expect(set).toHaveBeenCalledWith({ stayAwakeEnabled: true });
+  it("leaves Agent sessions to Settings > Menu", () => {
+    render(<AdvancedTab settings={settings} set={vi.fn()} saving={false} />);
+    expect(screen.queryByText("AgentSessionsTitle")).toBeNull();
+    expect(screen.queryByText("AgentSessionsStayAwakeLabel")).toBeNull();
+    expect(screen.queryByText("AgentSessionsSshHostsLabel")).toBeNull();
   });
 });
 
@@ -223,7 +212,6 @@ describe("AdvancedTab Mac grouped layout", () => {
     expect(titles).toEqual([
       "PrivacyTitle",
       "CodexLocalLogsTitle",
-      "AgentSessionsTitle",
       "SectionLocalIntegrations",
       "NetworkProxyTitle",
       "HooksTitle",
