@@ -1008,7 +1008,7 @@ describe("TrayPanel provider grid", () => {
       showAsUsed: false,
       highUsageThreshold: 75,
       criticalUsageThreshold: 90,
-      providerUsageThresholds: { "claude:session": { critical: 95 } },
+      providerQuotaWarnings: { claude: { session: { critical: 95 } } },
     });
 
     await waitFor(() => {

@@ -329,38 +329,12 @@ describe("GeneralTab language picker", () => {
     expect(preview).toBeEnabled();
   });
 
-  it("saves a window override on blur and clears it to resume inheritance", () => {
-    const set = vi.fn();
-    const { rerender } = render(
-      <GeneralTab mode="notifications" settings={settings} set={set} saving={false} />,
-    );
-    const input = screen.getByRole("spinbutton", {
-      name: "ProviderNameCodex · ProviderSession HighUsageAlert",
-    });
-
-    fireEvent.change(input, { target: { value: "80" } });
-    fireEvent.blur(input);
-    expect(set).toHaveBeenLastCalledWith({
-      providerUsageThresholds: { "codex:session": { high: 80 } },
-    });
-
-    rerender(
-      <GeneralTab
-        mode="notifications"
-        settings={{
-          ...settings,
-          providerUsageThresholds: { "codex:session": { high: 80 } },
-        }}
-        set={set}
-        saving={false}
-      />,
-    );
-    const saved = screen.getByRole("spinbutton", {
-      name: "ProviderNameCodex · ProviderSession HighUsageAlert",
-    });
-    fireEvent.change(saved, { target: { value: "" } });
-    fireEvent.blur(saved);
-    expect(set).toHaveBeenLastCalledWith({ providerUsageThresholds: {} });
+  it("no longer offers per-provider threshold overrides (they moved to Providers)", () => {
+    render(<GeneralTab mode="notifications" settings={settings} set={vi.fn()} saving={false} />);
+    expect(screen.queryByText("ThresholdOverridesTitle")).toBeNull();
+    expect(
+      screen.queryByRole("spinbutton", { name: /ProviderNameCodex · ProviderSession/ }),
+    ).toBeNull();
   });
 });
 
@@ -667,13 +641,12 @@ describe("GeneralTab notifications pane", () => {
     expect(screen.getByRole("checkbox", { name: "SoundEnabled" })).toBeInTheDocument();
   });
 
-  it("shows % used thresholds and overrides while usage warnings are on", () => {
+  it("shows % used thresholds while usage warnings are on", () => {
     render(
       <GeneralTab mode="notifications" settings={settings} set={vi.fn()} saving={false} />,
     );
     expect(screen.getByText("WarningAtPercentUsed")).toBeInTheDocument();
     expect(screen.getByText("CriticalAtPercentUsed")).toBeInTheDocument();
-    expect(screen.getByText("ThresholdOverridesTitle")).toBeInTheDocument();
     expect(screen.getByText("ThresholdsCaption")).toBeInTheDocument();
   });
 

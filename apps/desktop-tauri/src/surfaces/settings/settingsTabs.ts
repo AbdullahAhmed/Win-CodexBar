@@ -112,3 +112,19 @@ export function sortProvidersAlphabetically<T extends NamedProvider>(
 export function canReorderProviders(sortedAlphabetically: boolean, query: string): boolean {
   return !sortedAlphabetically && query.trim() === "";
 }
+
+/**
+ * The enabled provider ids after switching `id` on or off, in catalog order.
+ * Shared by the sidebar row switches and the provider header switch.
+ */
+export function nextEnabledProviders(
+  catalog: readonly { id: string }[],
+  enabled: Iterable<string>,
+  id: string,
+  on: boolean,
+): string[] {
+  const next = new Set(enabled);
+  if (on) next.add(id);
+  else next.delete(id);
+  return catalog.filter((p) => next.has(p.id)).map((p) => p.id);
+}

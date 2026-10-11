@@ -84,3 +84,28 @@ describe("IdentitySection account privacy for every provider", () => {
     expect(screen.getByText("person@example.com")).toBeInTheDocument();
   });
 });
+
+describe("IdentitySection source row", () => {
+  it("falls back to the provider's source hint before the first fetch", () => {
+    render(
+      <IdentitySection
+        provider={detail({ id: "langdock", displayName: "Langdock", organization: null, plan: null })}
+        subtitle=""
+        t={t}
+      />,
+    );
+    expect(screen.getByText("ProviderSourceWebShort")).toBeInTheDocument();
+  });
+
+  it("prefers the fetched source label", () => {
+    render(
+      <IdentitySection
+        provider={detail({ id: "synthetic", displayName: "Synthetic", organization: null, plan: null, sourceLabel: "api" })}
+        subtitle=""
+        t={t}
+      />,
+    );
+    expect(screen.getByText("api")).toBeInTheDocument();
+    expect(screen.queryByText("ProviderSourceApiShort")).toBeNull();
+  });
+});

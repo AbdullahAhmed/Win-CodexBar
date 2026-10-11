@@ -689,6 +689,64 @@ describe("FloatBar", () => {
     });
   });
 
+  it("follows a provider's Custom quota warnings and drops the tone when they are Off", async () => {
+    // 50% used is below the global 70% high threshold, but above a Custom 40%.
+    tauriMocks.getCachedProviders.mockResolvedValue([snapshot("claude", "Claude", 50)]);
+    const customWarnings: Partial<SettingsSnapshot> = {
+      providerQuotaWarnings: { claude: { session: { enabled: true, high: 40, critical: 90 } } },
+    };
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(customWarnings));
+    const custom = renderFloatBar(bootstrap(customWarnings));
+    await waitFor(() => {
+      expect(custom.container.querySelector(".floatbar__pill--warn")).not.toBeNull();
+    });
+    custom.unmount();
+
+    tauriMocks.getCachedProviders.mockResolvedValue([snapshot("claude", "Claude", 95)]);
+    const offWarnings: Partial<SettingsSnapshot> = {
+      providerQuotaWarnings: { claude: { session: { enabled: false } } },
+    };
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(offWarnings));
+    const off = renderFloatBar(bootstrap(offWarnings));
+    await waitFor(() => {
+      expect(off.container.querySelector(".floatbar__pill--ok")).not.toBeNull();
+    });
+  });
+
+  it("picks the quota warning window by card lane, not by window length", async () => {
+    // A monthly primary lane is the Session window for cards and toasts, so
+    // Session Off drops its tone even though the window is longer than a week.
+    const monthly = { ...rateWindow(95), windowMinutes: 30 * 24 * 60 };
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      { ...snapshot("claude", "Claude", 95), primary: monthly, selectedMetric: monthly },
+    ]);
+    const sessionOff: Partial<SettingsSnapshot> = {
+      providerQuotaWarnings: { claude: { session: { enabled: false } } },
+    };
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(sessionOff));
+    const off = renderFloatBar(bootstrap(sessionOff));
+    await waitFor(() => {
+      expect(off.container.querySelector(".floatbar__pill--ok")).not.toBeNull();
+    });
+    off.unmount();
+
+    // A selected secondary lane with no window length is the Weekly window.
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 10, {
+        informational: true,
+        secondary: { used: 50 },
+      }),
+    ]);
+    const weeklyCustom: Partial<SettingsSnapshot> = {
+      providerQuotaWarnings: { claude: { weekly: { high: 40, critical: 90 } } },
+    };
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(weeklyCustom));
+    const weekly = renderFloatBar(bootstrap(weeklyCustom));
+    await waitFor(() => {
+      expect(weekly.container.querySelector(".floatbar__pill--warn")).not.toBeNull();
+    });
+  });
+
   it("applies critical tone when the provider is exhausted", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
       snapshot("claude", "Claude", 100, { exhausted: true }),

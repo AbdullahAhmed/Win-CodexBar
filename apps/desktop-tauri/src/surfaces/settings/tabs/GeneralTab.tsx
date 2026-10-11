@@ -25,7 +25,6 @@ import type {
   NotificationSoundPaths,
   NotificationSoundTheme,
   ThemePreference,
-  UsageThresholdOverride,
 } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
 import { CURRENCY_PICKER_OPTIONS } from "../../../lib/currency";
@@ -133,75 +132,8 @@ function fileName(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
 }
 
-function blurOnEnter(event: { key: string; currentTarget: { blur: () => void } }) {
-  if (event.key === "Enter") event.currentTarget.blur();
-}
-
 function isNotificationSoundTheme(v: string): v is NotificationSoundTheme {
   return v === "windows" || v === "codexBar";
-}
-
-function ThresholdOverrideInputs({
-  label,
-  value,
-  inheritedHigh,
-  inheritedCritical,
-  highLabel,
-  criticalLabel,
-  disabled,
-  onChange,
-}: {
-  label: string;
-  value: UsageThresholdOverride;
-  inheritedHigh: number;
-  inheritedCritical: number;
-  highLabel: string;
-  criticalLabel: string;
-  disabled: boolean;
-  onChange: (value: UsageThresholdOverride) => void;
-}) {
-  const [high, setHigh] = useState(() => value.high?.toString() ?? "");
-  const [critical, setCritical] = useState(() => value.critical?.toString() ?? "");
-  useEffect(() => setHigh(value.high?.toString() ?? ""), [value.high]);
-  useEffect(() => setCritical(value.critical?.toString() ?? ""), [value.critical]);
-  const commit = () =>
-    onChange({
-      high: high === "" ? undefined : Math.min(100, Math.max(0, Number(high))),
-      critical:
-        critical === "" ? undefined : Math.min(100, Math.max(0, Number(critical))),
-    });
-  return (
-    <Field label={label}>
-      <div className="settings-inline-fields">
-        <input
-          className="number-input"
-          type="number"
-          value={high}
-          min={0}
-          max={100}
-          disabled={disabled}
-          placeholder={String(inheritedHigh)}
-          aria-label={`${label} ${highLabel}`}
-          onChange={(event) => setHigh(event.target.value)}
-          onBlur={commit}
-          onKeyDown={blurOnEnter}
-        />
-        <input
-          className="number-input"
-          type="number"
-          value={critical}
-          min={0}
-          max={100}
-          disabled={disabled}
-          placeholder={String(inheritedCritical)}
-          aria-label={`${label} ${criticalLabel}`}
-          onChange={(event) => setCritical(event.target.value)}
-          onBlur={commit}
-          onKeyDown={blurOnEnter}
-        />
-      </div>
-    </Field>
-  );
 }
 
 export default function GeneralTab({
@@ -517,7 +449,6 @@ function NotificationsPane({
   // backend, so their switches lock (keeping their saved state) while
   // threshold warnings are off. Quota depleted & restored has its own key.
   const alertsMuted = !settings.showNotifications;
-  const values = settings.providerUsageThresholds ?? {};
 
   return (
     <>
@@ -679,59 +610,6 @@ function NotificationsPane({
         )}
       </SettingsGroup>
 
-      {settings.showNotifications && (
-        <SettingsGroup
-          title={t("ThresholdOverridesTitle")}
-          footer={<p>{t("ThresholdOverridesCaption")}</p>}
-        >
-          {(["codex", "claude"] as const).flatMap((provider) =>
-            (["provider", "session", "weekly"] as const).map((window) => {
-              const key = window === "provider" ? provider : `${provider}:${window}`;
-              const providerLabel =
-                provider === "codex"
-                  ? t("ProviderNameCodex")
-                  : t("ProviderNameClaude");
-              return (
-                <ThresholdOverrideInputs
-                  key={key}
-                  label={
-                    window === "provider"
-                      ? providerLabel
-                      : `${providerLabel} · ${t(window === "session" ? "ProviderSession" : "ProviderWeekly")}`
-                  }
-                  value={values[key] ?? {}}
-                  inheritedHigh={
-                    window === "provider"
-                      ? settings.highUsageThreshold
-                      : values[provider]?.high ?? settings.highUsageThreshold
-                  }
-                  inheritedCritical={
-                    window === "provider"
-                      ? settings.criticalUsageThreshold
-                      : values[provider]?.critical ?? settings.criticalUsageThreshold
-                  }
-                  highLabel={t("HighUsageAlert")}
-                  criticalLabel={t("CriticalUsageAlert")}
-                  disabled={saving}
-                  onChange={(value) => {
-                    const next = { ...values };
-                    if (value.high === undefined && value.critical === undefined) {
-                      set({
-                        providerUsageThresholds: Object.fromEntries(
-                          Object.entries(next).filter(([entry]) => entry !== key),
-                        ),
-                      });
-                    } else {
-                      next[key] = value;
-                      set({ providerUsageThresholds: next });
-                    }
-                  }}
-                />
-              );
-            }),
-          )}
-        </SettingsGroup>
-      )}
     </>
   );
 }

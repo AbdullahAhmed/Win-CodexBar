@@ -197,7 +197,8 @@ export interface SettingsSnapshot {
   notificationSoundPaths: NotificationSoundPaths;
   highUsageThreshold: number;
   criticalUsageThreshold: number;
-  providerUsageThresholds?: Record<string, UsageThresholdOverride>;
+  /** Per-provider quota warnings keyed by CLI name; Global providers are absent. */
+  providerQuotaWarnings?: Record<string, ProviderQuotaWarnings>;
   predictivePaceWarningEnabled: boolean;
   credentialExpiryNotificationsEnabled: boolean;
   /** Absent on older shells; the UI falls back to `showNotifications`. */
@@ -260,6 +261,12 @@ export interface SettingsSnapshot {
   /** Path to the cswap executable (Claude only, empty when unset). */
   claudeSwapExecutablePath?: string;
   codexSparkUsageVisible: boolean;
+  /** Absent on older shells. */
+  codexOpenaiWebExtras?: boolean;
+  codexHistoricalTracking?: boolean;
+  codexExternalOauthSourcesAllowed?: boolean;
+  codexLocalSessionCostLedgerEnabled?: boolean;
+  codexOpenaiWebBatterySaverEnabled?: boolean;
   disableKeychainAccess: boolean;
   wayfinderGatewayUrl?: string;
   providerMetrics: Record<string, MetricPreference>;
@@ -344,7 +351,8 @@ export interface SettingsUpdate {
   notificationSoundPaths?: NotificationSoundPaths;
   highUsageThreshold?: number;
   criticalUsageThreshold?: number;
-  providerUsageThresholds?: Record<string, UsageThresholdOverride>;
+  /** Replaces each listed provider's whole value; `{}` resets it to Global. */
+  providerQuotaWarnings?: Record<string, ProviderQuotaWarnings>;
   predictivePaceWarningEnabled?: boolean;
   credentialExpiryNotificationsEnabled?: boolean;
   sessionQuotaNotificationsEnabled?: boolean;
@@ -395,6 +403,11 @@ export interface SettingsUpdate {
   claudeSwapEnabled?: boolean;
   claudeSwapExecutablePath?: string;
   codexSparkUsageVisible?: boolean;
+  codexOpenaiWebExtras?: boolean;
+  codexHistoricalTracking?: boolean;
+  codexExternalOauthSourcesAllowed?: boolean;
+  codexLocalSessionCostLedgerEnabled?: boolean;
+  codexOpenaiWebBatterySaverEnabled?: boolean;
   disableKeychainAccess?: boolean;
   /** Map of provider CLI name → metric preference label. */
   providerMetrics?: Record<string, MetricPreference>;
@@ -432,9 +445,20 @@ export interface SettingsUpdate {
   providerAccentColors?: Record<string, string | null>;
 }
 
-export interface UsageThresholdOverride {
+/**
+ * One quota warning window. All fields absent = Global (inherit the global
+ * thresholds). `enabled: false` = Off (values kept for when it turns back on).
+ * Otherwise Custom; a missing value inherits the global one.
+ */
+export interface QuotaWarningWindow {
+  enabled?: boolean;
   high?: number;
   critical?: number;
+}
+
+export interface ProviderQuotaWarnings {
+  session?: QuotaWarningWindow;
+  weekly?: QuotaWarningWindow;
 }
 
 /** One provider row for Settings → Usage & Spend. */

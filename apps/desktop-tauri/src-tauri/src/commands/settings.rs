@@ -22,8 +22,10 @@ pub struct SettingsUpdate {
     pub notification_sound_paths: Option<codexbar::settings::NotificationSoundPaths>,
     pub high_usage_threshold: Option<f64>,
     pub critical_usage_threshold: Option<f64>,
-    pub provider_usage_thresholds:
-        Option<std::collections::HashMap<String, codexbar::settings::UsageThresholdOverride>>,
+    /// Map of provider CLI name → that provider's full quota warning settings
+    /// (replaces the stored value; an empty object means Global).
+    pub provider_quota_warnings:
+        Option<std::collections::HashMap<String, codexbar::settings::ProviderQuotaWarnings>>,
     pub predictive_pace_warning_enabled: Option<bool>,
     pub credential_expiry_notifications_enabled: Option<bool>,
     pub session_quota_notifications_enabled: Option<bool>,
@@ -74,6 +76,11 @@ pub struct SettingsUpdate {
     pub claude_swap_enabled: Option<bool>,
     pub claude_swap_executable_path: Option<String>,
     pub codex_spark_usage_visible: Option<bool>,
+    pub codex_openai_web_extras: Option<bool>,
+    pub codex_historical_tracking: Option<bool>,
+    pub codex_external_oauth_sources_allowed: Option<bool>,
+    pub codex_local_session_cost_ledger_enabled: Option<bool>,
+    pub codex_openai_web_battery_saver_enabled: Option<bool>,
     pub disable_keychain_access: Option<bool>,
     /// Map of provider CLI name → metric preference label.
     pub provider_metrics: Option<std::collections::HashMap<String, String>>,
@@ -115,6 +122,8 @@ impl SettingsUpdate {
     fn refreshes_provider_data(&self) -> bool {
         self.enabled_providers.is_some()
             || self.claude_allow_reading_claude_code_credentials.is_some()
+            || self.codex_openai_web_extras.is_some()
+            || self.codex_external_oauth_sources_allowed.is_some()
             || self.alibaba_token_plan_region.is_some()
             || self.copilot_seat_credit_entitlement.is_some()
             || self.weekly_progress_work_days.is_some()
@@ -131,7 +140,7 @@ impl SettingsUpdate {
             || self.cost_usage_enabled.is_some()
             || self.high_usage_threshold.is_some()
             || self.critical_usage_threshold.is_some()
-            || self.provider_usage_thresholds.is_some()
+            || self.provider_quota_warnings.is_some()
             || self.show_as_used.is_some()
             || self.reset_time_relative.is_some()
             || self.show_reset_when_exhausted.is_some()
@@ -160,6 +169,7 @@ impl SettingsUpdate {
             || self.overview_layout.is_some()
             || self.provider_metrics.is_some()
             || self.provider_hidden_usage_item_ids.is_some()
+            || self.provider_quota_warnings.is_some()
             || self.preferred_currency_code.is_some()
             || self.codex_spark_usage_visible.is_some()
             || self.copilot_seat_credit_entitlement.is_some()
@@ -389,9 +399,8 @@ impl SettingsUpdate {
         if let Some(v) = self.critical_usage_threshold {
             settings.critical_usage_threshold = v.clamp(0.0, 100.0);
         }
-        if let Some(values) = self.provider_usage_thresholds.clone() {
-            settings.provider_usage_thresholds =
-                codexbar::settings::normalize_usage_threshold_overrides(values);
+        if let Some(values) = self.provider_quota_warnings.clone() {
+            apply_provider_quota_warnings(settings, values);
         }
         if let Some(v) = self.predictive_pace_warning_enabled {
             settings.predictive_pace_warning_enabled = v;
@@ -473,6 +482,21 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.codex_spark_usage_visible {
             settings.set_codex_spark_usage_visible(v);
+        }
+        if let Some(v) = self.codex_openai_web_extras {
+            settings.set_codex_openai_web_extras(v);
+        }
+        if let Some(v) = self.codex_historical_tracking {
+            settings.set_codex_historical_tracking(v);
+        }
+        if let Some(v) = self.codex_external_oauth_sources_allowed {
+            settings.codex_external_oauth_sources_allowed = v;
+        }
+        if let Some(v) = self.codex_local_session_cost_ledger_enabled {
+            settings.set_local_session_cost_ledger_enabled(codexbar::core::ProviderId::Codex, v);
+        }
+        if let Some(v) = self.codex_openai_web_battery_saver_enabled {
+            settings.set_openai_web_battery_saver_enabled(codexbar::core::ProviderId::Codex, v);
         }
         if let Some(v) = self.disable_keychain_access {
             settings.disable_keychain_access = v;
@@ -589,6 +613,17 @@ fn apply_provider_metrics(
     for (provider, label) in metrics_map {
         if let Some(pref) = parse_metric_preference(&label) {
             settings.provider_metrics.insert(provider, pref);
+        }
+    }
+}
+
+fn apply_provider_quota_warnings(
+    settings: &mut Settings,
+    values: std::collections::HashMap<String, codexbar::settings::ProviderQuotaWarnings>,
+) {
+    for (provider, warnings) in values {
+        if let Ok(provider_id) = super::parse_provider_arg(&provider) {
+            settings.set_quota_warnings(provider_id, warnings);
         }
     }
 }
@@ -777,6 +812,68 @@ mod tests {
                 ..Default::default()
             }
             .refreshes_provider_data()
+        );
+    }
+
+    #[test]
+    fn codex_options_and_quota_warnings_round_trip_through_the_bridge() {
+        let patch: SettingsUpdate = serde_json::from_value(serde_json::json!({
+            "codexOpenaiWebExtras": false,
+            "codexHistoricalTracking": true,
+            "codexExternalOauthSourcesAllowed": true,
+            "codexLocalSessionCostLedgerEnabled": true,
+            "codexOpenaiWebBatterySaverEnabled": true,
+            "providerQuotaWarnings": {
+                "codex": {
+                    "session": { "high": 60.0, "critical": 85.0 },
+                    "weekly": { "enabled": false }
+                },
+                "not-a-provider": { "session": { "high": 10.0 } }
+            }
+        }))
+        .expect("bridge patch deserializes");
+        assert!(patch.notifies_float_bar());
+        assert!(patch.refreshes_tray_presentation());
+        assert!(patch.refreshes_provider_data());
+
+        let mut settings = Settings::default();
+        assert!(
+            settings.codex_openai_web_extras(),
+            "Windows default stays on"
+        );
+        patch.apply_to(&mut settings).expect("apply");
+
+        let snapshot = serde_json::to_value(crate::commands::bridge::SettingsSnapshot::from(
+            settings.clone(),
+        ))
+        .expect("snapshot serializes");
+        assert_eq!(snapshot["codexOpenaiWebExtras"], false);
+        assert_eq!(snapshot["codexHistoricalTracking"], true);
+        assert_eq!(snapshot["codexExternalOauthSourcesAllowed"], true);
+        assert_eq!(snapshot["codexLocalSessionCostLedgerEnabled"], true);
+        assert_eq!(snapshot["codexOpenaiWebBatterySaverEnabled"], true);
+        assert_eq!(
+            snapshot["providerQuotaWarnings"],
+            serde_json::json!({
+                "codex": {
+                    "session": { "high": 60.0, "critical": 85.0 },
+                    "weekly": { "enabled": false }
+                }
+            })
+        );
+        assert!(snapshot.get("providerUsageThresholds").is_none());
+        assert!(!settings.quota_warning_enabled(codexbar::core::ProviderId::Codex, "weekly"));
+
+        // An empty object returns the provider to Global.
+        let reset: SettingsUpdate = serde_json::from_value(serde_json::json!({
+            "providerQuotaWarnings": { "codex": {} }
+        }))
+        .expect("reset patch");
+        reset.apply_to(&mut settings).expect("apply reset");
+        assert!(
+            settings
+                .quota_warnings(codexbar::core::ProviderId::Codex)
+                .is_empty()
         );
     }
 
