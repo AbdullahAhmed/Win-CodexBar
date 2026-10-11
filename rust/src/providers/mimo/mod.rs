@@ -116,21 +116,12 @@ impl MiMoProvider {
         let data = balance
             .data
             .ok_or_else(|| ProviderError::Parse("MiMo balance payload missing".into()))?;
-        let balance_value = data
-            .balance
-            .parse::<f64>()
-            .map_err(|_| ProviderError::Parse("MiMo balance value invalid".into()))?;
+        let balance_row = balance_row_from_data(&data)?;
 
         let detail: Option<TokenPlanDetailResponse> =
             self.get_json("tokenPlan/detail", &cookie).await.ok();
         let usage: Option<TokenPlanUsageResponse> =
             self.get_json("tokenPlan/usage", &cookie).await.ok();
-        let balance_row = balance_detail(
-            balance_value,
-            &data.currency,
-            data.cash_balance.as_deref(),
-            data.gift_balance.as_deref(),
-        );
         let snapshot = snapshot_from_parts(detail, usage);
         Ok(ProviderFetchResult::new(snapshot, "web").with_display_detail(balance_row))
     }
@@ -307,6 +298,24 @@ fn balance_detail(
         balance_text(balance, currency, cash_balance, gift_balance),
     )
     .and_then(|row| row.with_section_title("Credits"))
+}
+
+/// The "Credits" balance row for a decoded `balance` payload, as `fetch_web`
+/// builds it. A non-numeric balance is a parse error, reported before any
+/// plan or usage request is made.
+fn balance_row_from_data(
+    data: &BalanceData,
+) -> Result<Option<ProviderDisplayDetail>, ProviderError> {
+    let balance_value = data
+        .balance
+        .parse::<f64>()
+        .map_err(|_| ProviderError::Parse("MiMo balance value invalid".into()))?;
+    Ok(balance_detail(
+        balance_value,
+        &data.currency,
+        data.cash_balance.as_deref(),
+        data.gift_balance.as_deref(),
+    ))
 }
 
 /// en_US currency text as upstream `UsageFormatter.currencyString` renders it
@@ -487,6 +496,40 @@ mod tests {
         assert_eq!(row.section_title(), Some("Credits"));
         assert_eq!(row.title(), "Balance");
         assert_eq!(row.value(), "CN¥12.34 (Paid: CN¥8.00 / Granted: CN¥4.34)");
+    }
+
+    /// A `balance` response decoded into `BalanceResponse` (synthetic values from
+    /// the Mac-parity MiMo pack) yields the same "Credits" row `fetch_web` builds.
+    #[test]
+    fn mimo_balance_response_decodes_into_credits_row() {
+        let balance: BalanceResponse = serde_json::from_str(
+            r#"{"code":0,"data":{"balance":"12.34","currency":"CNY","cashBalance":"8.00","giftBalance":"4.34"}}"#,
+        )
+        .expect("balance response decodes");
+        assert_eq!(balance.code, 0);
+        let data = balance.data.expect("balance payload");
+
+        let row = balance_row_from_data(&data)
+            .expect("balance row builds")
+            .expect("balance row present");
+        assert_eq!(row.id(), BALANCE_DETAIL_ID);
+        assert_eq!(row.title(), "Balance");
+        assert_eq!(row.section_title(), Some("Credits"));
+        assert_eq!(row.value(), "CN¥12.34 (Paid: CN¥8.00 / Granted: CN¥4.34)");
+    }
+
+    #[test]
+    fn mimo_non_numeric_balance_is_a_parse_error() {
+        let data = BalanceData {
+            balance: "twelve".to_string(),
+            currency: "CNY".to_string(),
+            cash_balance: None,
+            gift_balance: None,
+        };
+        assert!(matches!(
+            balance_row_from_data(&data),
+            Err(ProviderError::Parse(_))
+        ));
     }
 
     #[test]
