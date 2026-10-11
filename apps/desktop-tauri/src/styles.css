@@ -118,12 +118,13 @@
   --chart-mistral: rgb(255, 82, 41);
   --chart-codebuff: rgb(0, 255, 149);
   --chart-deepseek: rgb(77, 107, 254);
-  --chart-windsurf: rgb(34, 197, 94);
+  --chart-windsurf: rgb(52, 232, 187);
   --chart-elevenlabs: rgb(17, 24, 39);
-  --chart-deepgram: rgb(19, 239, 147);
-  --chart-grok: rgb(0, 0, 0);
-  --chart-groq: rgb(245, 80, 54);
-  --chart-llmproxy: rgb(79, 70, 229);
+  --chart-deepgram: rgb(100, 103, 242);
+  --chart-grok: rgb(16, 163, 127);
+  --chart-xai: rgb(142, 142, 147);
+  --chart-groq: rgb(245, 104, 68);
+  --chart-llmproxy: rgb(36, 180, 126);
 
   /* Default cost/credits series colors (match egui credits teal). */
   --chart-cost: rgb(93, 135, 255);
@@ -1896,6 +1897,17 @@ body:has(.tray-panel-reveal),
   font-size: 0.78rem;
   color: var(--provider-brand, var(--accent));
   text-transform: none;
+}
+
+/* Near-black brands (TypeSafe, V0, Replicate...) vanish on dark surfaces, so
+   the dark theme uses ProviderIcon's lifted --provider-brand-dark when it sets
+   one. Light scopes, including the tray panel's nested data-theme="light",
+   keep the exact brand color; the light rule comes second so it wins there. */
+[data-theme="dark"] .provider-icon {
+  color: var(--provider-brand-dark, var(--provider-brand, var(--accent)));
+}
+[data-theme="light"] .provider-icon {
+  color: var(--provider-brand, var(--accent));
 }
 
 /* ── Providers sidebar status dot ──────────────────────────────────── */
