@@ -716,6 +716,40 @@ describe("FloatBar", () => {
     });
   });
 
+  it("gives near-black brands a lifted tint for the dark floating glass only", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("typesafe", "TypeSafe", 60),
+      snapshot("grok", "Grok", 40),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ enabledProviders: ["typesafe", "grok"] }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({ enabledProviders: ["typesafe", "grok"] }),
+    );
+    await waitFor(() => {
+      expect(container.querySelectorAll(".floatbar__pill").length).toBe(2);
+    });
+    const [typesafe, grok] = Array.from(
+      container.querySelectorAll<HTMLElement>(".floatbar__pill"),
+    );
+    // TypeSafe keeps the Mac #111111 and adds the dark-surface tint.
+    expect(typesafe.style.getPropertyValue("--brand")).toBe("#111111");
+    expect(typesafe.style.getPropertyValue("--brand-dark")).toBe("#707070");
+    const icon = typesafe.querySelector<HTMLElement>(".provider-icon")!;
+    expect(icon.style.getPropertyValue("--provider-brand")).toBe("#111111");
+    expect(icon.style.getPropertyValue("--provider-brand-dark")).toBe("#707070");
+    // Grok's Mac green already reads on dark and gets no tint.
+    expect(grok.style.getPropertyValue("--brand")).toBe("#10a37f");
+    expect(grok.style.getPropertyValue("--brand-dark")).toBe("");
+    expect(
+      grok.querySelector<HTMLElement>(".provider-icon")!.style.getPropertyValue(
+        "--provider-brand-dark",
+      ),
+    ).toBe("");
+  });
+
   it("does not show stale cached providers when all providers are disabled", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
       snapshot("claude", "Claude", 30),
