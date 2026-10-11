@@ -66,6 +66,8 @@ interface Props {
   liveSnapshot?: ProviderUsageSnapshot | null;
   cookieDomain?: string | null;
   resetTimeRelative: boolean;
+  /** Show "N% used" next to remaining on per-account usage rows. */
+  showAsUsed?: boolean;
   providerMetrics: SettingsSnapshot["providerMetrics"];
   copilotSeatCreditEntitlement: SettingsSnapshot["copilotSeatCreditEntitlement"];
   /** Per-provider accent color overrides (CLI name → hex color). */
@@ -88,6 +90,7 @@ export function ProviderDetailPane({
   liveSnapshot = null,
   cookieDomain = null,
   resetTimeRelative,
+  showAsUsed = false,
   providerMetrics,
   copilotSeatCreditEntitlement,
   providerAccentColors,
@@ -336,8 +339,22 @@ export function ProviderDetailPane({
       {detail.id === "codex" && (
         <CodexAccountsSection t={t} hidePersonalInfo={hidePersonalInfo} />
       )}
-      {detail.id === "claude" && <ClaudeAccountsSection t={t} language={language} />}
-      {detail.id === "grok" && <GrokAccountsSection t={t} />}
+      {detail.id === "claude" && (
+        <ClaudeAccountsSection
+          t={t}
+          language={language}
+          hidePersonalInfo={hidePersonalInfo}
+          showAsUsed={showAsUsed}
+          resetTimeRelative={resetTimeRelative}
+        />
+      )}
+      {detail.id === "grok" && (
+        <GrokAccountsSection
+          t={t}
+          hidePersonalInfo={hidePersonalInfo}
+          resetTimeRelative={resetTimeRelative}
+        />
+      )}
 
       {detail.lastError && (
         <ProviderIssueNotice detail={detail} t={t} />

@@ -155,6 +155,7 @@ export default function ProvidersTab({
         liveSnapshot={liveSnapshot}
         cookieDomain={selectedEntry?.cookieDomain ?? null}
         resetTimeRelative={settings.resetTimeRelative}
+        showAsUsed={settings.showAsUsed}
         providerMetrics={settings.providerMetrics}
         copilotSeatCreditEntitlement={settings.copilotSeatCreditEntitlement}
         providerAccentColors={settings.providerAccentColors}

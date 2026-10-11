@@ -16,6 +16,10 @@ import {
 import { ClaudeSwapAccountsSection } from "./ClaudeSwapAccountsSection";
 import ClaudeAccountUsage from "../../../../../components/ClaudeAccountUsage";
 import {
+  buildClaudeAccountOrdinals,
+  buildPrivateClaudeAccountLabel,
+} from "../../../../../components/claudeAccountDisplay";
+import {
   localClaudeReconciliationOutcome,
   useClaudeReconciliation,
 } from "../../../../../hooks/useClaudeReconciliation";
@@ -23,9 +27,15 @@ import {
 export function ClaudeAccountsSection({
   t,
   language = "english",
+  hidePersonalInfo = false,
+  showAsUsed = false,
+  resetTimeRelative = true,
 }: {
   t: (key: LocaleKey) => string;
   language?: Language;
+  hidePersonalInfo?: boolean;
+  showAsUsed?: boolean;
+  resetTimeRelative?: boolean;
 }) {
   const [accounts, setAccounts] = useState<ClaudeAccount[]>([]);
   const [busy, setBusy] = useState(false);
@@ -89,6 +99,7 @@ export function ClaudeAccountsSection({
       }
     }
   };
+  const accountOrdinals = buildClaudeAccountOrdinals(accounts);
   return (
     <>
       <section className="provider-detail-section codex-accounts">
@@ -100,18 +111,32 @@ export function ClaudeAccountsSection({
         {loggingIn && <p role="status">{t("ClaudeAccountsSigningIn")}</p>}
         {accounts.length === 0 && <p>{t("ClaudeAccountsEmpty")}</p>}
         <ul className="credential-list">
-          {accounts.map(account => (
+          {accounts.map(account => {
+            const privateLabel = buildPrivateClaudeAccountLabel(
+              account,
+              accountOrdinals[account.id],
+              hidePersonalInfo,
+              t("Account"),
+            );
+            return (
             <li className="credential-card" key={account.id}>
               <div className="credential-card__header">
                 <div className="credential-card__info">
-                  <strong>{account.email}</strong>
+                  <strong title={privateLabel.tooltip}>{privateLabel.label}</strong>
                   <span className="credential-card__meta">
                     {[
-                      account.organization?.includes(account.email) ? null : account.organization,
+                      hidePersonalInfo || account.organization?.includes(account.email)
+                        ? null
+                        : account.organization,
                       account.plan,
                     ].filter(Boolean).join(" · ")}
                   </span>
-                  <ClaudeAccountUsage account={account} t={t} />
+                  <ClaudeAccountUsage
+                    account={account}
+                    t={t}
+                    showAsUsed={showAsUsed}
+                    resetTimeRelative={resetTimeRelative}
+                  />
                   {account.isActive && (
                     <span className="credential-card__badge credential-card__badge--set">
                       {t("TokenAccountActive")}
@@ -122,7 +147,7 @@ export function ClaudeAccountsSection({
                   {account.needsAuthentication && <button
                     className="credential-btn credential-btn--secondary"
                     disabled={busy || reconciling}
-                    aria-label={`${t("CodexAccountsReauthenticateButton")}: ${account.email}`}
+                    aria-label={`${t("CodexAccountsReauthenticateButton")}: ${privateLabel.label}`}
                     onClick={() => {
                       setLoggingIn(true);
                       void run(() => claudeAccountReauthenticate(account.id));
@@ -158,7 +183,8 @@ export function ClaudeAccountsSection({
                 </div>
               </div>
             </li>
-          ))}
+            );
+          })}
         </ul>
         <button
           className="credential-btn credential-btn--primary"
