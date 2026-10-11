@@ -172,8 +172,18 @@ fn lane_pace(
     pace_work_days: Option<u8>,
     fallback: impl FnOnce() -> Option<UsagePace>,
 ) -> Option<UsagePace> {
+    lane_pace_at(provider, window, Utc::now(), pace_work_days, fallback)
+}
+
+/// `lane_pace` at a fixed clock.
+pub(super) fn lane_pace_at(
+    provider: ProviderId,
+    window: &RateWindow,
+    now: chrono::DateTime<Utc>,
+    pace_work_days: Option<u8>,
+    fallback: impl FnOnce() -> Option<UsagePace>,
+) -> Option<UsagePace> {
     let capability = provider.pace_capability();
-    let now = Utc::now();
     if capability.supports_reset_window_pace(window, now) {
         capability.reset_window_pace(window, now, pace_work_days)
     } else {

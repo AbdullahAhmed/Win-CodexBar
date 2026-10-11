@@ -705,6 +705,31 @@ fn detail_backed_flag_stays_out_of_json_output() {
 }
 
 #[test]
+fn cli_lane_pace_scores_copilot_against_the_february_cycle() {
+    use chrono::TimeZone;
+    // Copilot window with no length, reset Mar 1, now Feb 15: half of the
+    // 28-day cycle has elapsed.
+    let now = Utc.with_ymd_and_hms(2026, 2, 15, 0, 0, 0).unwrap();
+    let reset = Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap();
+    let window = RateWindow::with_details(60.0, None, Some(reset), None);
+
+    let pace = render::lane_pace_at(ProviderId::Copilot, &window, now, None, || None)
+        .expect("copilot reset-window pace");
+    assert_eq!(pace.expected_used_percent, 50.0);
+    assert_eq!(pace.delta_percent, 10.0);
+    assert_eq!(pace.eta_seconds, Some(806_400.0));
+
+    // Providers without the capability use the lane's own rule.
+    let mut fallback_used = false;
+    let codex = render::lane_pace_at(ProviderId::Codex, &window, now, None, || {
+        fallback_used = true;
+        None
+    });
+    assert!(codex.is_none());
+    assert!(fallback_used);
+}
+
+#[test]
 fn copilot_monthly_windows_get_reset_window_pace_in_json_and_text() {
     use chrono::Duration;
     // Copilot windows have a reset date and no length: the CLI scores them
