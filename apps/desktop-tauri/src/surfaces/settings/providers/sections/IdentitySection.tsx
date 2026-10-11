@@ -3,6 +3,7 @@ import type { LocaleKey } from "../../../../i18n/keys";
 import { ProviderIcon } from "../../../../components/providers/ProviderIcon";
 import { hideOpenAiApiProjectId } from "../../../../lib/openAiApiIdentity";
 import { maskEmail } from "../../../../components/MenuCard";
+import { providerSourceHintShort } from "../providerDetailFormat";
 
 interface Props {
   provider: Pick<
@@ -46,7 +47,10 @@ export function IdentitySection({
       value: hideOpenAiApiProjectId(displayIdentityValue(provider.plan, t), hideProjectId),
     },
     { label: t("AuthType"), value: provider.authType },
-    { label: t("DataSource"), value: provider.sourceLabel },
+    {
+      label: t("DataSource"),
+      value: provider.sourceLabel || providerSourceHintShort(provider.id, t),
+    },
   ];
   const visible = rows.filter(
     (r): r is { label: string; value: string } =>
