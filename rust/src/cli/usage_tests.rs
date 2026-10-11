@@ -705,6 +705,108 @@ fn detail_backed_flag_stays_out_of_json_output() {
 }
 
 #[test]
+fn cli_lane_pace_scores_copilot_against_the_february_cycle() {
+    use chrono::TimeZone;
+    // Copilot window with no length, reset Mar 1, now Feb 15: half of the
+    // 28-day cycle has elapsed.
+    let now = Utc.with_ymd_and_hms(2026, 2, 15, 0, 0, 0).unwrap();
+    let reset = Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap();
+    let window = RateWindow::with_details(60.0, None, Some(reset), None);
+
+    let pace = render::lane_pace_at(ProviderId::Copilot, &window, now, None, || None)
+        .expect("copilot reset-window pace");
+    assert_eq!(pace.expected_used_percent, 50.0);
+    assert_eq!(pace.delta_percent, 10.0);
+    assert_eq!(pace.eta_seconds, Some(806_400.0));
+
+    // Providers without the capability use the lane's own rule.
+    let mut fallback_used = false;
+    let codex = render::lane_pace_at(ProviderId::Codex, &window, now, None, || {
+        fallback_used = true;
+        None
+    });
+    assert!(codex.is_none());
+    assert!(fallback_used);
+}
+
+#[test]
+fn cli_lane_pace_keeps_reset_window_pace_for_a_resolved_31_day_cycle() {
+    use chrono::TimeZone;
+    // StepFun already expands the 30-day sentinel to the real cycle: 31
+    // days ending Mar 31. Mar 15 12:00 is 15.5 days in.
+    let now = Utc.with_ymd_and_hms(2026, 3, 15, 12, 0, 0).unwrap();
+    let reset = Utc.with_ymd_and_hms(2026, 3, 31, 0, 0, 0).unwrap();
+    let window = RateWindow::with_details(70.0, Some(44_640), Some(reset), None);
+
+    let pace = render::lane_pace_at(ProviderId::StepFun, &window, now, None, || {
+        panic!("a calendar-month window must use the reset-window rule")
+    })
+    .expect("stepfun reset-window pace");
+    assert_eq!(pace.expected_used_percent, 50.0);
+    assert_eq!(pace.delta_percent, 20.0);
+}
+
+#[test]
+fn cli_reset_window_pace_needs_three_percent_expected() {
+    use chrono::TimeZone;
+    // Upstream `CLIRenderer.paceMinimumExpectedPercent` (3). Copilot's cycle
+    // ending Mar 31 is 31 days long; 12 hours in, 0.5 / 31 = 1.61% is
+    // expected, so the CLI shows no pace and does not fall back.
+    let reset = Utc.with_ymd_and_hms(2026, 3, 31, 0, 0, 0).unwrap();
+    let window = RateWindow::with_details(5.0, None, Some(reset), None);
+    let early = Utc.with_ymd_and_hms(2026, 2, 28, 12, 0, 0).unwrap();
+    let pace = render::lane_pace_at(ProviderId::Copilot, &window, early, None, || {
+        panic!("reset-window lanes never fall back")
+    });
+    assert!(pace.is_none());
+    // One day in (3.23%), the pace shows.
+    let day_one = Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap();
+    let pace = render::lane_pace_at(ProviderId::Copilot, &window, day_one, None, || None)
+        .expect("pace after 3% expected");
+    assert_eq!(pace.expected_used_percent, 100.0 / 31.0);
+}
+
+#[test]
+fn copilot_monthly_windows_get_reset_window_pace_in_json_and_text() {
+    use chrono::Duration;
+    // Copilot windows have a reset date and no length: the CLI scores them
+    // against the calendar month ending at the reset, as the Mac does.
+    let reset = Utc::now() + Duration::days(10);
+    let cycle_minutes = f64::from(RateWindow::calendar_month_window_minutes(reset).unwrap());
+    let expected = 100.0 * (cycle_minutes - 10.0 * 1440.0) / cycle_minutes;
+    let usage = UsageSnapshot::new(RateWindow::with_details(5.0, None, Some(reset), None))
+        .with_secondary(RateWindow::with_details(5.0, None, Some(reset), None));
+
+    let json = render_json_result(ProviderId::Copilot, fetch_result(usage.clone()), None, None);
+    let primary = json["pace"]["primary"]["expectedUsedPercent"]
+        .as_f64()
+        .expect("copilot primary pace");
+    assert!((primary - expected).abs() < 0.01, "{primary} vs {expected}");
+    let secondary = json["pace"]["secondary"]["expectedUsedPercent"]
+        .as_f64()
+        .expect("copilot secondary pace");
+    // Without the capability the secondary would use a 7-day fallback and a
+    // 10-day reset would give no pace at all.
+    assert!(
+        (secondary - expected).abs() < 0.01,
+        "{secondary} vs {expected}"
+    );
+
+    let text = render_text_with_status(
+        ProviderId::Copilot,
+        &fetch_result(usage.clone()),
+        None,
+        false,
+        None,
+    );
+    assert_eq!(text.matches("  Pace:").count(), 2, "{text}");
+
+    // Codex has no reset-window capability: a length-less primary has no pace.
+    let codex = render_json_result(ProviderId::Codex, fetch_result(usage), None, None);
+    assert!(codex["pace"].is_null() || codex["pace"]["primary"].is_null());
+}
+
+#[test]
 fn json_pace_follows_weekly_work_days() {
     use chrono::{Datelike, Duration, Local, TimeZone};
     // Weekly window ending at the next local Monday 00:00, so it covers the

@@ -729,6 +729,12 @@ export interface WindowPaceSnapshot {
   actualUsedPercent: number;
   etaSeconds?: number | null;
   willLastToReset: boolean;
+  /**
+   * Scored against the provider's reset window (upstream
+   * `ProviderPaceCapability.resetWindowPace`). Card lanes show it as weekly
+   * pace whatever the window's length. Omitted when false.
+   */
+  resetWindow?: boolean;
 }
 
 export interface PaceSnapshot {

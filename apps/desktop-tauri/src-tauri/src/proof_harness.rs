@@ -419,15 +419,18 @@ fn normalize_seed_snapshot(snapshot: &mut ProviderUsageSnapshot) {
 }
 
 /// Compute lane pace for seeded windows that omit it, with the same fallback
-/// window lengths as `ProviderUsageSnapshot::from_fetch_result`.
+/// window lengths and reset-window capability as
+/// `ProviderUsageSnapshot::from_fetch_result`.
 fn fill_seed_pace(
     snapshot: &mut ProviderUsageSnapshot,
     now: chrono::DateTime<chrono::Utc>,
     work_days: Option<u8>,
 ) {
-    use crate::commands::pace::{SESSION_FALLBACK_MINUTES, WEEKLY_FALLBACK_MINUTES};
+    use crate::commands::pace::{PaceLane, SESSION_FALLBACK_MINUTES, WEEKLY_FALLBACK_MINUTES};
+    let id = ProviderId::from_cli_name(&snapshot.provider_id);
     fill_window_pace(
         &mut snapshot.primary,
+        (id, PaceLane::Card),
         SESSION_FALLBACK_MINUTES,
         now,
         work_days,
@@ -440,15 +443,28 @@ fn fill_seed_pace(
     .into_iter()
     .flatten()
     {
-        fill_window_pace(window, WEEKLY_FALLBACK_MINUTES, now, work_days);
+        fill_window_pace(
+            window,
+            (id, PaceLane::Card),
+            WEEKLY_FALLBACK_MINUTES,
+            now,
+            work_days,
+        );
     }
     for extra in &mut snapshot.extra_rate_windows {
-        fill_window_pace(&mut extra.window, WEEKLY_FALLBACK_MINUTES, now, work_days);
+        fill_window_pace(
+            &mut extra.window,
+            (id, PaceLane::Extra),
+            WEEKLY_FALLBACK_MINUTES,
+            now,
+            work_days,
+        );
     }
 }
 
 fn fill_window_pace(
     w: &mut RateWindowSnapshot,
+    (id, pace_lane): (Option<ProviderId>, crate::commands::pace::PaceLane),
     default_minutes: u32,
     now: chrono::DateTime<chrono::Utc>,
     work_days: Option<u8>,
@@ -467,14 +483,24 @@ fn fill_window_pace(
         w.used_percent,
         w.window_minutes,
         Some(resets_at.with_timezone(&chrono::Utc)),
-        None,
+        w.reset_description.clone(),
     );
-    w.pace = crate::commands::pace::WindowPaceSnapshot::for_window(
-        &window,
-        default_minutes,
-        now,
-        work_days,
-    );
+    w.pace = match id {
+        Some(id) => crate::commands::pace::WindowPaceSnapshot::for_lane(
+            id,
+            pace_lane,
+            &window,
+            default_minutes,
+            now,
+            work_days,
+        ),
+        None => crate::commands::pace::WindowPaceSnapshot::for_window(
+            &window,
+            default_minutes,
+            now,
+            work_days,
+        ),
+    };
 }
 
 fn is_valid_proof_config(config: &ProofConfig) -> bool {
@@ -771,6 +797,28 @@ mod tests {
 
         // No resetsAt: no pace, as before.
         assert!(linear.primary.pace.is_none());
+    }
+
+    #[test]
+    fn seed_pace_uses_the_providers_reset_window_capability() {
+        use chrono::TimeZone;
+        // Copilot: no window length, monthly reset on Mar 1, half of Feb gone.
+        let now = chrono::Utc.with_ymd_and_hms(2026, 2, 15, 0, 0, 0).unwrap();
+        let json = r#"{"providerId":"copilot","displayName":"Copilot",
+            "primary":{"usedPercent":60.0,"resetsAt":"2026-03-01T00:00:00Z"},
+            "extraRateWindows":[{"id":"copilot-seat","title":"Seat",
+                "window":{"usedPercent":60.0,"resetsAt":"2026-03-01T00:00:00Z"}}]}"#;
+        // Non-Codex seeds arrive in a proof-mode array; parse the element directly.
+        let mut snapshot: ProviderUsageSnapshot = serde_json::from_str(json).unwrap();
+        normalize_seed_snapshot(&mut snapshot);
+        fill_seed_pace(&mut snapshot, now, None);
+        let pace = snapshot.primary.pace.expect("copilot primary pace");
+        assert_eq!(pace.expected_used_percent, 50.0);
+        assert_eq!(pace.delta_percent, 10.0);
+        assert_eq!(pace.eta_seconds, Some(806_400.0));
+        assert!(pace.reset_window);
+        // Extras keep plain lane pace: no length means no pace.
+        assert!(snapshot.extra_rate_windows[0].window.pace.is_none());
     }
 
     #[test]

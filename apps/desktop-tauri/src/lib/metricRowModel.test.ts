@@ -264,6 +264,51 @@ describe("metricRowPresentation pace", () => {
     expect(row.metaText).toBe("23% in reserve · Lasts until reset");
   });
 
+  describe("reset-window pace (upstream ProviderPaceCapability)", () => {
+    // Copilot premium requests: no window length, 60% used half way through
+    // a 28-day cycle, scored by the bridge against the resolved month.
+    const copilot = (overrides: Partial<WindowPaceSnapshot> = {}) =>
+      rateWindow({
+        usedPercent: 60,
+        remainingPercent: 40,
+        windowMinutes: null,
+        pace: pace({
+          stage: "ahead",
+          deltaPercent: 10,
+          expectedUsedPercent: 50,
+          actualUsedPercent: 60,
+          etaSeconds: 806_400,
+          willLastToReset: false,
+          resetWindow: true,
+          ...overrides,
+        }),
+      });
+
+    it("shows weekly pace on a primary window with no length", () => {
+      const row = metricRowPresentation(input({ providerId: "copilot", snap: copilot() }), en);
+      expect(row.metaText).toBe("10% in deficit · Runs out in 9d 8h");
+      expect(row.bar.pacePercent).toBe(50);
+      expect(row.bar.paceDeficit).toBe(true);
+    });
+
+    it("shows pace on the tertiary lane", () => {
+      const snap = { ...copilot(), windowMinutes: 40_320 };
+      const row = metricRowPresentation(input({ providerId: "cursor", lane: "tertiary", snap }), en);
+      expect(row.metaText).toBe("10% in deficit · Runs out in 9d 8h");
+    });
+
+    it("keeps the 3% expected floor", () => {
+      const snap = copilot({ expectedUsedPercent: 2, etaSeconds: 3600 });
+      expect(metricRowPresentation(input({ providerId: "copilot", snap }), en).metaText).toBeNull();
+    });
+
+    it("leaves extra lanes on their exact-window rule", () => {
+      const snap = { ...copilot(), windowMinutes: 40_320 };
+      const row = metricRowPresentation(input({ providerId: "copilot", lane: "extra", snap }), en);
+      expect(row.metaText).toBeNull();
+    });
+  });
+
   it("hides the pace line in compact rows but keeps the bar marker", () => {
     const row = metricRowPresentation(input({ lane: "secondary", snap: weekly(), compact: true }), en);
     expect(row.metaText).toBeNull();

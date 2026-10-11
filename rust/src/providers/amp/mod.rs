@@ -19,6 +19,12 @@ use crate::core::{
     RateWindow, SourceMode, UsageSnapshot,
 };
 
+/// Upstream Amp `ProviderPaceCapability.resetWindowPace`: subscription
+/// windows with a known length and a "renews in ..." reset.
+pub(crate) fn reset_window_pace_matches(window: &RateWindow, _now: chrono::DateTime<Utc>) -> bool {
+    display::window_allows_pace(window)
+}
+
 /// Amp provider (Sourcegraph)
 pub struct AmpProvider {
     metadata: ProviderMetadata,
