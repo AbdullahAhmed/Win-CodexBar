@@ -23,7 +23,8 @@ use reqwest::{
 };
 use serde_json::{Map, Value, json};
 
-use crate::browser::cookies::Cookie;
+use crate::browser::cookies::{Cookie, CookieError};
+use crate::browser::detection::BrowserType;
 use crate::core::{
     FetchContext, ManualEmptyCookiePolicy, Provider, ProviderError, ProviderFetchResult,
     ProviderId, ProviderMetadata, ProviderStateKind, SourceMode,
@@ -77,11 +78,25 @@ const FREE_PACKAGE_CODES: [&str; 11] = [
 
 const SESSION_EXPIRED: &str =
     "WorkBuddy session expired. Sign in at www.workbuddy.cn or paste a fresh Cookie header.";
-const MISSING_SESSION: &str = "No WorkBuddy session cookies found. Sign in at www.workbuddy.cn (Chrome) or paste a Cookie header.";
+/// Every browser is read, but WorkBuddy binds the session to Chrome's
+/// User-Agent, so only a Chrome sign-in is expected to work.
+const MISSING_SESSION: &str = "No WorkBuddy session cookies found. Sign in at www.workbuddy.cn in Chrome (WorkBuddy binds the session to Chrome's User-Agent) or paste a Cookie header.";
 const COOKIES_OFF: &str = "WorkBuddy cookies are disabled.";
 
-/// Browser sessions to try, in order: one Cookie header per browser.
-type SessionSource = fn() -> Result<Vec<String>, ProviderError>;
+/// Reads every detected browser's WorkBuddy cookies.
+type SessionSource = fn() -> BrowserSessions;
+
+/// The browser sessions to try, in order (one Cookie header per browser),
+/// and the browser read failures to report when none of them works.
+#[derive(Debug, Default)]
+struct BrowserSessions {
+    cookies: Vec<String>,
+    /// Chromium App-Bound Encryption hid a browser's cookies (often Chrome,
+    /// the browser WorkBuddy sessions are bound to).
+    protected: Option<ProviderError>,
+    /// Another browser's cookies could not be read.
+    unreadable: Option<ProviderError>,
+}
 
 pub struct WorkBuddyProvider {
     metadata: ProviderMetadata,
@@ -140,7 +155,7 @@ impl WorkBuddyProvider {
         };
         let agents = model::user_agents((self.chrome_major)());
         let mut rejected = false;
-        for cookie in &sessions {
+        for cookie in &sessions.cookies {
             let Some((data, agent)) = summary(&site, cookie, &agents).await? else {
                 rejected = true;
                 // A pasted header stays pinned to that account.
@@ -158,23 +173,38 @@ impl WorkBuddyProvider {
             return Ok(model::result(&summary, resets_at));
         }
         if rejected {
-            return Err(ProviderError::Other(SESSION_EXPIRED.into()));
+            // A browser that could not be read (e.g. Chrome behind App-Bound
+            // Encryption) explains the rejection better than an expiry.
+            return Err(sessions
+                .protected
+                .or(sessions.unreadable)
+                .unwrap_or_else(|| ProviderError::Other(SESSION_EXPIRED.into())));
         }
         Err(missing_session())
     }
 
     /// The pasted Cookie header alone, else each browser's session.
-    fn sessions(&self, ctx: &FetchContext) -> Result<(Vec<String>, bool), ProviderError> {
+    fn sessions(&self, ctx: &FetchContext) -> Result<(BrowserSessions, bool), ProviderError> {
         if let Some(header) = ctx.manual_cookie_header.as_deref() {
             let header = crate::providers::normalize_cookie_header(header)
                 .filter(|header| !header.trim().is_empty())
                 .ok_or_else(missing_session)?;
-            return Ok((vec![header], true));
+            let pasted = BrowserSessions {
+                cookies: vec![header],
+                ..BrowserSessions::default()
+            };
+            return Ok((pasted, true));
         }
         if ctx.manual_cookie_missing {
             return Err(missing_session());
         }
-        Ok(((self.browser_sessions)()?, false))
+        let mut found = (self.browser_sessions)();
+        if found.cookies.is_empty()
+            && let Some(error) = found.protected.take()
+        {
+            return Err(error);
+        }
+        Ok((found, false))
     }
 }
 
@@ -404,17 +434,54 @@ fn other(message: &str) -> Failure {
     Failure::Error(ProviderError::Other(message.to_owned()))
 }
 
-/// Each browser's WorkBuddy session as a Cookie header. No cookies at all is
-/// an empty list, so the caller reports the missing session.
-fn browser_sessions() -> Result<Vec<String>, ProviderError> {
-    match crate::providers::browser_cookie_candidates_for_domain(COOKIE_DOMAIN) {
-        Ok(candidates) => Ok(candidates
-            .into_iter()
-            .filter_map(|(_, cookies)| request_cookie_header(&cookies, SUMMARY_PATH))
-            .collect()),
-        Err(ProviderError::NoCookies) => Ok(Vec::new()),
-        Err(error) => Err(error),
+/// Each detected browser's WorkBuddy session. The browsers are walked here
+/// rather than through the shared candidate helper, which drops the
+/// App-Bound Encryption skip as soon as any other browser has cookies.
+fn browser_sessions() -> BrowserSessions {
+    use crate::browser::cookies::CookieExtractor;
+    use crate::browser::detection::BrowserDetector;
+
+    collect_sessions(BrowserDetector::detect_all().into_iter().map(|browser| {
+        let cookies = CookieExtractor::extract_for_domain(&browser, COOKIE_DOMAIN);
+        (browser.browser_type, cookies)
+    }))
+}
+
+/// One Cookie header per browser that holds a `www.workbuddy.cn` session,
+/// in browser order, plus the first App-Bound Encryption skip and the first
+/// other read failure. A browser without cookies is not a failure.
+fn collect_sessions(
+    scan: impl IntoIterator<Item = (BrowserType, Result<Vec<Cookie>, CookieError>)>,
+) -> BrowserSessions {
+    let mut found = BrowserSessions::default();
+    for (browser, cookies) in scan {
+        let error = match cookies {
+            Ok(cookies) => {
+                found
+                    .cookies
+                    .extend(request_cookie_header(&cookies, SUMMARY_PATH));
+                continue;
+            }
+            Err(error) => error,
+        };
+        let protected = matches!(error, CookieError::AppBoundEncryption);
+        let error = crate::providers::map_browser_cookie_error(error);
+        if matches!(error, ProviderError::NoCookies) {
+            continue;
+        }
+        tracing::debug!(
+            browser = browser.display_name(),
+            protected,
+            "WorkBuddy could not read this browser's cookies"
+        );
+        let slot = if protected {
+            &mut found.protected
+        } else {
+            &mut found.unreadable
+        };
+        slot.get_or_insert(error);
     }
+    found
 }
 
 /// The cookies a browser would send to `https://www.workbuddy.cn<path>`

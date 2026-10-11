@@ -65,6 +65,11 @@ const ZERO: &str = r#"{"code":0,"msg":"OK","data":{"SubscriptionPackageName":"�
   {"CycleTotalCapacity":"0","CycleRemainCapacity":"0","CycleFrozenCapacity":"2.5","CapacityUnit":"credits"}
 ]}}"#;
 
+/// Upstream docs/workbuddy.md: rollover above the grant shows 0% used.
+const ROLLOVER: &str = r#"{"code":0,"msg":"OK","data":{"Packages":[
+  {"CycleTotalCapacity":"500","CycleRemainCapacity":"600","CapacityUnit":"credits"}
+]}}"#;
+
 const SUMMARY_FIXTURE_PATH: &str = "/billing/meter/get-user-resource-summary";
 const PAID_FIXTURE_PATH: &str = "/billing/meter/get-user-resource-paid-packages";
 const FREE_FIXTURE_PATH: &str = "/billing/meter/get-user-resource-free-packages";
@@ -157,6 +162,20 @@ fn a_zero_allowance_lists_left_and_total_instead_of_a_meter() {
         ]
     );
     assert_eq!(result.usage.login_method.as_deref(), Some("体验版"));
+}
+
+#[test]
+fn rolled_over_credits_above_the_allowance_show_no_usage() {
+    let result = summary_result(ROLLOVER).expect("rollover");
+    let primary = &result.usage.primary;
+    assert_eq!(primary.used_percent, 0.0);
+    assert_eq!(
+        primary.reset_description.as_deref(),
+        Some("600 / 500 credits left")
+    );
+    assert!(primary.description_is_detail);
+    assert!(!primary.is_informational);
+    assert!(result.display_details.is_empty());
 }
 
 #[test]
@@ -489,16 +508,72 @@ fn no_chrome() -> Option<u32> {
     None
 }
 
-fn no_browser_sessions() -> Result<Vec<String>, ProviderError> {
-    Ok(Vec::new())
+fn sessions(cookies: &[&str]) -> BrowserSessions {
+    BrowserSessions {
+        cookies: cookies.iter().map(|&cookie| cookie.to_owned()).collect(),
+        ..BrowserSessions::default()
+    }
 }
 
-fn two_browser_sessions() -> Result<Vec<String>, ProviderError> {
-    Ok(vec![REJECTED_COOKIE.to_owned(), FIXTURE_COOKIE.to_owned()])
+fn no_browser_sessions() -> BrowserSessions {
+    sessions(&[])
 }
 
-fn fixture_then_other_sessions() -> Result<Vec<String>, ProviderError> {
-    Ok(vec![FIXTURE_COOKIE.to_owned(), "session=other".to_owned()])
+fn two_browser_sessions() -> BrowserSessions {
+    sessions(&[REJECTED_COOKIE, FIXTURE_COOKIE])
+}
+
+fn fixture_then_other_sessions() -> BrowserSessions {
+    sessions(&[FIXTURE_COOKIE, "session=other"])
+}
+
+/// The shared App-Bound Encryption message, as the provider reports it.
+const ABE_ERROR: &str = "Failed to read browser cookies: Chromium App-Bound Encryption is blocking automatic browser import. Paste the Cookie header manually, or use Firefox if that browser has the same login.";
+
+/// Chrome is skipped by App-Bound Encryption; Edge holds a session.
+fn chrome_protected_edge_signed_in() -> BrowserSessions {
+    collect_sessions([
+        (BrowserType::Chrome, Err(CookieError::AppBoundEncryption)),
+        (
+            BrowserType::Edge,
+            Ok(vec![cookie("session", ".workbuddy.cn", "/")]),
+        ),
+    ])
+}
+
+/// Chrome is skipped by App-Bound Encryption; Edge only has cookies a
+/// request to www.workbuddy.cn would not carry.
+fn chrome_protected_edge_without_session() -> BrowserSessions {
+    collect_sessions([
+        (BrowserType::Chrome, Err(CookieError::AppBoundEncryption)),
+        (
+            BrowserType::Edge,
+            Ok(vec![cookie("api", "api.workbuddy.cn", "/")]),
+        ),
+    ])
+}
+
+/// Firefox cannot be read; Edge holds a session.
+fn firefox_unreadable_edge_signed_in() -> BrowserSessions {
+    collect_sessions([
+        (
+            BrowserType::Firefox,
+            Err(CookieError::Decryption("fixture".into())),
+        ),
+        (
+            BrowserType::Edge,
+            Ok(vec![cookie("session", ".workbuddy.cn", "/")]),
+        ),
+    ])
+}
+
+/// Only a read failure that is not App-Bound Encryption, and no session.
+fn only_unreadable_browsers() -> BrowserSessions {
+    collect_sessions([
+        (BrowserType::Firefox, Err(CookieError::NoEncryptionKey)),
+        (BrowserType::Brave, Err(CookieError::BrowserNotInstalled)),
+        (BrowserType::Edge, Err(CookieError::NotFound("x".into()))),
+    ])
 }
 
 fn provider(
@@ -831,12 +906,132 @@ async fn no_session_is_a_sign_in_prompt_without_a_request() {
                 sign_in_url,
             }) => {
                 assert_eq!(message, MISSING_SESSION);
+                assert_eq!(
+                    message,
+                    "No WorkBuddy session cookies found. Sign in at www.workbuddy.cn in Chrome (WorkBuddy binds the session to Chrome's User-Agent) or paste a Cookie header."
+                );
                 assert_eq!(sign_in_url, "https://www.workbuddy.cn/profile/plans-usage");
             }
             other => panic!("expected a sign-in prompt, got {other:?}"),
         }
     }
     assert!(paths(&log).is_empty());
+}
+
+#[test]
+fn browser_scans_keep_sessions_in_order_and_the_first_failure_of_each_kind() {
+    let found = collect_sessions([
+        (BrowserType::Chrome, Err(CookieError::AppBoundEncryption)),
+        (
+            BrowserType::Edge,
+            Ok(vec![cookie("session", ".workbuddy.cn", "/")]),
+        ),
+        (BrowserType::Brave, Ok(Vec::new())),
+        (
+            BrowserType::Firefox,
+            Err(CookieError::Decryption("first".into())),
+        ),
+        (BrowserType::Arc, Err(CookieError::AppBoundEncryption)),
+        (BrowserType::Chromium, Err(CookieError::NoEncryptionKey)),
+        (
+            BrowserType::ChromeBeta,
+            Ok(vec![cookie("locale", "www.workbuddy.cn", "/")]),
+        ),
+    ]);
+    assert_eq!(
+        found.cookies,
+        vec!["session=session-value", "locale=locale-value"]
+    );
+    assert_eq!(
+        found.protected.map(|error| error.to_string()).as_deref(),
+        Some(ABE_ERROR)
+    );
+    assert_eq!(
+        found.unreadable.map(|error| error.to_string()).as_deref(),
+        Some("Failed to read browser cookies: Decryption error: first")
+    );
+
+    let quiet = only_unreadable_browsers();
+    assert!(quiet.cookies.is_empty());
+    assert!(quiet.protected.is_none());
+    assert_eq!(
+        quiet.unreadable.map(|error| error.to_string()).as_deref(),
+        Some("Failed to read browser cookies: No encryption key found")
+    );
+}
+
+#[tokio::test]
+async fn a_rejected_session_reports_chrome_app_bound_encryption_instead_of_expiry() {
+    let (base_url, log) = serve(|_| (401, "{}".to_owned()));
+    let provider = provider(&base_url, no_chrome, chrome_protected_edge_signed_in);
+    let error = provider
+        .fetch_usage(&automatic())
+        .await
+        .expect_err("Chrome is protected");
+    assert_eq!(error.to_string(), ABE_ERROR);
+    assert_ne!(
+        provider.error_state_kind(&error),
+        ProviderStateKind::ExpiredSession
+    );
+    // Edge's session was still tried.
+    let cookies: Vec<String> = summary_requests(&log)
+        .iter()
+        .filter_map(|seen| seen.header("cookie").map(str::to_owned))
+        .collect();
+    assert_eq!(cookies, vec!["session=session-value"]);
+}
+
+#[tokio::test]
+async fn a_rejected_session_reports_another_browser_read_failure_instead_of_expiry() {
+    let (base_url, log) = serve(|_| (401, "{}".to_owned()));
+    let error = provider(&base_url, no_chrome, firefox_unreadable_edge_signed_in)
+        .fetch_usage(&automatic())
+        .await
+        .expect_err("Firefox is unreadable");
+    assert_eq!(
+        error.to_string(),
+        "Failed to read browser cookies: Decryption error: fixture"
+    );
+    assert_eq!(paths(&log), vec![SUMMARY_FIXTURE_PATH]);
+}
+
+#[tokio::test]
+async fn a_protected_chrome_without_any_session_reports_app_bound_encryption() {
+    let (base_url, log) = serve(|seen| default_route(&seen.path));
+    let error = provider(&base_url, chrome_154, chrome_protected_edge_without_session)
+        .fetch_usage(&automatic())
+        .await
+        .expect_err("Chrome is protected");
+    assert_eq!(error.to_string(), ABE_ERROR);
+    assert!(paths(&log).is_empty());
+}
+
+#[tokio::test]
+async fn other_read_failures_without_a_session_still_prompt_sign_in() {
+    let (base_url, log) = serve(|seen| default_route(&seen.path));
+    let error = provider(&base_url, chrome_154, only_unreadable_browsers)
+        .fetch_usage(&automatic())
+        .await
+        .expect_err("no session");
+    assert!(
+        matches!(
+            &error,
+            ProviderError::BrowserSignInRequired { message, .. } if message == MISSING_SESSION
+        ),
+        "{error:?}"
+    );
+    assert!(paths(&log).is_empty());
+}
+
+#[tokio::test]
+async fn a_pasted_header_is_expired_even_when_chrome_is_protected() {
+    let (base_url, log) = serve(|_| (401, "{}".to_owned()));
+    let error = provider(&base_url, no_chrome, chrome_protected_edge_signed_in)
+        .fetch_usage(&manual(REJECTED_COOKIE))
+        .await
+        .expect_err("expired");
+    assert_eq!(error.to_string(), SESSION_EXPIRED);
+    assert_eq!(paths(&log), vec![SUMMARY_FIXTURE_PATH]);
 }
 
 #[tokio::test]

@@ -199,7 +199,10 @@ Plans & usage page (`https://www.workbuddy.cn/profile/plans-usage`) uses:
   package listings (cycle ends are China Standard Time; the listings share a
   5-second budget and a failed listing only drops the reset).
 - HTTP 401 on every User-Agent moves on to the next browser session and is
-  reported as an expired session at the end. 403, 429, server errors,
+  reported as an expired session at the end, unless Automatic could not read
+  a browser (for example Chrome behind App-Bound Encryption): then that read
+  error is reported instead, as it is when no browser holds a session.
+  403, 429, server errors,
   non-zero API codes and malformed payloads stop at once. Response bodies and
   cookies are never logged or echoed in errors.
 
