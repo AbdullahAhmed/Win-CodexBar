@@ -442,7 +442,9 @@ impl TokenAccountSupport {
             | ProviderId::DevPass
             | ProviderId::XKiro
             | ProviderId::Raycast
-            | ProviderId::Vercel => None,
+            | ProviderId::Vercel
+            | ProviderId::Synthetic
+            | ProviderId::ClawRouter => None,
         }
     }
 
