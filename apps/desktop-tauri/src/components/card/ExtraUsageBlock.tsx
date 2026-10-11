@@ -20,7 +20,7 @@ export default function ExtraUsageBlock({
   resetTimeRelative: boolean;
 }) {
   const { t } = useLocale();
-  const section = cardCostSection(cost, style, t);
+  const section = cardCostSection(cost, style, t, providerId);
   const resetText = useFormattedResetTime(
     section && !section.inline && style !== "compact" ? cost.resetsAt : null,
     null,
