@@ -103,7 +103,7 @@ mod locale_tests {
                 .entries
                 .get("ProviderSidebarSearch")
                 .map(String::as_str),
-            Some("Search"),
+            Some("Search providers"),
             "ProviderSidebarSearch should resolve instead of leaking the key"
         );
         assert_eq!(bundle.entries.len(), locale::LocaleKey::ALL.len());
