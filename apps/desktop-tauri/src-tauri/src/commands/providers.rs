@@ -745,11 +745,12 @@ fn spawn_provider_refreshes(
         );
         // Resolved here rather than inside the fetch: forecast history is keyed by
         // account, and the managed-account id is the only discriminator Codex exposes.
-        let token_account_id = inputs
+        let active_account = inputs
             .token_accounts
             .get(&id)
-            .and_then(ProviderAccountData::active_account)
-            .map(|account| account.id);
+            .and_then(ProviderAccountData::active_account);
+        let token_account_id = active_account.map(|account| account.id);
+        let token_account_label = active_account.and_then(|account| header_label(&account.label));
         let hooks_enabled = inputs.settings.hooks_enabled;
 
         handles.push(tokio::spawn(async move {
@@ -761,7 +762,10 @@ fn spawn_provider_refreshes(
                 id,
                 ctx,
                 generation,
-                token_account_id,
+                ActiveTokenAccount {
+                    id: token_account_id,
+                    label: token_account_label,
+                },
                 hooks_enabled,
             )
             .await;
@@ -797,16 +801,31 @@ fn spawn_provider_refreshes(
     handles
 }
 
+/// The active token account a refresh runs under: its id scopes forecast
+/// history; its label is header display only.
+struct ActiveTokenAccount {
+    id: Option<uuid::Uuid>,
+    label: Option<String>,
+}
+
+/// A token-account label fit for the card header, or `None` when blank.
+fn header_label(label: &str) -> Option<String> {
+    let label = label.trim();
+    (!label.is_empty()).then(|| label.to_string())
+}
+
 async fn refresh_provider(
     app: tauri::AppHandle,
     id: ProviderId,
     ctx: FetchContext,
     generation: u64,
-    token_account_id: Option<uuid::Uuid>,
+    token_account: ActiveTokenAccount,
     hooks_enabled: bool,
 ) {
-    let (snapshot, account_identity, retention) =
-        fetch_provider_snapshot(id, ctx, token_account_id).await;
+    let (mut snapshot, account_identity, retention) =
+        fetch_provider_snapshot(id, ctx, token_account.id).await;
+    snapshot.account_label = token_account.label;
+    let token_account_id = token_account.id;
     let fresh_snapshot = snapshot.error.is_none();
     // Captured before last-good preservation can swap in a cached snapshot.
     let fetch_attempt = FetchAttempt::of(&snapshot);
@@ -1600,6 +1619,50 @@ mod predictive_warning_tests {
             }
         }
     }
+
+    /// Codex OAuth now publishes the auth.json email. Ambient Codex moves from
+    /// the unscoped key (process-local history only) to the lowercased email;
+    /// a managed token account still wins, and the header-only token-account
+    /// label never feeds any scoping key.
+    #[test]
+    fn codex_email_scopes_forecast_and_warnings_but_label_does_not() {
+        use crate::commands::bridge::forecast_account_key;
+
+        let token = uuid::Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap();
+        let mut usage = codexbar::core::UsageSnapshot::new(codexbar::core::RateWindow::new(1.0));
+        let mut snapshot = empty_snapshot();
+        snapshot.provider_id = "codex".to_string();
+
+        assert_eq!(forecast_account_key(&usage, None), None);
+        assert_eq!(quota_notification_account_identity(&snapshot, None), "");
+
+        snapshot.account_label = Some("Work account".to_string());
+        assert_eq!(quota_notification_account_identity(&snapshot, None), "");
+
+        usage.account_email = Some("Parity.User@Example.com".to_string());
+        snapshot.account_email = usage.account_email.clone();
+        assert_eq!(
+            forecast_account_key(&usage, None).as_deref(),
+            Some("parity.user@example.com")
+        );
+        assert_eq!(
+            quota_notification_account_identity(&snapshot, None),
+            "parity.user@example.com"
+        );
+        assert_eq!(
+            forecast_account_key(&usage, Some(token)).as_deref(),
+            Some("token-account:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+        );
+    }
+
+    #[test]
+    fn header_label_trims_and_drops_blank_labels() {
+        assert_eq!(
+            header_label("  parity-github "),
+            Some("parity-github".to_string())
+        );
+        assert_eq!(header_label("   "), None);
+    }
 }
 #[cfg(test)]
 mod reset_backfill_tests {
@@ -1640,6 +1703,7 @@ mod reset_backfill_tests {
             cost: None,
             plan_name: None,
             account_email: None,
+            account_label: None,
             subscription: None,
             source_label: String::new(),
             has_successful_claude_cli_quota: false,
