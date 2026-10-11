@@ -185,6 +185,26 @@ are never followed and response bodies are never echoed in errors.
   budget, inconsistent coverage, malformed amounts) is a parse error, not a
   partial balance.
 
+### ClawRouter
+
+ClawRouter reports the monthly budget, spend and routed-provider usage of one
+policy key (`GET {base}/v1/usage`, `Authorization: Bearer <key>`). Configure
+the key in Settings → Providers → ClawRouter (or `CLAWROUTER_API_KEY`). Leave
+the Base URL empty for `https://clawrouter.openclaw.ai`; set it (or
+`CLAWROUTER_BASE_URL`) for another deployment. The service root and its `/v1`
+URL both work, a bare host is treated as HTTPS, and plain HTTP, embedded
+credentials, a query or a fragment are rejected before the key is read.
+Redirects are never followed and response bodies are never echoed in errors.
+
+- The primary lane is the monthly budget (spent / limit), resetting on the
+  first day of the next month (UTC). The cost line shows this month's spend
+  against the limit.
+- Details show requests, tokens, actual cost, the budget ledger and the
+  monthly budget, then up to 20 routed providers ordered by spend and
+  requests.
+- A policy without a monthly limit shows "Unmetered" and this month's actual
+  cost.
+
 ## Listing what is enabled
 
 ```powershell

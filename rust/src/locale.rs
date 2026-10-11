@@ -318,6 +318,8 @@ locale_keys! {
     AixyGatewayTitle,
     AixyGatewayLabel,
     AixyGatewayHelp,
+    ClawRouterGatewayTitle,
+    ClawRouterGatewayHelp,
     WayfinderModels,
     WayfinderRequests,
     WayfinderTokens,

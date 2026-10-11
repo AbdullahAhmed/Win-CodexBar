@@ -751,6 +751,17 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             config_file_path: None,
             dashboard_url: Some("https://dash.aixy-gateway.com"),
         },
+        ProviderConfigInfo {
+            id: ProviderId::ClawRouter,
+            name: "ClawRouter",
+            requires_api_key: true,
+            api_key_env_var: Some(crate::providers::clawrouter::API_KEY_ENV),
+            api_key_help: Some(
+                "Save a ClawRouter policy key. Leave the Base URL empty for the hosted service, or set an HTTPS URL for another deployment. Or set CLAWROUTER_API_KEY and CLAWROUTER_BASE_URL.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://clawrouter.openclaw.ai/dashboard/access"),
+        },
     ]
 }
 
