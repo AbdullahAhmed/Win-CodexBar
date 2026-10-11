@@ -284,6 +284,89 @@ fn fallback_pass_fields(payload: Option<&Value>) -> PassFields {
     }
 }
 
+/// The auto top-up activity text after "Auto top-up: " (upstream
+/// `KiloUsageSnapshot.makeLoginMethod` + `KiloUsageFetcher.autoTopUpState`):
+/// the payment method when enabled ("visa"), "enabled" without one, "off" when
+/// disabled, and nothing when neither payload says.
+pub(super) fn auto_top_up_label(
+    credit_blocks: Option<&Value>,
+    auto_top_up: Option<&Value>,
+) -> Option<String> {
+    let credit_contexts = dictionary_contexts(credit_blocks);
+    let auto_top_up_contexts = dictionary_contexts(auto_top_up);
+    let enabled = first_bool(&["enabled", "isEnabled", "active"], &auto_top_up_contexts)
+        .or_else(|| bool_from_status(first_string(&["status"], &auto_top_up_contexts)))
+        .or_else(|| first_bool(&["autoTopUpEnabled"], &credit_contexts))?;
+    if !enabled {
+        return Some("off".to_string());
+    }
+
+    // Skip blank values so an empty "paymentMethod" does not hide a later alias.
+    let method_keys = ["paymentMethod", "paymentMethodType", "method", "cardBrand"];
+    let method = auto_top_up_contexts
+        .iter()
+        .find_map(|context| {
+            method_keys.iter().find_map(|key| {
+                context
+                    .get(*key)?
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|method| !method.is_empty())
+            })
+        })
+        .map(str::to_string)
+        .or_else(|| {
+            money_amount(
+                &["amountCents"],
+                &[],
+                &["amount", "topUpAmount", "amountUsd"],
+                &auto_top_up_contexts,
+            )
+            .filter(|amount| *amount > 0.0)
+            .map(currency_amount_label)
+        });
+    Some(method.unwrap_or_else(|| "enabled".to_string()))
+}
+
+/// Upstream `currencyAmountLabel`: "$25" for whole amounts, else "$12.50".
+fn currency_amount_label(amount: f64) -> String {
+    if amount.trunc() == amount {
+        format!("${amount:.0}")
+    } else {
+        format!("${amount:.2}")
+    }
+}
+
+fn first_bool(keys: &[&str], contexts: &[&Object]) -> Option<bool> {
+    contexts
+        .iter()
+        .find_map(|context| keys.iter().find_map(|key| bool_from(context.get(*key))))
+}
+
+/// Upstream `bool(from:)`: JSON booleans, numbers (non-zero is true) and the
+/// usual yes/no words.
+fn bool_from(raw: Option<&Value>) -> Option<bool> {
+    match raw? {
+        Value::Bool(value) => Some(*value),
+        Value::Number(number) => number.as_f64().map(|value| value != 0.0),
+        Value::String(text) => match text.trim().to_lowercase().as_str() {
+            "true" | "1" | "yes" | "enabled" | "on" => Some(true),
+            "false" | "0" | "no" | "disabled" | "off" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Upstream `boolFromStatusString`.
+fn bool_from_status(status: Option<&str>) -> Option<bool> {
+    match status?.trim().to_lowercase().as_str() {
+        "enabled" | "active" | "on" => Some(true),
+        "disabled" | "inactive" | "off" | "none" => Some(false),
+        _ => None,
+    }
+}
+
 /// Breadth-first list of the payload object and its nested objects (including
 /// objects inside arrays), down to [`MAX_CONTEXT_DEPTH`].
 fn dictionary_contexts(payload: Option<&Value>) -> Vec<&Object> {
@@ -409,6 +492,61 @@ fn date_from_epoch(value: f64) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_top_up_label_follows_upstream_states() {
+        let label =
+            |credits: Value, top_up: Value| auto_top_up_label(Some(&credits), Some(&top_up));
+        let none = serde_json::json!({});
+
+        assert_eq!(
+            label(
+                none.clone(),
+                serde_json::json!({"enabled": true, "paymentMethod": " visa "})
+            ),
+            Some("visa".to_string())
+        );
+        // A blank paymentMethod must not hide the next alias.
+        assert_eq!(
+            label(
+                none.clone(),
+                serde_json::json!({"enabled": true, "paymentMethod": "", "paymentMethodType": "visa"})
+            ),
+            Some("visa".to_string())
+        );
+        assert_eq!(
+            label(none.clone(), serde_json::json!({"enabled": true})),
+            Some("enabled".to_string())
+        );
+        assert_eq!(
+            label(
+                none.clone(),
+                serde_json::json!({"enabled": true, "amountCents": 2500})
+            ),
+            Some("$25".to_string())
+        );
+        assert_eq!(
+            label(
+                none.clone(),
+                serde_json::json!({"enabled": false, "paymentMethod": "visa"})
+            ),
+            Some("off".to_string())
+        );
+        assert_eq!(
+            label(
+                none.clone(),
+                serde_json::json!({"status": "active", "method": "card"})
+            ),
+            Some("card".to_string())
+        );
+        // Falls back to the credit-blocks flag when the top-up payload is silent.
+        assert_eq!(
+            label(serde_json::json!({"autoTopUpEnabled": false}), none.clone()),
+            Some("off".to_string())
+        );
+        assert_eq!(label(none.clone(), none), None);
+        assert_eq!(auto_top_up_label(None, None), None);
+    }
 
     #[test]
     fn nested_subscription_parses_period_fields_and_tier() {
