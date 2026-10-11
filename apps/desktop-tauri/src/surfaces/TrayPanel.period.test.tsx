@@ -60,7 +60,7 @@ vi.mock("../lib/tauri", () => tauriMocks);
 vi.mock("@tauri-apps/api/event", () => eventMocks);
 vi.mock("@tauri-apps/api/window", () => windowMocks);
 
-import TrayPanel from "./TrayPanel";
+import TrayPanel, { splitSpendTitle } from "./TrayPanel";
 import { LocaleProvider } from "../i18n/LocaleProvider";
 import { buildBundle } from "../test/localeHarness";
 import type { ProviderUsageSnapshot, SettingsSnapshot } from "../types/bridge";
@@ -189,10 +189,29 @@ describe("TrayPanel History window", () => {
       </LocaleProvider>,
     );
 
-    expect(await screen.findByText("OverviewSpendPeriodTitle")).toBeInTheDocument();
-    expect(screen.getByText("$9.00")).toBeInTheDocument();
+    expect(await screen.findByText("OverviewSpendPeriodTitle")).toHaveClass(
+      "overview-spend__heading",
+    );
+    expect(screen.getByText("$9.00")).toHaveClass("overview-spend__total");
     expect(screen.queryByText("$2.00")).not.toBeInTheDocument();
     // The scan carries no explicit window: the backend resolves the saved one.
     expect(tauriMocks.getUsageSpendSummary).toHaveBeenCalledWith();
+  });
+});
+
+describe("splitSpendTitle", () => {
+  it("separates the heading from the secondary range tail", () => {
+    expect(splitSpendTitle("Usage & Spend · {}", "30d")).toEqual({
+      heading: "Usage & Spend",
+      detail: "· 30d",
+    });
+    expect(splitSpendTitle("{} の使用量", "30d")).toEqual({
+      heading: "30d の使用量",
+      detail: null,
+    });
+    expect(splitSpendTitle("OverviewSpendPeriodTitle", "30d")).toEqual({
+      heading: "OverviewSpendPeriodTitle",
+      detail: null,
+    });
   });
 });

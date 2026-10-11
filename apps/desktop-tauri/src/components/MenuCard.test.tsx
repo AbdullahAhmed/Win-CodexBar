@@ -83,6 +83,16 @@ function provider(
   };
 }
 
+/** Waits for a metric row whose title starts with `label` (the percent is an inline span). */
+function metricTitle(label: string) {
+  return waitFor(() => {
+    const titles = [...document.querySelectorAll(".menu-metric__title")];
+    const match = titles.find((el) => el.firstChild?.textContent === label);
+    if (!match) throw new Error(`metric "${label}" not rendered yet`);
+    return match;
+  });
+}
+
 function renderCard(
   snapshot: ProviderUsageSnapshot,
   opts: {
@@ -210,13 +220,14 @@ describe("MenuCard", () => {
     eventMocks.listen.mockResolvedValue(() => {});
   });
 
-  it("keeps Codex sign-in discoverable beside an authentication error with no accounts", async () => {
-    tauriMocks.getCodexAccountsState.mockResolvedValueOnce({ accounts: [], accountOrdinals: {}, snapshots: {} });
+  it("shows a Codex authentication error without embedding the account menu", async () => {
     const codex = { ...provider("Authentication required"), providerId: "codex", displayName: "Codex", errorState: "needsAuthentication" as const };
-    render(<LocaleProvider><MenuCard provider={codex} display={{ hideEmail: false, resetTimeRelative: true, showResetWhenExhausted: true }} /></LocaleProvider>);
+    const { container } = render(<LocaleProvider><MenuCard provider={codex} display={{ hideEmail: false, resetTimeRelative: true, showResetWhenExhausted: true }} /></LocaleProvider>);
     expect(await screen.findByText("Authentication required")).toBeDefined();
-    const add = await screen.findByRole("button", { name: "CodexAccountsSignInButton" });
-    await waitFor(() => expect(add).toBeEnabled());
+    // Account switching moved to Settings > Providers (the "Switch Account..." row).
+    expect(screen.queryByRole("button", { name: "CodexAccountsSignInButton" })).not.toBeInTheDocument();
+    expect(container.querySelector(".codex-menu-accounts")).not.toBeInTheDocument();
+    expect(tauriMocks.getCodexAccountsState).not.toHaveBeenCalled();
   });
 
   it("keeps Fireworks vendor API spend visible when local cost summaries are hidden", async () => {
@@ -241,8 +252,8 @@ describe("MenuCard", () => {
 
     renderCard(snapshot, { costSummaryDisplayStyle: "hidden" });
 
-    expect(await screen.findByText("API spend")).toBeInTheDocument();
-    expect(document.querySelector(".menu-card__cost-line")).toHaveTextContent("$12.34");
+    expect(await screen.findByText("API spend")).toHaveClass("card-extra__title");
+    expect(document.querySelector(".card-extra__spend")).toHaveTextContent("30 days: $12.34");
   });
 
   it("filters hidden metric and extra rows without changing the snapshot payload", async () => {
@@ -280,7 +291,7 @@ describe("MenuCard", () => {
     expect(screen.queryByText("Estimated from local logs")).not.toBeInTheDocument();
   });
 
-  it("shows DeepSeek peak/off-peak pricing status", async () => {
+  it("leaves DeepSeek pricing to Settings > Providers", async () => {
     tauriMocks.getDeepSeekPricingStatus.mockResolvedValue({
       period: "offPeak",
       currentLocalTime: "2026-08-17 05:00:00 UTC",
@@ -293,9 +304,9 @@ describe("MenuCard", () => {
 
     renderCard(snapshot);
 
-    expect(await screen.findByText("DeepSeek pricing: Off-peak hours")).toBeInTheDocument();
-    expect(screen.getByText("Current local time: 2026-08-17 05:00:00 UTC")).toBeInTheDocument();
-    expect(screen.getByText("Next transition: 2026-08-17 06:00:00 UTC")).toBeInTheDocument();
+    await metricTitle("ProviderSessionLabel");
+    expect(screen.queryByText("DeepSeek pricing: Off-peak hours")).not.toBeInTheDocument();
+    expect(tauriMocks.getDeepSeekPricingStatus).not.toHaveBeenCalled();
   });
 
   it("can render metric bars as used instead of remaining", async () => {
@@ -696,7 +707,7 @@ describe("MenuCard", () => {
     });
   });
 
-  it("shows the formatted predicted exhaustion time", async () => {
+  it("leaves the provider-level exhaustion ETA to Settings > Providers", async () => {
     const snapshot = provider(null, 40);
     snapshot.pace = {
       stage: "far_ahead",
@@ -709,11 +720,9 @@ describe("MenuCard", () => {
 
     const { container } = renderCard(snapshot);
 
-    await waitFor(() => {
-      expect(container.querySelector(".menu-card__pace-eta")).toHaveTextContent(
-        "⚠ Runs out in 2h",
-      );
-    });
+    await metricTitle("ProviderSessionLabel");
+    expect(container.querySelector(".menu-card__pace")).toBeNull();
+    expect(screen.queryByText(/Runs out in 2h/)).not.toBeInTheDocument();
   });
 
   it("hides pace, budgets, and forecast text when Show pace is off", async () => {
@@ -908,7 +917,6 @@ describe("MenuCard", () => {
     expect(await screen.findAllByText("0% used")).toHaveLength(2);
     expect(screen.queryByText("Blocked by monthly limit")).not.toBeInTheDocument();
     expect(container.querySelector(".menu-metric--blocked")).toBeNull();
-    expect(container.querySelector(".menu-card__pace")).toBeInTheDocument();
   });
 
   it("lifts the block when the monthly pool resets while the card stays open", async () => {
@@ -956,11 +964,9 @@ describe("MenuCard", () => {
     expect(screen.getAllByText("$1.23").length).toBeGreaterThan(0);
     expect(screen.getByText("30d tokens")).toBeInTheDocument();
     expect(screen.getByText("584K")).toBeInTheDocument();
-    expect(screen.getByText("Estimated from local logs")).toBeInTheDocument();
-    const details = container.querySelector<HTMLDetailsElement>(".menu-card__more")!;
-    expect(details.open).toBe(false);
-    fireEvent.click(details.querySelector("summary")!);
-    expect(details.open).toBe(true);
+    expect(container.querySelector(".card-dash")).toBeInTheDocument();
+    // No collapsed "usage details" disclosure: the dashboard is inline.
+    expect(container.querySelector("details")).toBeNull();
   });
 
   it("includes the matching daily token count in the local cost tooltip", async () => {
@@ -987,7 +993,7 @@ describe("MenuCard", () => {
 
     const { container } = renderCard(snapshot);
     const bar = await waitFor(() => {
-      const element = container.querySelector(".menu-card__local-chart span");
+      const element = container.querySelector(".card-dash__bar");
       if (!element) throw new Error("local chart bar not rendered yet");
       return element;
     });
@@ -1040,38 +1046,33 @@ describe("MenuCard", () => {
     ];
 
     const detailed = renderCard(snapshot);
-    expect(await screen.findByText("Available balance: $95.50")).toBeInTheDocument();
-    expect(screen.getAllByText("Available balance: $95.50")).toHaveLength(1);
+    const label = await screen.findByText("Available balance");
+    expect(label).toHaveClass("card-kv__label");
+    expect(screen.getAllByText("Available balance")).toHaveLength(1);
+    expect(label.closest(".card-kv__row")?.querySelector(".card-kv__value")).toHaveTextContent(
+      "$95.50",
+    );
     detailed.unmount();
 
     renderCard(snapshot, { compactOverview: true });
-    expect(screen.queryByText("Available balance: $95.50")).not.toBeInTheDocument();
+    await metricTitle("ProviderSessionLabel");
+    expect(screen.queryByText("Available balance")).not.toBeInTheDocument();
   });
 
-  it("places Claude accounts above metrics and the collapsed usage details", async () => {
+  it("keeps Claude account switching out of the card", async () => {
     tauriMocks.claudeAccountsList.mockResolvedValue([
       { id: "a", email: "a@example.com", organization: "Personal", isActive: true, isSaved: true },
       { id: "b", email: "b@example.com", organization: "Work", isActive: false, isSaved: true },
     ]);
     const { container } = renderCard(provider(null));
-    await screen.findByText("ClaudeAccountsTitle");
-    const accounts = container.querySelector(".codex-menu-accounts")!;
-    const metrics = container.querySelector(".menu-card__metrics")!;
-    expect(accounts.compareDocumentPosition(metrics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // The usage details block renders once its async data settles.
-    const more = await waitFor(() => {
-      const el = container.querySelector<HTMLDetailsElement>(".menu-card__more");
-      expect(el).not.toBeNull();
-      return el!;
-    });
-    expect(more.open).toBe(false);
+    await metricTitle("ProviderSessionLabel");
+    expect(screen.queryByText("ClaudeAccountsTitle")).not.toBeInTheDocument();
+    expect(container.querySelector(".codex-menu-accounts")).toBeNull();
+    expect(tauriMocks.claudeAccountsList).not.toHaveBeenCalled();
   });
 
-  it("shows on-pace budgets and expands projection details", async () => {
-    const onLayoutChange = vi.fn();
-    const resetAt = new Date(
-      Date.now() + 0.6 * 7 * 24 * 60 * 60 * 1000,
-    );
+  it("leaves on-pace budgets and the projection chart to Settings > Providers", async () => {
+    const resetAt = new Date(Date.now() + 0.6 * 7 * 24 * 60 * 60 * 1000);
     const snapshot = provider(null, 20);
     snapshot.primary = rateWindow(20, {
       reservePercent: 20,
@@ -1080,39 +1081,12 @@ describe("MenuCard", () => {
       resetsAt: resetAt.toISOString(),
     });
 
-    renderCard(snapshot, { onLayoutChange });
-
-    const toggle = await screen.findByRole("button", { name: /On-pace budget/ });
-    expect(screen.queryByText("now 20%")).not.toBeInTheDocument();
-    expect(screen.queryByRole("img", { name: /PaceChartAriaLabel/i })).not.toBeInTheDocument();
-
-    fireEvent.click(toggle);
-
-    expect(screen.getByText("now 20%")).toBeInTheDocument();
-    expect(screen.getByText("1h 21%")).toBeInTheDocument();
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("img", { name: /PaceChartAriaLabel/i })).toBeInTheDocument();
-    await waitFor(() => {
-      expect(onLayoutChange).toHaveBeenCalled();
-    });
-  });
-
-  it("shows on-pace budgets when timing exists without reserve metadata", async () => {
-    const resetAt = new Date(Date.now() + 6 * 24 * 60 * 60 * 1000);
-    const snapshot = provider(null, 31);
-    snapshot.primary = rateWindow(31, {
-      windowMinutes: 7 * 24 * 60,
-      resetsAt: resetAt.toISOString(),
-    });
-
     renderCard(snapshot);
 
-    const toggle = await screen.findByRole("button", { name: /On-pace budget/ });
-    expect(screen.queryByText("now 0%")).not.toBeInTheDocument();
-    fireEvent.click(toggle);
-    expect(screen.getByText("now 0%")).toBeInTheDocument();
-    expect(screen.queryByText(/in reserve/)).not.toBeInTheDocument();
-    expect(screen.queryByText("Lasts until reset")).not.toBeInTheDocument();
+    await metricTitle("ProviderSessionLabel");
+    expect(screen.queryByText(/On-pace budget/)).not.toBeInTheDocument();
+    expect(screen.queryByText("now 20%")).not.toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /PaceChartAriaLabel/i })).not.toBeInTheDocument();
   });
 
   it("does not show pace budgets for a five-hour session window", async () => {
@@ -1248,13 +1222,13 @@ describe("MenuCard", () => {
   });
 
 
-  it("shows spend used/limit plus balance secondary line", async () => {
+  it("shows capped spend as an extra usage bar with percent and balance", async () => {
     tauriMocks.getLocaleStrings.mockResolvedValue(
       buildBundle({
-        DetailCostTitle: "Cost",
-        DetailCostUsed: "Used",
+        ExtraUsage: "Extra usage",
+        UsedPercent: "{}% used",
         DetailCostBalance: "Balance",
-        DetailCostRemaining: "Remaining",
+        CostPeriodThisMonth: "This month",
       }),
     );
     const snapshot = provider(null, 20);
@@ -1263,7 +1237,7 @@ describe("MenuCard", () => {
       limit: 100,
       remaining: 87.5,
       currencyCode: "USD",
-      period: "Extra usage",
+      period: "This month",
       resetsAt: null,
       formattedUsed: "$12.50",
       formattedLimit: "$100.00",
@@ -1271,20 +1245,23 @@ describe("MenuCard", () => {
       formattedBalance: "$25.50",
     };
 
-    renderCard(snapshot);
+    const { container } = renderCard(snapshot);
 
-    expect(await screen.findByText(/Cost — Extra usage/)).toBeInTheDocument();
-    expect(screen.getByText(/Used:\s*\$12\.50\s*\/\s*\$100\.00/)).toBeInTheDocument();
-    expect(screen.getByText(/Balance:\s*\$25\.50/)).toBeInTheDocument();
+    expect(await screen.findByText("Extra usage")).toHaveClass("card-extra__title");
+    expect(container.querySelector(".card-extra__spend")).toHaveTextContent(
+      "This month: $12.50 / $100.00",
+    );
+    expect(screen.getByText("13% used")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Extra usage" })).toHaveAttribute(
+      "aria-valuenow",
+      "12.5",
+    );
+    expect(screen.getByText("Balance: $25.50")).toBeInTheDocument();
   });
 
-  it("renders balance-only cost as credits-style value", async () => {
+  it("renders balance-only cost as one inline extra usage row", async () => {
     tauriMocks.getLocaleStrings.mockResolvedValue(
-      buildBundle({
-        CreditsLabel: "Credits",
-        DetailCostTitle: "Cost",
-        DetailCostUsed: "Used",
-      }),
+      buildBundle({ ExtraUsage: "Extra usage", DetailCostBalance: "Balance" }),
     );
     const snapshot = provider(null, 20);
     snapshot.cost = {
@@ -1300,11 +1277,13 @@ describe("MenuCard", () => {
       formattedBalance: "$25.50",
     };
 
-    renderCard(snapshot);
+    const { container } = renderCard(snapshot);
 
     expect(await screen.findByText("Extra usage")).toBeInTheDocument();
-    expect(screen.getByText("$25.50")).toBeInTheDocument();
-    expect(screen.queryByText(/Used:/)).not.toBeInTheDocument();
+    expect(
+      container.querySelector(".card-extra--inline .card-extra__inline-value"),
+    ).toHaveTextContent("Balance: $25.50");
+    expect(container.querySelector(".card-extra__track")).toBeNull();
   });
 
   it("localizes the relative updated-at time in Japanese without duplicated prefix", async () => {
@@ -1325,13 +1304,12 @@ describe("MenuCard", () => {
   });
 });
 
-// The SwiftUI fix this regression came from protecting a cached native
-// measurement. The Windows card has no cached measurement layer: its live
-// forecast is a normal flex row whose width is recomputed by WebView2.
+// Upstream keeps the card a plain column; the session forecast moved to
+// Settings > Providers > Usage details.
 const stylesSource = loadStyles();
 
-describe("MenuCard live forecast layout", () => {
-  it("renders the changing forecast in the current full-width flex row", async () => {
+describe("MenuCard column layout", () => {
+  it("keeps the session forecast out of the card and lays the content out as a column", async () => {
     const snapshot = provider(null, 20);
     snapshot.secondary = rateWindow(35, { windowMinutes: 7 * 24 * 60 });
     snapshot.secondaryLabel = "Weekly";
@@ -1345,12 +1323,8 @@ describe("MenuCard live forecast layout", () => {
     };
 
     const { container } = renderCard(snapshot);
-    const forecast = await screen.findByText("Estimated: 123 session quotas left");
-    const row = forecast.closest(".menu-metric__forecast");
-
-    expect(row).toBeInTheDocument();
-    expect(row).toHaveClass("menu-metric__row");
-    expect(row?.parentElement).toHaveClass("menu-metric");
+    expect(await screen.findByText("ProviderWeeklyLabel")).toBeInTheDocument();
+    expect(screen.queryByText(/session quotas left/)).not.toBeInTheDocument();
     expect(container.querySelector(".menu-card__content")).toBeInTheDocument();
 
     const card = ruleBlock(stylesSource, ".menu-card");
@@ -1358,16 +1332,5 @@ describe("MenuCard live forecast layout", () => {
     const content = ruleBlock(stylesSource, ".menu-card__content");
     expect(content).toContain("display: flex");
     expect(content).toContain("flex-direction: column");
-    const metricRow = ruleBlock(stylesSource, ".menu-metric__row");
-    expect(metricRow).toContain("min-width: 0");
-    const forecastLabel = ruleBlock(
-      stylesSource,
-      ".menu-metric__forecast .menu-metric__pct",
-    );
-    expect(forecastLabel).toContain("flex: 1 1 auto");
-    expect(forecastLabel).toContain("min-width: 0");
-    expect(forecastLabel).toContain("overflow: hidden");
-    expect(forecastLabel).toContain("text-overflow: ellipsis");
-    expect(forecastLabel).toContain("white-space: nowrap");
   });
 });

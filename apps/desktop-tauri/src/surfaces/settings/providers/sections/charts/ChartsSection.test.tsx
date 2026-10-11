@@ -180,3 +180,45 @@ describe("ChartsSection OpenAI API daily usage (upstream 0.66.0)", () => {
     expect(screen.queryByRole("listbox")).toBeNull();
   });
 });
+
+describe("ChartsSection quota window history (moved from the tray card)", () => {
+  const quotaWindowHistory = {
+    providerId: "claude",
+    accountScope: null,
+    historyCoverageEstablished: true,
+    windows: [
+      {
+        offset: 0,
+        start: "2026-09-14T12:00:00Z",
+        end: "2026-09-21T12:00:00Z",
+        totalTokens: 1234,
+        totalCostUsd: 1.25,
+        tokensAreComplete: true,
+        costIsComplete: true,
+        entryCount: 2,
+        boundariesAreEstimated: false,
+      },
+    ],
+  };
+
+  it("lists recent quota windows under the chart tabs", async () => {
+    mockChart.mockResolvedValue(chartData({ providerId: "claude", quotaWindowHistory }));
+    render(<ChartsSection providerId="claude" accountEmail={null} t={(key) => key} />);
+    expect(await screen.findByText("1,234")).toBeInTheDocument();
+    expect(screen.getByRole("tablist")).toBeInTheDocument();
+  });
+
+  it("shows the history alone when there is no chart series", async () => {
+    mockChart.mockResolvedValue(
+      chartData({
+        providerId: "claude",
+        costHistory: [],
+        tokensHistory: [],
+        quotaWindowHistory,
+      }),
+    );
+    render(<ChartsSection providerId="claude" accountEmail={null} t={(key) => key} />);
+    expect(await screen.findByText("$1.25")).toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+  });
+});

@@ -33,6 +33,7 @@ import { UsageItemVisibilitySection } from "./sections/UsageItemVisibilitySectio
 import { AutoResumeSection } from "./sections/AutoResumeSection";
 import { OptionalDetailsSection } from "./sections/OptionalDetailsSection";
 import { PaceSection } from "./sections/PaceSection";
+import { UsageDetailsSection } from "./sections/UsageDetailsSection";
 import { CostSection } from "./sections/CostSection";
 import { QuickActionsSection } from "./sections/QuickActionsSection";
 import { ChartsSection } from "./sections/charts/ChartsSection";
@@ -404,6 +405,9 @@ export function ProviderDetailPane({
             : null
         }
         t={t}
+      />
+      <UsageDetailsSection
+        provider={liveSnapshot?.providerId === detail.id ? liveSnapshot : null}
       />
       <CostSection cost={detail.cost} t={t} />
 
