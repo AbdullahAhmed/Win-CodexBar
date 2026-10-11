@@ -703,3 +703,42 @@ fn detail_backed_flag_stays_out_of_json_output() {
     assert!(windows[0]["window"].get("descriptionIsDetail").is_none());
     assert!(windows[0]["window"].get("description_is_detail").is_none());
 }
+
+#[test]
+fn json_pace_follows_weekly_work_days() {
+    use chrono::{Datelike, Duration, Local, TimeZone};
+    // Weekly window ending at the next local Monday 00:00, so it covers the
+    // current Mon..Sun and Mon-Fri workday pace is ahead of linear pace at any
+    // instant inside it.
+    let today = Local::now().date_naive();
+    let next_monday = today + Duration::days(7 - i64::from(today.weekday().num_days_from_monday()));
+    let reset = Local
+        .from_local_datetime(&next_monday.and_hms_opt(0, 0, 0).unwrap())
+        .single()
+        .unwrap()
+        .with_timezone(&Utc);
+    if reset - Utc::now() >= Duration::days(7) {
+        return; // Monday 00:00 exactly or a DST-shortened week: nothing to compare.
+    }
+    let usage = UsageSnapshot::new(RateWindow::new(10.0)).with_secondary(RateWindow::with_details(
+        10.0,
+        Some(10080),
+        Some(reset),
+        None,
+    ));
+    let expected = |work_days: Option<u8>| {
+        render_json_result(
+            ProviderId::Codex,
+            fetch_result(usage.clone()),
+            None,
+            work_days,
+        )["pace"]["secondary"]["expectedUsedPercent"]
+            .as_f64()
+            .unwrap()
+    };
+
+    let linear = expected(None);
+    // Each render reads the clock again, so compare within a small tolerance.
+    assert!((expected(Some(7)) - linear).abs() < 0.01);
+    assert!(expected(Some(5)) > linear);
+}
