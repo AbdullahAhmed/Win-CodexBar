@@ -477,8 +477,9 @@ pub struct Settings {
 
     /// Set when the loaded file still carried legacy `provider_usage_thresholds`;
     /// the desktop shell saves once at startup so only the new key stays on disk.
+    /// Public only so other crates can build `Settings { .., ..Settings::default() }`.
     #[serde(skip)]
-    pub(crate) legacy_usage_thresholds_pending: bool,
+    pub legacy_usage_thresholds_pending: bool,
 }
 
 fn default_window_scale_percent() -> u16 {
