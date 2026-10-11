@@ -12,6 +12,7 @@
 //!   - `settings:menuBar`   — show settings on the Menu Bar tab
 //!   - `settings:usageSpend` — show settings on the Usage & Spend tab
 //!   - `settings:about`     — show settings on the About tab
+//!   - `settings:providers:codex` — show settings on the Codex provider pane
 //!
 //! In proof mode the shell immediately transitions to the requested surface
 //! and suppresses blur-dismiss so the window stays visible for automated
@@ -520,6 +521,23 @@ mod tests {
             let cfg = ProofConfig::from_env().unwrap();
             assert_eq!(cfg.target_surface, "settings");
             assert_eq!(cfg.settings_tab.as_deref(), Some("about"));
+        });
+    }
+
+    #[test]
+    fn parse_settings_provider_pane_proof_target() {
+        with_proof_mode_env(Some("settings:providers:codex"), || {
+            let cfg = ProofConfig::from_env().unwrap();
+            assert_eq!(cfg.settings_tab.as_deref(), Some("providers:codex"));
+            assert_eq!(
+                cfg.surface_target(),
+                SurfaceTarget::Settings {
+                    tab: "providers:codex".into()
+                }
+            );
+        });
+        with_proof_mode_env(Some("settings:providers:nope"), || {
+            assert!(ProofConfig::from_env().is_none());
         });
     }
 

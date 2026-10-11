@@ -180,6 +180,11 @@ pub struct Settings {
     #[serde(default)]
     pub menu_bar_color_pace: bool,
 
+    /// Settings sidebar lists providers alphabetically (enabled first)
+    /// instead of in `provider_order`. Display only; never rewrites the order.
+    #[serde(default)]
+    pub providers_sorted_alphabetically: bool,
+
     /// Show usage bars as "used" (true) or "remaining" (false)
     pub show_as_used: bool,
 
@@ -617,6 +622,7 @@ impl Default for Settings {
             menu_bar_shows_highest_usage: false,
             menu_bar_shows_percent: false,
             menu_bar_color_pace: false,
+            providers_sorted_alphabetically: false,
             show_as_used: false,
             enable_animations: true,   // Animations enabled by default
             reset_time_relative: true, // Show relative times by default

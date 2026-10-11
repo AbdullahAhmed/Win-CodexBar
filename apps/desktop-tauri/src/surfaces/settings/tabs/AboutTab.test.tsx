@@ -67,6 +67,7 @@ const settings: SettingsSnapshot = {
   menuBarShowsHighestUsage: true,
   menuBarShowsPercent: true,
   menuBarColorPace: false,
+  providersSortedAlphabetically: false,
   showAsUsed: false,
   showAllTokenAccountsInMenu: true,
   enableAnimations: true,
