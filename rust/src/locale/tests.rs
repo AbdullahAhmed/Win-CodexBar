@@ -630,8 +630,9 @@ fn resource_key_names(resource: &str) -> HashSet<&str> {
         .collect()
 }
 
-/// The Claude keychain-prompt option has no Windows consumer yet, so its helper
-/// must say so instead of promising skipped credential reads.
+/// The Claude keychain-prompt option has no Windows consumer yet, so both of its
+/// helpers (Advanced pane and Providers > Claude) must say so instead of
+/// promising skipped credential reads or a macOS `/usr/bin/security` path.
 #[test]
 fn avoid_keychain_prompts_helper_says_it_is_not_enforced_on_windows() {
     let expected = [
@@ -682,6 +683,11 @@ fn avoid_keychain_prompts_helper_says_it_is_not_enforced_on_windows() {
             get_text(language, LocaleKey::AvoidKeychainPromptsHelper),
             text,
             "{language:?}"
+        );
+        assert_eq!(
+            get_text(language, LocaleKey::ProviderClaudeAvoidKeychainPromptsHelp),
+            text,
+            "{language:?} Providers > Claude"
         );
     }
 }
