@@ -27,6 +27,15 @@ describe("chartPalette.providerColor", () => {
     );
   });
 
+  it("gives xAI its own token now that Grok uses the Mac green", () => {
+    expect(providerCostColor("xai")).toBe(
+      "var(--chart-xai, var(--provider-accent, var(--chart-cost)))",
+    );
+    expect(providerCostColor("grok")).toBe(
+      "var(--chart-grok, var(--provider-accent, var(--chart-cost)))",
+    );
+  });
+
   it("falls back to the generic cost/credits token for unknown providers", () => {
     expect(providerCostColor("unknown-provider-xyz")).toBe(
       "var(--provider-accent, var(--chart-cost))",
