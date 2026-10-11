@@ -45,6 +45,10 @@ fn customized_settings() -> Settings {
         hide_personal_info: true,
         menu_bar_shows_highest_usage: true,
         menu_bar_shows_percent: true,
+        menu_bar_icon_style: crate::settings::MenuBarIconStyle::Percent,
+        merged_overview_selected_providers: vec!["claude".to_string(), "codex".to_string()],
+        quota_warning_markers_visible: false,
+        workday_tick_style: crate::settings::WorkdayTickStyle::HighContrast,
         tray_icon_mode: TrayIconMode::PerProvider,
         switcher_shows_icons: false,
         providers_sorted_alphabetically: true,
@@ -258,6 +262,27 @@ fn rejection_matrix_names_the_offending_key() {
             "bad layout",
             json!({ "overview_layout": "huge" }),
             "overview_layout",
+        ),
+        (
+            "bad menu bar icon style",
+            json!({ "menu_bar_icon_style": "critters" }),
+            "menu_bar_icon_style",
+        ),
+        (
+            "bad workday tick style",
+            json!({ "workday_tick_style": "highContrast" }),
+            "workday_tick_style",
+        ),
+        (
+            "overview selection over six",
+            json!({ "merged_overview_selected_providers":
+                ["codex", "claude", "gemini", "cursor", "copilot", "zai", "kimi"] }),
+            "merged_overview_selected_providers",
+        ),
+        (
+            "overview selection unknown provider",
+            json!({ "merged_overview_selected_providers": ["codex", "nope"] }),
+            "merged_overview_selected_providers",
         ),
         (
             "threshold over 100",

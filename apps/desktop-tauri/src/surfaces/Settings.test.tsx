@@ -42,8 +42,11 @@ vi.mock("../hooks/useLocale", () => ({ useLocale: () => ({ t: (key: string) => k
 vi.mock("./settings/tabs/GeneralTab", () => ({
   default: ({ mode }: { mode: string }) => <div data-testid="tab">general:{mode}</div>,
 }));
-vi.mock("./settings/tabs/DisplayTab", () => ({
-  default: ({ mode }: { mode: string }) => <div data-testid="tab">display:{mode}</div>,
+vi.mock("./settings/tabs/MenuBarTab", () => ({
+  default: () => <div data-testid="tab">menuBar</div>,
+}));
+vi.mock("./settings/tabs/MenuTab", () => ({
+  default: () => <div data-testid="tab">menu</div>,
 }));
 vi.mock("./settings/tabs/AdvancedTab", () => ({
   default: () => <div data-testid="tab">advanced</div>,
@@ -124,7 +127,7 @@ describe("Settings sidebar", () => {
     expect(title()).toBe("TabGeneral");
     fireEvent.click(screen.getByRole("button", { name: "TabMenuBar" }));
     expect(title()).toBe("TabMenuBar");
-    expect(screen.getByTestId("tab").textContent).toBe("display:menuBar");
+    expect(screen.getByTestId("tab").textContent).toBe("menuBar");
     fireEvent.click(row("claude"));
     expect(title()).toBe("Claude");
     expect(screen.getByTestId("tab").textContent).toBe("providers:claude");

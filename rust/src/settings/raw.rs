@@ -15,6 +15,28 @@ fn canonicalize_provider_id_list(ids: impl IntoIterator<Item = String>) -> Vec<S
         .collect()
 }
 
+/// Legacy files have no `menu_bar_icon_style`; they keep what
+/// `menu_bar_shows_percent` drew. A present but unknown value falls back the same way.
+fn resolve_menu_bar_icon_style(
+    stored: Option<&str>,
+    legacy_shows_percent: bool,
+) -> MenuBarIconStyle {
+    stored
+        .and_then(MenuBarIconStyle::parse)
+        .unwrap_or(if legacy_shows_percent {
+            MenuBarIconStyle::Percent
+        } else {
+            MenuBarIconStyle::Bars
+        })
+}
+
+/// Canonical ids, deduplicated, capped at [`MERGED_OVERVIEW_PROVIDER_LIMIT`].
+pub(crate) fn normalize_merged_overview_selection(ids: Vec<String>) -> Vec<String> {
+    let mut ids = canonicalize_provider_id_list(ids);
+    ids.truncate(MERGED_OVERVIEW_PROVIDER_LIMIT);
+    ids
+}
+
 fn canonicalize_provider_metrics(
     metrics: HashMap<String, MetricPreference>,
 ) -> HashMap<String, MetricPreference> {
@@ -125,6 +147,16 @@ pub(super) struct RawSettings {
     switcher_shows_icons: bool,
     menu_bar_shows_highest_usage: bool,
     menu_bar_shows_percent: bool,
+    /// `None` when the file predates the key; it then follows `menu_bar_shows_percent`.
+    /// Kept as a string so an unknown value never fails the whole file.
+    #[serde(default)]
+    menu_bar_icon_style: Option<String>,
+    #[serde(default)]
+    merged_overview_selected_providers: Vec<String>,
+    #[serde(default = "default_true")]
+    quota_warning_markers_visible: bool,
+    #[serde(default)]
+    workday_tick_style: Option<String>,
     #[serde(default)]
     menu_bar_color_pace: bool,
     #[serde(default)]
@@ -314,6 +346,10 @@ impl Default for RawSettings {
             switcher_shows_icons: s.switcher_shows_icons,
             menu_bar_shows_highest_usage: s.menu_bar_shows_highest_usage,
             menu_bar_shows_percent: s.menu_bar_shows_percent,
+            menu_bar_icon_style: Some(s.menu_bar_icon_style.as_str().to_string()),
+            merged_overview_selected_providers: s.merged_overview_selected_providers,
+            quota_warning_markers_visible: s.quota_warning_markers_visible,
+            workday_tick_style: Some(s.workday_tick_style.as_str().to_string()),
             menu_bar_color_pace: s.menu_bar_color_pace,
             providers_sorted_alphabetically: s.providers_sorted_alphabetically,
             show_as_used: s.show_as_used,
@@ -662,6 +698,19 @@ impl From<RawSettings> for Settings {
             switcher_shows_icons: raw.switcher_shows_icons,
             menu_bar_shows_highest_usage: raw.menu_bar_shows_highest_usage,
             menu_bar_shows_percent: raw.menu_bar_shows_percent,
+            menu_bar_icon_style: resolve_menu_bar_icon_style(
+                raw.menu_bar_icon_style.as_deref(),
+                raw.menu_bar_shows_percent,
+            ),
+            merged_overview_selected_providers: normalize_merged_overview_selection(
+                raw.merged_overview_selected_providers,
+            ),
+            quota_warning_markers_visible: raw.quota_warning_markers_visible,
+            workday_tick_style: raw
+                .workday_tick_style
+                .as_deref()
+                .and_then(WorkdayTickStyle::parse)
+                .unwrap_or_default(),
             menu_bar_color_pace: raw.menu_bar_color_pace,
             providers_sorted_alphabetically: raw.providers_sorted_alphabetically,
             show_as_used: raw.show_as_used,
@@ -720,7 +769,9 @@ impl From<RawSettings> for Settings {
             claude_daily_routines_usage_visible: raw.claude_daily_routines_usage_visible,
             claude_allow_reading_claude_code_credentials: raw
                 .claude_allow_reading_claude_code_credentials,
-            weekly_progress_work_days: raw.weekly_progress_work_days,
+            weekly_progress_work_days: normalize_weekly_progress_work_days(
+                raw.weekly_progress_work_days,
+            ),
             alibaba_token_plan_region: {
                 let trimmed = raw.alibaba_token_plan_region.trim();
                 if trimmed.is_empty() {

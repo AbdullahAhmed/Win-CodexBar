@@ -3433,6 +3433,10 @@ html:has(.menu-surface--tray) {
   fill: color-mix(in srgb, var(--text-primary) 30%, transparent);
 }
 
+.menu-metric__progress-workday--high-contrast {
+  fill: color-mix(in srgb, var(--text-primary) 85%, transparent);
+}
+
 .menu-metric__progress-pace {
   fill: var(--mac-pace-ok, #34c759);
 }
@@ -4649,6 +4653,33 @@ html:has(.menu-surface--tray) {
   width: 18px;
   height: 3px;
   margin-top: 2px;
+}
+
+/* Switcher rows "Weekly progress": no icons, so each button shows its title
+   above the weekly track, like the macOS progress switcher. Uniform columns
+   across the panel; long titles truncate. */
+.menu-surface--tray .provider-grid--no-icons {
+  grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
+  gap: 6px 6px;
+}
+
+.menu-surface--tray .provider-grid--no-icons .provider-grid__item {
+  width: auto;
+  min-width: 0;
+  min-height: 30px;
+  padding: 3px 4px;
+  gap: 2px;
+}
+
+.menu-surface--tray .provider-grid--no-icons .provider-grid__label {
+  display: block;
+  max-width: 100%;
+  font-size: 11px;
+}
+
+.menu-surface--tray .provider-grid--no-icons .provider-grid__weekly-track {
+  width: 100%;
+  max-width: 44px;
 }
 
 .provider-grid__item--more {

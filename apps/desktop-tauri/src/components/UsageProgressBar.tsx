@@ -6,7 +6,9 @@ const RADIUS = 3;
 const CUT_OPACITY = 0.9;
 const WARNING_CUT = 5;
 const WARNING_STRIPE = 1;
-const WORKDAY_TICK = 1;
+// macOS UsageProgressBar: subtle ticks are 1px and half height, high contrast
+// ticks are 2px and full height (opacity lives in the CSS classes).
+const WORKDAY_TICK = { subtle: 1, high_contrast: 2 } as const;
 const PACE_CUT = 6;
 const PACE_STRIPE = 2;
 
@@ -45,6 +47,7 @@ export default function UsageProgressBar({ bar, label }: { bar: UsageBarModel; l
   const warnings = bar.markers.filter((marker) => marker.kind === "warning").map((marker) => marker.percent);
   const workdays = bar.markers.filter((marker) => marker.kind === "workday").map((marker) => marker.percent);
   const pace = bar.pacePercent;
+  const highContrastTicks = bar.workdayTickStyle === "high_contrast";
   return (
     <svg
       className="menu-metric__progress"
@@ -83,10 +86,10 @@ export default function UsageProgressBar({ bar, label }: { bar: UsageBarModel; l
         {workdays.map((percent) => (
           <rect
             key={percent}
-            className="menu-metric__progress-workday"
-            {...centered(percent, WORKDAY_TICK)}
-            y={HEIGHT / 2}
-            height={HEIGHT / 2}
+            className={`menu-metric__progress-workday${highContrastTicks ? " menu-metric__progress-workday--high-contrast" : ""}`}
+            {...centered(percent, WORKDAY_TICK[bar.workdayTickStyle])}
+            y={highContrastTicks ? 0 : HEIGHT / 2}
+            height={highContrastTicks ? HEIGHT : HEIGHT / 2}
             shapeRendering="crispEdges"
           />
         ))}

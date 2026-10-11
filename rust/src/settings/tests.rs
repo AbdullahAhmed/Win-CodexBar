@@ -1656,3 +1656,286 @@ fn adaptive_refresh_defaults_on_for_new_installs_only() {
         .expect("deserialize explicit fixed refresh");
     assert!(!explicit_off.adaptive_refresh);
 }
+
+// ── Mac parity PR 3: Menu Bar / Menu pane keys ──────────────────────────
+
+#[test]
+fn menu_bar_icon_style_defaults_to_bars_for_new_installs() {
+    assert_eq!(
+        Settings::default().menu_bar_icon_style,
+        MenuBarIconStyle::Bars
+    );
+}
+
+#[test]
+fn menu_bar_icon_style_migrates_from_legacy_percent_flag() {
+    let legacy_percent: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "menu_bar_shows_percent": true }"#)
+            .expect("legacy percent file");
+    assert_eq!(
+        legacy_percent.menu_bar_icon_style,
+        MenuBarIconStyle::Percent
+    );
+
+    let legacy_bars: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "menu_bar_shows_percent": false }"#)
+            .expect("legacy bars file");
+    assert_eq!(legacy_bars.menu_bar_icon_style, MenuBarIconStyle::Bars);
+
+    let legacy_missing: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
+        .expect("legacy file without either key");
+    assert_eq!(legacy_missing.menu_bar_icon_style, MenuBarIconStyle::Bars);
+}
+
+#[test]
+fn stored_menu_bar_icon_style_wins_over_the_legacy_flag() {
+    let bars: Settings = serde_json::from_str(
+        r#"{ "enabled_providers": [], "menu_bar_shows_percent": true, "menu_bar_icon_style": "bars" }"#,
+    )
+    .expect("stored bars");
+    assert_eq!(bars.menu_bar_icon_style, MenuBarIconStyle::Bars);
+
+    let percent: Settings = serde_json::from_str(
+        r#"{ "enabled_providers": [], "menu_bar_shows_percent": false, "menu_bar_icon_style": "percent" }"#,
+    )
+    .expect("stored percent");
+    assert_eq!(percent.menu_bar_icon_style, MenuBarIconStyle::Percent);
+
+    let unknown: Settings = serde_json::from_str(
+        r#"{ "enabled_providers": [], "menu_bar_shows_percent": true, "menu_bar_icon_style": "sparkles" }"#,
+    )
+    .expect("an unknown style must not fail the whole file");
+    assert_eq!(unknown.menu_bar_icon_style, MenuBarIconStyle::Percent);
+}
+
+#[test]
+fn menu_bar_icon_style_round_trips() {
+    for style in [MenuBarIconStyle::Bars, MenuBarIconStyle::Percent] {
+        let settings = Settings {
+            menu_bar_icon_style: style,
+            // The legacy flag disagrees on purpose: the stored key must win.
+            menu_bar_shows_percent: style == MenuBarIconStyle::Bars,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).expect("serialize icon style");
+        assert!(json.contains(&format!(r#""menu_bar_icon_style":"{}""#, style.as_str())));
+        let loaded: Settings = serde_json::from_str(&json).expect("deserialize icon style");
+        assert_eq!(loaded.menu_bar_icon_style, style);
+    }
+}
+
+#[test]
+fn merged_overview_selection_defaults_empty_and_round_trips() {
+    assert!(
+        Settings::default()
+            .merged_overview_selected_providers
+            .is_empty()
+    );
+    let legacy: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [] }"#).expect("legacy file");
+    assert!(legacy.merged_overview_selected_providers.is_empty());
+
+    let settings = Settings {
+        merged_overview_selected_providers: vec!["claude".into(), "codex".into()],
+        ..Settings::default()
+    };
+    let json = serde_json::to_string(&settings).expect("serialize overview selection");
+    assert!(json.contains(r#""merged_overview_selected_providers":["claude","codex"]"#));
+    let loaded: Settings = serde_json::from_str(&json).expect("deserialize overview selection");
+    assert_eq!(
+        loaded.merged_overview_selected_providers,
+        vec!["claude".to_string(), "codex".to_string()]
+    );
+}
+
+#[test]
+fn merged_overview_selection_is_canonical_deduped_and_capped_at_six() {
+    let loaded: Settings = serde_json::from_str(
+        r#"{ "enabled_providers": [], "merged_overview_selected_providers":
+            ["Codex", "codex", "not-a-provider", "claude", "gemini", "cursor", "copilot", "zai", "kimi"] }"#,
+    )
+    .expect("parse overview selection");
+    assert_eq!(
+        loaded.merged_overview_selected_providers,
+        ["codex", "claude", "gemini", "cursor", "copilot", "zai"]
+            .map(String::from)
+            .to_vec()
+    );
+
+    let mut settings = Settings::default();
+    settings.set_merged_overview_selected_providers(
+        [
+            "codex", "claude", "gemini", "cursor", "copilot", "zai", "kimi",
+        ]
+        .map(String::from)
+        .to_vec(),
+    );
+    assert_eq!(
+        settings.merged_overview_selected_providers.len(),
+        MERGED_OVERVIEW_PROVIDER_LIMIT
+    );
+}
+
+#[test]
+fn quota_warning_markers_default_on_and_round_trip() {
+    assert!(Settings::default().quota_warning_markers_visible);
+    let legacy: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [] }"#).expect("legacy file");
+    assert!(legacy.quota_warning_markers_visible);
+
+    let hidden = Settings {
+        quota_warning_markers_visible: false,
+        ..Settings::default()
+    };
+    let json = serde_json::to_string(&hidden).expect("serialize markers");
+    assert!(json.contains(r#""quota_warning_markers_visible":false"#));
+    let loaded: Settings = serde_json::from_str(&json).expect("deserialize markers");
+    assert!(!loaded.quota_warning_markers_visible);
+}
+
+#[test]
+fn workday_tick_style_defaults_subtle_and_round_trips() {
+    assert_eq!(
+        Settings::default().workday_tick_style,
+        WorkdayTickStyle::Subtle
+    );
+    let legacy: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [] }"#).expect("legacy file");
+    assert_eq!(legacy.workday_tick_style, WorkdayTickStyle::Subtle);
+
+    for style in [
+        WorkdayTickStyle::Hidden,
+        WorkdayTickStyle::Subtle,
+        WorkdayTickStyle::HighContrast,
+    ] {
+        let settings = Settings {
+            workday_tick_style: style,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).expect("serialize tick style");
+        assert!(json.contains(&format!(r#""workday_tick_style":"{}""#, style.as_str())));
+        let loaded: Settings = serde_json::from_str(&json).expect("deserialize tick style");
+        assert_eq!(loaded.workday_tick_style, style);
+    }
+
+    let unknown: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "workday_tick_style": "neon" }"#)
+            .expect("an unknown tick style must not fail the whole file");
+    assert_eq!(unknown.workday_tick_style, WorkdayTickStyle::Subtle);
+}
+
+#[test]
+fn weekly_progress_work_days_accepts_two_through_seven() {
+    for days in 2..=7u8 {
+        let loaded: Settings = serde_json::from_str(&format!(
+            r#"{{ "enabled_providers": [], "weekly_progress_work_days": {days} }}"#
+        ))
+        .expect("parse work days");
+        assert_eq!(loaded.weekly_progress_work_days, Some(days));
+    }
+    for days in [0u8, 1, 8, 200] {
+        let loaded: Settings = serde_json::from_str(&format!(
+            r#"{{ "enabled_providers": [], "weekly_progress_work_days": {days} }}"#
+        ))
+        .expect("parse out-of-range work days");
+        assert_eq!(
+            loaded.weekly_progress_work_days, None,
+            "{days} is out of range"
+        );
+    }
+}
+
+#[test]
+fn minimal_display_mode_folds_into_show_most_used_once() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker = dir.path().join(".display-mode-fold-v1");
+    let mut settings: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "menu_bar_display_mode": "minimal" }"#)
+            .expect("legacy minimal file");
+    assert!(!settings.menu_bar_shows_highest_usage);
+
+    let mut persisted = 0;
+    settings.apply_display_mode_fold_with_marker(&marker, |_| {
+        persisted += 1;
+        Ok(())
+    });
+    assert!(settings.menu_bar_shows_highest_usage);
+    assert_eq!(persisted, 1, "the fold is saved once");
+    assert!(marker.exists(), "the marker is written");
+    // The field stays readable for one release.
+    assert_eq!(settings.menu_bar_display_mode, "minimal");
+
+    // The user turns "Show most-used provider" off afterwards: it stays off.
+    settings.menu_bar_shows_highest_usage = false;
+    settings.apply_display_mode_fold_with_marker(&marker, |_| {
+        persisted += 1;
+        Ok(())
+    });
+    assert!(!settings.menu_bar_shows_highest_usage);
+    assert_eq!(persisted, 1, "no second save once the marker exists");
+}
+
+#[test]
+fn display_mode_fold_leaves_other_modes_alone_but_writes_the_marker() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker = dir.path().join(".display-mode-fold-v1");
+    let mut settings: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "menu_bar_display_mode": "detailed" }"#)
+            .expect("detailed file");
+    let mut persisted = 0;
+    settings.apply_display_mode_fold_with_marker(&marker, |_| {
+        persisted += 1;
+        Ok(())
+    });
+    assert!(!settings.menu_bar_shows_highest_usage);
+    assert_eq!(persisted, 0);
+    assert!(marker.exists());
+
+    // A file switched to minimal after the marker exists is not folded.
+    settings.menu_bar_display_mode = "minimal".into();
+    settings.apply_display_mode_fold_with_marker(&marker, |_| {
+        persisted += 1;
+        Ok(())
+    });
+    assert!(!settings.menu_bar_shows_highest_usage);
+    assert_eq!(persisted, 0);
+}
+
+#[test]
+fn display_mode_fold_retries_when_the_save_fails() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker = dir.path().join(".display-mode-fold-v1");
+    let mut settings: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "menu_bar_display_mode": "minimal" }"#)
+            .expect("legacy minimal file");
+
+    settings.apply_display_mode_fold_with_marker(&marker, |_| anyhow::bail!("disk full"));
+    assert!(!marker.exists(), "no marker after a failed save");
+
+    let mut reloaded: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "menu_bar_display_mode": "minimal" }"#)
+            .expect("legacy minimal file");
+    let mut persisted = 0;
+    reloaded.apply_display_mode_fold_with_marker(&marker, |_| {
+        persisted += 1;
+        Ok(())
+    });
+    assert!(reloaded.menu_bar_shows_highest_usage);
+    assert_eq!(persisted, 1, "the next launch saves the fold");
+    assert!(marker.exists());
+}
+
+#[test]
+fn stacked_tray_mode_survives_load_with_the_new_keys() {
+    let loaded: Settings = serde_json::from_str(
+        r#"{ "enabled_providers": ["codex", "claude"], "tray_icon_mode": "stacked",
+             "menu_bar_icon_style": "percent", "workday_tick_style": "high_contrast" }"#,
+    )
+    .expect("stacked file");
+    assert_eq!(loaded.tray_icon_mode, TrayIconMode::Stacked);
+    let json = serde_json::to_string(&loaded).expect("serialize");
+    let reloaded: Settings = serde_json::from_str(&json).expect("reload");
+    assert_eq!(reloaded.tray_icon_mode, TrayIconMode::Stacked);
+    assert_eq!(reloaded.menu_bar_icon_style, MenuBarIconStyle::Percent);
+    assert_eq!(reloaded.workday_tick_style, WorkdayTickStyle::HighContrast);
+}

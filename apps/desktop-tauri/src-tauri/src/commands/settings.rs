@@ -34,6 +34,10 @@ pub struct SettingsUpdate {
     pub switcher_shows_icons: Option<bool>,
     pub menu_bar_shows_highest_usage: Option<bool>,
     pub menu_bar_shows_percent: Option<bool>,
+    pub menu_bar_icon_style: Option<codexbar::settings::MenuBarIconStyle>,
+    pub merged_overview_selected_providers: Option<Vec<String>>,
+    pub quota_warning_markers_visible: Option<bool>,
+    pub workday_tick_style: Option<codexbar::settings::WorkdayTickStyle>,
     pub menu_bar_color_pace: Option<bool>,
     pub providers_sorted_alphabetically: Option<bool>,
     pub show_as_used: Option<bool>,
@@ -91,7 +95,9 @@ pub struct SettingsUpdate {
     /// Optional user-entered Copilot seat AI-credit allowance; `null` clears it.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub copilot_seat_credit_entitlement: Option<Option<f64>>,
-    pub weekly_progress_work_days: Option<u8>,
+    /// Work-week length (2..=7); `null` or an out-of-range value selects Automatic.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub weekly_progress_work_days: Option<Option<u8>>,
     pub cost_summary_display_style: Option<String>,
     pub open_codex_usage_logs_enabled: Option<bool>,
     pub hide_native_codex_cost_when_open_codex_present: Option<bool>,
@@ -139,6 +145,7 @@ impl SettingsUpdate {
             || self.switcher_shows_icons.is_some()
             || self.menu_bar_shows_highest_usage.is_some()
             || self.menu_bar_shows_percent.is_some()
+            || self.menu_bar_icon_style.is_some()
             || self.menu_bar_color_pace.is_some()
             || self.show_as_used.is_some()
             || self.reset_time_relative.is_some()
@@ -295,6 +302,28 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.menu_bar_shows_percent {
             settings.menu_bar_shows_percent = v;
+            // Legacy callers that still send the flag drive the new key too.
+            if self.menu_bar_icon_style.is_none() {
+                settings.menu_bar_icon_style = if v {
+                    codexbar::settings::MenuBarIconStyle::Percent
+                } else {
+                    codexbar::settings::MenuBarIconStyle::Bars
+                };
+            }
+        }
+        if let Some(v) = self.menu_bar_icon_style {
+            settings.menu_bar_icon_style = v;
+            // Keep the legacy flag in step for one release so a downgrade keeps the look.
+            settings.menu_bar_shows_percent = v == codexbar::settings::MenuBarIconStyle::Percent;
+        }
+        if let Some(ids) = self.merged_overview_selected_providers.clone() {
+            settings.set_merged_overview_selected_providers(ids);
+        }
+        if let Some(v) = self.quota_warning_markers_visible {
+            settings.quota_warning_markers_visible = v;
+        }
+        if let Some(v) = self.workday_tick_style {
+            settings.workday_tick_style = v;
         }
         if let Some(v) = self.menu_bar_color_pace {
             settings.menu_bar_color_pace = v;
@@ -437,7 +466,8 @@ impl SettingsUpdate {
             );
         }
         if let Some(v) = self.weekly_progress_work_days {
-            settings.weekly_progress_work_days = if (2..=6).contains(&v) { Some(v) } else { None };
+            settings.weekly_progress_work_days =
+                codexbar::settings::normalize_weekly_progress_work_days(v);
         }
         if let Some(v) = self
             .cost_summary_display_style
@@ -494,11 +524,14 @@ impl SettingsUpdate {
     }
 }
 
-fn deserialize_double_option<'de, D>(deserializer: D) -> Result<Option<Option<f64>>, D::Error>
+/// Present key → `Some(value)`, explicit `null` → `Some(None)`; a missing key
+/// stays `None` through `#[serde(default)]`.
+fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
 {
-    Ok(Some(Option::<f64>::deserialize(deserializer)?))
+    Ok(Some(Option::<T>::deserialize(deserializer)?))
 }
 
 fn normalize_custom_sessions_dirs(dirs: Vec<String>) -> Vec<String> {
@@ -857,6 +890,91 @@ mod tests {
         }
         .apply_display_settings(&mut settings);
         assert!(!settings.menu_bar_color_pace);
+    }
+
+    #[test]
+    fn menu_bar_icon_style_update_repaints_tray_and_mirrors_legacy_flag() {
+        let mut settings = Settings::default();
+        let update: SettingsUpdate =
+            serde_json::from_str(r#"{"menuBarIconStyle":"percent"}"#).unwrap();
+        assert!(update.refreshes_tray_presentation());
+        update.apply_display_settings(&mut settings);
+        assert_eq!(
+            settings.menu_bar_icon_style,
+            codexbar::settings::MenuBarIconStyle::Percent
+        );
+        assert!(settings.menu_bar_shows_percent);
+
+        let update: SettingsUpdate =
+            serde_json::from_str(r#"{"menuBarIconStyle":"bars"}"#).unwrap();
+        update.apply_display_settings(&mut settings);
+        assert_eq!(
+            settings.menu_bar_icon_style,
+            codexbar::settings::MenuBarIconStyle::Bars
+        );
+        assert!(!settings.menu_bar_shows_percent);
+    }
+
+    #[test]
+    fn menu_pane_keys_apply_from_camel_case_patch() {
+        let mut settings = Settings::default();
+        let update: SettingsUpdate = serde_json::from_str(
+            r#"{"quotaWarningMarkersVisible":false,"workdayTickStyle":"high_contrast",
+                "mergedOverviewSelectedProviders":["claude","Codex","claude","gemini","cursor","copilot","zai","kimi"],
+                "weeklyProgressWorkDays":7}"#,
+        )
+        .unwrap();
+        update
+            .apply_display_settings(&mut settings)
+            .apply_advanced_settings(&mut settings);
+        assert!(!settings.quota_warning_markers_visible);
+        assert_eq!(
+            settings.workday_tick_style,
+            codexbar::settings::WorkdayTickStyle::HighContrast
+        );
+        assert_eq!(
+            settings.merged_overview_selected_providers,
+            ["claude", "codex", "gemini", "cursor", "copilot", "zai"]
+                .map(String::from)
+                .to_vec()
+        );
+        assert_eq!(settings.weekly_progress_work_days, Some(7));
+
+        let update: SettingsUpdate =
+            serde_json::from_str(r#"{"weeklyProgressWorkDays":8}"#).unwrap();
+        update
+            .apply_display_settings(&mut settings)
+            .apply_advanced_settings(&mut settings);
+        assert_eq!(settings.weekly_progress_work_days, None);
+
+        settings.weekly_progress_work_days = Some(5);
+        let update: SettingsUpdate =
+            serde_json::from_str(r#"{"weeklyProgressWorkDays":null}"#).unwrap();
+        assert!(update.refreshes_provider_data());
+        update
+            .apply_display_settings(&mut settings)
+            .apply_advanced_settings(&mut settings);
+        assert_eq!(
+            settings.weekly_progress_work_days, None,
+            "null selects Automatic"
+        );
+    }
+
+    #[test]
+    fn settings_snapshot_emits_snake_case_style_values() {
+        let settings = Settings {
+            menu_bar_icon_style: codexbar::settings::MenuBarIconStyle::Percent,
+            workday_tick_style: codexbar::settings::WorkdayTickStyle::HighContrast,
+            ..Settings::default()
+        };
+        let json = serde_json::to_value(crate::commands::SettingsSnapshot::from(settings)).unwrap();
+        assert_eq!(json["menuBarIconStyle"], "percent");
+        assert_eq!(json["workdayTickStyle"], "high_contrast");
+        assert_eq!(json["quotaWarningMarkersVisible"], true);
+        assert_eq!(
+            json["mergedOverviewSelectedProviders"],
+            serde_json::json!([])
+        );
     }
 
     #[test]
