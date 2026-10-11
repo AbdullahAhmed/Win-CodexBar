@@ -119,10 +119,12 @@ disabled by default and reads the website billing API that the signed-in
 Plans & usage page (`https://www.workbuddy.cn/profile/plans-usage`) uses:
 `POST /billing/meter/get-user-resource-summary` with the session cookies.
 
-- The cookie source picks the session: Automatic tries each detected
-  browser's `workbuddy.cn` session in turn (only the cookies a request to
-  `www.workbuddy.cn` would carry), Manual uses a pasted Cookie header with no
-  browser fallback, and Off reads nothing.
+- The cookie source in Settings → Providers → WorkBuddy picks the session and
+  defaults to Automatic. Automatic and Manual first use a header imported under
+  Browser Cookies (from the browser you choose) or pasted there, with no
+  browser fallback. Without one, Automatic tries each detected browser's
+  `workbuddy.cn` session in turn (only the cookies a request to
+  `www.workbuddy.cn` would carry) and Manual fails closed. Off reads nothing.
 - WorkBuddy binds the session to the browser User-Agent. Requests send
   Chrome's reduced Windows User-Agent for the installed Chrome major (the
   newest version folder under the Chrome install, else the version in

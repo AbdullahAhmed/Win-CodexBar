@@ -1028,7 +1028,9 @@ impl Settings {
             .get(&id)
             .and_then(|c| c.cookie_source.as_deref())
             .unwrap_or(match id {
-                ProviderId::Kimi | ProviderId::Hyper | ProviderId::Groq => "auto",
+                ProviderId::Kimi | ProviderId::Hyper | ProviderId::Groq | ProviderId::WorkBuddy => {
+                    "auto"
+                }
                 _ => DEFAULT_COOKIE_SOURCE,
             })
     }
