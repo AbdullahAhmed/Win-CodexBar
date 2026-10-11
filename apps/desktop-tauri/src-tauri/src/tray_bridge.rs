@@ -388,8 +388,8 @@ pub(crate) fn refresh_tray_presentation(app: &AppHandle) {
 /// Update the tray icon pixels and tooltip text to reflect current provider usage.
 ///
 /// Behaviour mirrors egui's `choose_tray_update_plan` (rust/src/native_ui/app.rs):
-/// - If `menu_bar_shows_highest_usage` is on OR `menu_bar_display_mode == "minimal"`,
-///   render the bar from the healthy provider with the highest session usage.
+/// - If `menu_bar_shows_highest_usage` is on (legacy Display mode "minimal" is
+///   folded into it on load), render the bar from the healthy provider with the highest session usage.
 /// - Otherwise render from the first enabled healthy provider (catalog order).
 /// - When any provider exposes a weekly/secondary window, the icon shows both
 ///   bars from the same picked provider.

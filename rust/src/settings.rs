@@ -172,9 +172,29 @@ pub struct Settings {
     #[serde(default)]
     pub menu_bar_shows_highest_usage: bool,
 
-    /// Replace bar-only tray display with provider branding plus percent text where supported
+    /// Legacy "Show percent in tray" flag. No longer read: it only seeds
+    /// `menu_bar_icon_style` for files written before that key existed.
+    /// Kept (and still written) for one release so a downgrade keeps the style.
     #[serde(default)]
     pub menu_bar_shows_percent: bool,
+
+    /// How the single tray icon is drawn: meter bars or icon + percent.
+    /// Legacy files without the key follow `menu_bar_shows_percent`.
+    #[serde(default)]
+    pub menu_bar_icon_style: MenuBarIconStyle,
+
+    /// Providers shown in the merged Overview, in provider order, at most
+    /// [`MERGED_OVERVIEW_PROVIDER_LIMIT`]. Empty = the first enabled ones.
+    #[serde(default)]
+    pub merged_overview_selected_providers: Vec<String>,
+
+    /// Draw quota-warning threshold ticks on usage bars.
+    #[serde(default = "default_true")]
+    pub quota_warning_markers_visible: bool,
+
+    /// How workday boundaries appear on weekly usage bars.
+    #[serde(default)]
+    pub workday_tick_style: WorkdayTickStyle,
 
     /// Colour the Windows tray usage indicator by pace when enabled.
     #[serde(default)]
@@ -215,7 +235,9 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub show_pace: bool,
 
-    /// Menu bar display mode: "minimal", "compact", or "detailed"
+    /// Retired "Display mode" row ("minimal", "compact", "detailed"). Kept
+    /// readable for one release; "minimal" is folded into
+    /// `menu_bar_shows_highest_usage` once on load (`.display-mode-fold-v1`).
     pub menu_bar_display_mode: String,
 
     /// Overview card layout: "detailed" or "compact".
@@ -397,7 +419,7 @@ pub struct Settings {
     #[serde(default)]
     pub claude_allow_reading_claude_code_credentials: bool,
 
-    /// Optional work-week length [2,6] for session-equivalent weekly forecast.
+    /// Optional work-week length [2,7] for session-equivalent weekly forecast.
     /// `None` uses wall-clock time until weekly reset.
     #[serde(default)]
     pub weekly_progress_work_days: Option<u8>,
@@ -621,6 +643,10 @@ impl Default for Settings {
             switcher_shows_icons: true,
             menu_bar_shows_highest_usage: false,
             menu_bar_shows_percent: false,
+            menu_bar_icon_style: MenuBarIconStyle::Bars,
+            merged_overview_selected_providers: Vec::new(),
+            quota_warning_markers_visible: true,
+            workday_tick_style: WorkdayTickStyle::Subtle,
             menu_bar_color_pace: false,
             providers_sorted_alphabetically: false,
             show_as_used: false,
@@ -722,6 +748,7 @@ impl Settings {
         if settings_file_override().is_none() {
             settings.start_at_login = Self::sync_start_at_login_registry();
             settings.apply_promote_tray_default_migration();
+            settings.apply_display_mode_fold_migration();
         }
 
         // One-shot migration: materialize the persisted hidden usage-item list
@@ -803,6 +830,62 @@ impl Settings {
                 tracing::warn!("Failed to write promote_tray_icon migration marker: {error}");
             }
         }
+    }
+
+    /// Marker written after the one-shot Display mode "minimal" fold (Mac parity PR 3).
+    fn display_mode_fold_marker_path() -> Option<PathBuf> {
+        crate::logging::config_root().map(|p| p.join(".display-mode-fold-v1"))
+    }
+
+    /// The Display mode row is gone. "Minimal" used to force the most-used
+    /// provider into the tray, so carry that into `menu_bar_shows_highest_usage`
+    /// once. Returns true when the settings changed. Later opt-outs stick
+    /// because the marker remains.
+    fn fold_minimal_display_mode(&mut self, already_migrated: bool) -> bool {
+        if already_migrated
+            || self.menu_bar_shows_highest_usage
+            || !self
+                .menu_bar_display_mode
+                .trim()
+                .eq_ignore_ascii_case("minimal")
+        {
+            return false;
+        }
+        self.menu_bar_shows_highest_usage = true;
+        true
+    }
+
+    fn apply_display_mode_fold_migration(&mut self) {
+        let Some(marker) = Self::display_mode_fold_marker_path() else {
+            return;
+        };
+        self.apply_display_mode_fold_with_marker(&marker, Self::save);
+    }
+
+    fn apply_display_mode_fold_with_marker(
+        &mut self,
+        marker: &Path,
+        persist: impl FnOnce(&Self) -> anyhow::Result<()>,
+    ) {
+        let already_migrated = marker.exists();
+        if self.fold_minimal_display_mode(already_migrated)
+            && let Err(error) = persist(self)
+        {
+            tracing::warn!("Failed to persist display mode fold migration: {error}");
+        }
+        if !already_migrated && let Some(parent) = marker.parent() {
+            // Best-effort marker dir creation; the write below reports failure.
+            let _created_dir = std::fs::create_dir_all(parent);
+            if let Err(error) = std::fs::write(marker, b"1") {
+                tracing::warn!("Failed to write display mode fold marker: {error}");
+            }
+        }
+    }
+
+    /// Store the merged Overview selection: canonical ids, deduplicated,
+    /// at most [`MERGED_OVERVIEW_PROVIDER_LIMIT`].
+    pub fn set_merged_overview_selected_providers(&mut self, ids: Vec<String>) {
+        self.merged_overview_selected_providers = raw::normalize_merged_overview_selection(ids);
     }
 
     /// Save settings to disk

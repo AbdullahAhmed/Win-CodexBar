@@ -447,3 +447,74 @@ pub struct ProviderConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seat_credit_entitlement: Option<f64>,
 }
+
+/// How the single tray icon is drawn (Mac "Menu bar style").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MenuBarIconStyle {
+    /// Two-row usage meter.
+    #[default]
+    Bars,
+    /// Provider icon plus the percent text.
+    Percent,
+}
+
+impl MenuBarIconStyle {
+    /// Lenient parse; unknown values return `None` so callers pick a fallback.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "bars" => Some(Self::Bars),
+            "percent" => Some(Self::Percent),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bars => "bars",
+            Self::Percent => "percent",
+        }
+    }
+}
+
+/// How workday boundaries appear on weekly usage bars.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkdayTickStyle {
+    Hidden,
+    #[default]
+    Subtle,
+    HighContrast,
+}
+
+impl WorkdayTickStyle {
+    /// Lenient parse; accepts `high_contrast` and `highContrast`.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "hidden" => Some(Self::Hidden),
+            "subtle" => Some(Self::Subtle),
+            "high_contrast" | "highcontrast" => Some(Self::HighContrast),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hidden => "hidden",
+            Self::Subtle => "subtle",
+            Self::HighContrast => "high_contrast",
+        }
+    }
+}
+
+/// Most providers the merged Overview can show (Mac `overviewProviderLimit`).
+pub const MERGED_OVERVIEW_PROVIDER_LIMIT: usize = 6;
+
+/// Highest accepted `weekly_progress_work_days` value.
+pub const WEEKLY_PROGRESS_WORK_DAYS_MAX: u8 = 7;
+
+/// Normalise a work-week length: `Some(2..=7)` passes, anything else is
+/// `None` (Automatic, wall-clock pacing).
+pub fn normalize_weekly_progress_work_days(value: Option<u8>) -> Option<u8> {
+    value.filter(|days| (2..=WEEKLY_PROGRESS_WORK_DAYS_MAX).contains(days))
+}

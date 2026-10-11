@@ -270,7 +270,7 @@ fn one_provider_stacked_mode_falls_back_to_single_provider_bars() {
 fn one_healthy_provider_never_uses_stacked_renderer() {
     let settings = Settings {
         tray_icon_mode: TrayIconMode::Stacked,
-        menu_bar_shows_percent: true,
+        menu_bar_icon_style: codexbar::settings::MenuBarIconStyle::Percent,
         show_as_used: true,
         ..Settings::default()
     };
@@ -295,7 +295,7 @@ fn one_healthy_provider_never_uses_stacked_renderer() {
 #[test]
 fn all_errors_produce_error_styled_zero_percent_plan() {
     let settings = Settings {
-        menu_bar_shows_percent: true,
+        menu_bar_icon_style: codexbar::settings::MenuBarIconStyle::Percent,
         ..Settings::default()
     };
     let mut snapshot = fake_snapshot("codex", "Codex", 30.0);
@@ -737,7 +737,7 @@ fn tray_pace_color_is_opt_in_and_follows_canonical_stage() {
     };
     let colored_percent_settings = Settings {
         menu_bar_color_pace: true,
-        menu_bar_shows_percent: true,
+        menu_bar_icon_style: codexbar::settings::MenuBarIconStyle::Percent,
         ..Settings::default()
     };
     let render = |settings: &Settings, snapshots: &[ProviderUsageSnapshot]| {
@@ -762,7 +762,7 @@ fn tray_pace_color_is_opt_in_and_follows_canonical_stage() {
 
     let percent_normal = render(
         &Settings {
-            menu_bar_shows_percent: true,
+            menu_bar_icon_style: codexbar::settings::MenuBarIconStyle::Percent,
             ..Settings::default()
         },
         &unpaced,
@@ -807,4 +807,50 @@ fn stacked_tray_icon_keeps_usage_colours_when_pace_tint_is_enabled() {
         plan.render_icon(),
         TrayPresentationPlan::resolve(&unpaced_settings, &unpaced, None).render_icon()
     );
+}
+
+#[test]
+fn icon_style_not_the_legacy_percent_flag_picks_the_renderer() {
+    let snapshots = vec![fake_snapshot("codex", "Codex", 30.0)];
+    let bars = Settings {
+        menu_bar_icon_style: codexbar::settings::MenuBarIconStyle::Bars,
+        menu_bar_shows_percent: true,
+        show_as_used: true,
+        ..Settings::default()
+    };
+    assert!(matches!(
+        TrayPresentationPlan::resolve(&bars, &snapshots, None).icon,
+        TrayIconPlan::Bars { .. }
+    ));
+    let percent = Settings {
+        menu_bar_icon_style: codexbar::settings::MenuBarIconStyle::Percent,
+        menu_bar_shows_percent: false,
+        show_as_used: true,
+        ..Settings::default()
+    };
+    assert_eq!(
+        TrayPresentationPlan::resolve(&percent, &snapshots, None).icon,
+        TrayIconPlan::Percent {
+            percent: 30.0,
+            has_error: false,
+        }
+    );
+}
+
+#[test]
+fn retired_minimal_display_mode_no_longer_forces_most_used_provider() {
+    // After the one-shot fold, turning "Show most-used provider" off must win.
+    let settings = Settings {
+        tray_icon_mode: TrayIconMode::Single,
+        menu_bar_display_mode: "minimal".to_string(),
+        menu_bar_shows_highest_usage: false,
+        show_as_used: true,
+        ..Settings::default()
+    };
+    let snapshots = vec![
+        fake_snapshot("codex", "Codex", 30.0),
+        fake_snapshot("claude", "Claude", 72.0),
+    ];
+    let plan = TrayPresentationPlan::resolve(&settings, &snapshots, None);
+    assert_eq!(plan.status_rows[0].snapshot.provider_id, "codex");
 }
