@@ -161,8 +161,6 @@ pub(super) fn is_terminal() -> bool {
     std::io::stdout().is_terminal()
 }
 
-/// Render usage as text with optional status. `pace_work_days` is
-/// `Settings::weekly_progress_work_days` (weekly pace only).
 /// Pace of one card lane. Providers that opt into reset-window pace score the
 /// lane against their resolved reset window (upstream `CLIRenderer.computePace`);
 /// every other window keeps the lane's own rule, `fallback`.
@@ -175,6 +173,10 @@ fn lane_pace(
     lane_pace_at(provider, window, Utc::now(), pace_work_days, fallback)
 }
 
+/// Upstream `CLIRenderer.paceMinimumExpectedPercent`: reset-window pace is
+/// hidden until at least 3% of the window is expected to be used.
+const RESET_WINDOW_MINIMUM_EXPECTED_PERCENT: f64 = 3.0;
+
 /// `lane_pace` at a fixed clock.
 pub(super) fn lane_pace_at(
     provider: ProviderId,
@@ -185,12 +187,16 @@ pub(super) fn lane_pace_at(
 ) -> Option<UsagePace> {
     let capability = provider.pace_capability();
     if capability.supports_reset_window_pace(window, now) {
-        capability.reset_window_pace(window, now, pace_work_days)
+        capability
+            .reset_window_pace(window, now, pace_work_days)
+            .filter(|pace| pace.expected_used_percent >= RESET_WINDOW_MINIMUM_EXPECTED_PERCENT)
     } else {
         fallback()
     }
 }
 
+/// Render usage as text with optional status. `pace_work_days` is
+/// `Settings::weekly_progress_work_days` (weekly pace only).
 pub fn render_text_with_status(
     provider: ProviderId,
     result: &ProviderFetchResult,

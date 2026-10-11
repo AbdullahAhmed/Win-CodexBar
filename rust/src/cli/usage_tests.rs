@@ -730,6 +730,43 @@ fn cli_lane_pace_scores_copilot_against_the_february_cycle() {
 }
 
 #[test]
+fn cli_lane_pace_keeps_reset_window_pace_for_a_resolved_31_day_cycle() {
+    use chrono::TimeZone;
+    // StepFun already expands the 30-day sentinel to the real cycle: 31
+    // days ending Mar 31. Mar 15 12:00 is 15.5 days in.
+    let now = Utc.with_ymd_and_hms(2026, 3, 15, 12, 0, 0).unwrap();
+    let reset = Utc.with_ymd_and_hms(2026, 3, 31, 0, 0, 0).unwrap();
+    let window = RateWindow::with_details(70.0, Some(44_640), Some(reset), None);
+
+    let pace = render::lane_pace_at(ProviderId::StepFun, &window, now, None, || {
+        panic!("a calendar-month window must use the reset-window rule")
+    })
+    .expect("stepfun reset-window pace");
+    assert_eq!(pace.expected_used_percent, 50.0);
+    assert_eq!(pace.delta_percent, 20.0);
+}
+
+#[test]
+fn cli_reset_window_pace_needs_three_percent_expected() {
+    use chrono::TimeZone;
+    // Upstream `CLIRenderer.paceMinimumExpectedPercent` (3). Copilot's cycle
+    // ending Mar 31 is 31 days long; 12 hours in, 0.5 / 31 = 1.61% is
+    // expected, so the CLI shows no pace and does not fall back.
+    let reset = Utc.with_ymd_and_hms(2026, 3, 31, 0, 0, 0).unwrap();
+    let window = RateWindow::with_details(5.0, None, Some(reset), None);
+    let early = Utc.with_ymd_and_hms(2026, 2, 28, 12, 0, 0).unwrap();
+    let pace = render::lane_pace_at(ProviderId::Copilot, &window, early, None, || {
+        panic!("reset-window lanes never fall back")
+    });
+    assert!(pace.is_none());
+    // One day in (3.23%), the pace shows.
+    let day_one = Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap();
+    let pace = render::lane_pace_at(ProviderId::Copilot, &window, day_one, None, || None)
+        .expect("pace after 3% expected");
+    assert_eq!(pace.expected_used_percent, 100.0 / 31.0);
+}
+
+#[test]
 fn copilot_monthly_windows_get_reset_window_pace_in_json_and_text() {
     use chrono::Duration;
     // Copilot windows have a reset date and no length: the CLI scores them
