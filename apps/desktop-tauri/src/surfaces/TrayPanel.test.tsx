@@ -464,6 +464,57 @@ describe("TrayPanel provider grid", () => {
     expect(container.textContent).not.toMatch(/\$2\.00/);
   });
 
+  it("follows Track costs live: off hides Overview spend and re-reads the cards, on restores them", async () => {
+    const onSummary = {
+      contract: {},
+      reportingPeriod: "rolling:30",
+      reportingDay: "2026-09-19",
+      dashboardTimezone: "UTC",
+      costTrackingEnabled: true,
+      rows: [
+        {
+          providerId: "codex",
+          displayName: "Codex",
+          sevenDay: 1,
+          thirtyDay: 2,
+          periodCost: 2,
+          periodTokens: null,
+          currency: "USD",
+          source: "local",
+          includedInOverview: true,
+        },
+      ],
+    };
+    tauriMocks.getUsageSpendSummary.mockResolvedValue(onSummary);
+    const { container } = renderTrayPanel([provider("codex", "Codex", 35)], { costUsageEnabled: true });
+    const total = new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 2,
+    }).format(2);
+    const shown = () =>
+      /providers have spend/.test(container.textContent ?? "")
+      && [...container.querySelectorAll("strong")].some((e) => e.textContent?.includes(total));
+
+    await waitFor(() => expect(shown()).toBe(true));
+    await waitFor(() => expect(tauriMocks.getProviderChartData).toHaveBeenCalledTimes(1));
+    const summaryCalls = tauriMocks.getUsageSpendSummary.mock.calls.length;
+
+    // Track costs turned off in the Settings window: the flyout only hears settings-changed.
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings({ costUsageEnabled: false }));
+    await act(async () => emitEvent("settings-changed", null));
+    await waitFor(() => expect(shown()).toBe(false));
+    await waitFor(() => expect(tauriMocks.getProviderChartData).toHaveBeenCalledTimes(2));
+    expect(tauriMocks.getUsageSpendSummary.mock.calls.length).toBe(summaryCalls);
+
+    // Turned on again: the summary and the card chart are read again.
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings({ costUsageEnabled: true }));
+    await act(async () => emitEvent("settings-changed", null));
+    await waitFor(() => expect(shown()).toBe(true));
+    await waitFor(() => expect(tauriMocks.getProviderChartData).toHaveBeenCalledTimes(3));
+    expect(tauriMocks.getUsageSpendSummary.mock.calls.length).toBe(summaryCalls + 1);
+  });
+
   it("dismisses the tray panel on unmodified Escape", async () => {
     const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
 

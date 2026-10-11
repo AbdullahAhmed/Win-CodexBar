@@ -40,6 +40,8 @@ export interface MenuCardDisplayOptions {
   quotaWarningMarkersVisible?: boolean;
   weeklyProgressWorkDays?: number | null;
   workdayTickStyle?: WorkdayTickStyle;
+  /** Settings "Track costs"; a change re-reads the chart so local estimates follow it. */
+  costTrackingEnabled?: boolean;
 }
 
 interface MenuCardProps {
@@ -152,6 +154,7 @@ export default function MenuCard({
     quotaWarningMarkersVisible = true,
     weeklyProgressWorkDays = null,
     workdayTickStyle = "subtle",
+    costTrackingEnabled = true,
   } = display;
   const { t, language } = useLocale();
   const [chartData, setChartData] = useState<ProviderChartData | null>(null);
@@ -181,7 +184,8 @@ export default function MenuCard({
     return () => {
       cancelled = true;
     };
-  }, [provider.providerId, provider.accountEmail, localDay, onLayoutChange]);
+    // "Track costs" flips local estimates on or off; the backend answers for the new value.
+  }, [provider.providerId, provider.accountEmail, localDay, costTrackingEnabled, onLayoutChange]);
 
   const isWayfinder = provider.providerId === "wayfinder";
   const email = isWayfinder ? null : headerAccount(provider, hideEmail);
