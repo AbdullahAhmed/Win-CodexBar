@@ -12,8 +12,8 @@ use serde_json::Value;
 use std::time::Duration;
 
 use crate::core::{
-    CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId,
-    ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
+    FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
+    RateWindow, SourceMode, UsageSnapshot,
 };
 use crate::providers::{BoundedBodyError, read_bounded_response};
 
@@ -240,7 +240,6 @@ struct Quota {
 struct QuotaCost {
     used: f64,
     limit: f64,
-    resets_at: Option<DateTime<Utc>>,
     next_regen_amount: Option<f64>,
 }
 
@@ -400,7 +399,6 @@ fn parse_quota(payload: &Value) -> Option<Quota> {
         QuotaCost {
             used,
             limit,
-            resets_at,
             next_regen_amount: first_currency(payload, &["nextRegenCredits", "next_regen_credits"]),
         }
     });
@@ -712,15 +710,11 @@ impl ParsedQuotas {
         if let Some(plan) = &self.plan {
             usage = usage.with_login_method(plan.clone());
         }
-        let mut result = ProviderFetchResult::new(usage, "api");
-        if let Some(cost) = &self.cost {
-            let mut snapshot = CostSnapshot::new(cost.used, "USD", "Weekly").with_limit(cost.limit);
-            if let Some(resets_at) = cost.resets_at {
-                snapshot = snapshot.with_resets_at(resets_at);
-            }
-            result = result.with_cost(snapshot);
-        }
-        result
+        // The weekly credits only drive the weekly regen line above. Upstream
+        // hides the cost block on the Synthetic card
+        // (`ProviderCostPresentation(menuCardStyle: .hidden)`), so no cost is
+        // attached here.
+        ProviderFetchResult::new(usage, "api")
     }
 }
 
