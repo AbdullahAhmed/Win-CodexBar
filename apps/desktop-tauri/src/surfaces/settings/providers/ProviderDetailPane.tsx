@@ -10,6 +10,7 @@ import { formatRelativeUpdated } from "../../../lib/relativeTime";
 import { nextEnabledProviders } from "../settingsTabs";
 import { useLocale } from "../../../hooks/useLocale";
 import { providerAllowsPace } from "../../../lib/providerPace";
+import { providerBarAccent } from "../../../components/providers/providerIcons";
 import {
   getCredentialStorageStatus,
   getProviderCookieSourceOptions,
@@ -34,7 +35,6 @@ import { buildSubtitle } from "./providerDetailFormat";
 import { IdentitySection } from "./sections/IdentitySection";
 import { UsageSection } from "./sections/UsageSection";
 import { UsageItemVisibilitySection } from "./sections/UsageItemVisibilitySection";
-import { PaceSection } from "./sections/PaceSection";
 import { UsageDetailsSection } from "./sections/UsageDetailsSection";
 import { CostSection } from "./sections/CostSection";
 import { QuickActionsSection } from "./sections/QuickActionsSection";
@@ -376,14 +376,18 @@ export function ProviderDetailPane({
         <UsageSection
           provider={detail}
           resetTimeRelative={resetTimeRelative}
-          t={t}
-        />
-        <PaceSection
-          pace={
-            providerAllowsPace(detail.id, detail.sourceLabel)
-              ? detail.pace
-              : null
-          }
+          display={{
+            showResetWhenExhausted: settings.showResetWhenExhausted,
+            showPace:
+              (settings.showPace ?? true) &&
+              providerAllowsPace(detail.id, detail.sourceLabel),
+            showAsUsed,
+            usageThresholds: settings,
+            quotaWarningMarkersVisible: settings.quotaWarningMarkersVisible ?? true,
+            weeklyProgressWorkDays: settings.weeklyProgressWorkDays ?? null,
+            workdayTickStyle: settings.workdayTickStyle ?? "subtle",
+          }}
+          accentColor={providerBarAccent(detail.id, providerAccentColors[detail.id])}
           t={t}
         />
         <CostSection cost={detail.cost} t={t} />
