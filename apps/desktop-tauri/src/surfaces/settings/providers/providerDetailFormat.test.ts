@@ -66,7 +66,7 @@ describe("buildSubtitle", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-31T00:00:00Z"));
     try {
-      expect(buildSubtitle(detail, t)).toBe("oauth · DetailUpdatedPrefix 30d");
+      expect(buildSubtitle(detail, t)).toBe("oauth • DetailUpdatedPrefix 30d");
     } finally {
       vi.useRealTimers();
     }

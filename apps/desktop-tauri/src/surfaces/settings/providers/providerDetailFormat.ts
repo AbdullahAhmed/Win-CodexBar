@@ -13,7 +13,7 @@ export function buildSubtitle(
   } else if (!detail.hasSnapshot) {
     parts.push(t("ProviderUsageNotFetchedYet"));
   }
-  return parts.join(" · ");
+  return parts.join(" • ");
 }
 
 /** Source shown before a provider's first fetch (macOS `UsageStore.sourceLabel(for:)` fallback). */

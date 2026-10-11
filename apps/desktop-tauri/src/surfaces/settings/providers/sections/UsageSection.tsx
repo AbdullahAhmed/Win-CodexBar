@@ -88,7 +88,7 @@ export function UsageSection({ provider, resetTimeRelative, t }: Props) {
   }
 
   return (
-    <section className="provider-detail-section">
+    <section className="provider-detail-section provider-usage-main">
       <h4>{t("ProviderUsage")}</h4>
       {bars.map((b) => (
         <UsageBar

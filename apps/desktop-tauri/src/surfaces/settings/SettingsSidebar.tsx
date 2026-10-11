@@ -13,6 +13,7 @@ import {
   SIDEBAR_PANES,
   canReorderProviders,
   filterProvidersByQuery,
+  nextEnabledProviders,
   sortProvidersAlphabetically,
   type SidebarPane,
 } from "./settingsTabs";
@@ -174,10 +175,7 @@ export function SettingsSidebar({
   }, [enabled, ordered, searchText, snapshots, sorted]);
 
   const toggleEnabled = (id: string, on: boolean) => {
-    const next = new Set(enabled);
-    if (on) next.add(id);
-    else next.delete(id);
-    set({ enabledProviders: ordered.filter((p) => next.has(p.id)).map((p) => p.id) });
+    set({ enabledProviders: nextEnabledProviders(ordered, enabled, id, on) });
   };
 
   const handleReorder = (ids: string[]) => {
