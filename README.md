@@ -118,13 +118,18 @@ See the full history in [CHANGELOG.md](CHANGELOG.md).
 | Raycast | Cookies (Chrome auto or manual) | Monthly AI credits, plan, renewal |
 | Replicate | Cookies / token accounts | Monthly spend, credit balance |
 | Aixy | API Key / token accounts | Applicable budget balances, 7-day key usage |
+| ClawRouter | API Key | Monthly budget, requests, tokens, routed-provider spend |
 | ElevenLabs | API Key | Subscription Credits, Voice Slots |
 | Deepgram | API Key | Project Usage |
 | Groq | API Key | Enterprise Metrics |
 | LLM Proxy | API Key | Quota Stats |
 | llmman | Local daemon / optional API Key | Memory in use, loaded and stored models |
 | DevPass | API Key | Plan credits, Premium weekly, API-key spend |
+| IBM Bob | API Key / token accounts | Monthly Bobcoins, per-team budgets |
 | xKiro | API Key | Daily free tokens |
+| Synthetic | API Key | Five-hour quota, Weekly tokens, Hourly search, Plan |
+| Langdock | Browser cookies / manual Cookie header | Session (5h), Weekly |
+| LithosAI | Browser cookies / manual Cookie header | Prepaid balance, UTC spend today and this month |
 | Muse (muse.ai) | Browser cookies / manual Cookie header | Weekly usage, tokens left, top-up tokens |
 
 </details>

@@ -112,6 +112,47 @@ the bearer key are never sent together. Rate limits, server errors and
 malformed balances are final and do not fall back. Upstream's multiple API-key
 token accounts are not ported yet.
 
+### Langdock personal usage
+
+Langdock is disabled by default and has no API key. It reads the signed-in web
+app: `GET https://app.langdock.com/api/trpc/usageSettings.getPersonalUsage`
+(tRPC batch input) with the `auth_token` session cookie.
+
+- The cookie source in Settings → Providers → Langdock picks the session and
+  defaults to Automatic. Automatic and Manual first use a header imported under
+  Browser Cookies (from the browser you choose) or pasted there. Without one,
+  Automatic reads the `langdock.com` cookies from the detected browsers and
+  Manual fails closed. Off reads nothing. A header without `auth_token` never
+  sends a request.
+- The card shows Session (5 hours) and Weekly percentages with their resets.
+  A plan without session limits shows the weekly lane alone, labelled Weekly.
+  A workspace without included limits shows one "Included limits" detail row.
+- Upstream keeps usage above 100%; the Windows bar clamps it at 100%.
+- 401 and tRPC `UNAUTHORIZED` are reported as an expired session. Redirects
+  are never followed and response bodies are never echoed in errors.
+
+### LithosAI prepaid balance
+
+LithosAI is disabled by default and has no billing API key. It reads the
+signed-in console at `https://console.lithosai.cloud` with both session cookies,
+`__Host-console_session` and `__Host-console_csrf`; the CSRF value is echoed as
+`X-Console-Csrf`. A header missing either cookie never sends a request.
+
+- The cookie source in Settings → Providers → LithosAI picks the session and
+  defaults to Automatic. Automatic and Manual first use a header imported under
+  Browser Cookies (from the browser you choose) or pasted there. Without one,
+  Automatic reads the `console.lithosai.cloud` cookies from the detected
+  browsers and Manual fails closed. Off reads nothing.
+- Requests, in order: `GET /api/me` (active organization, email), then
+  `GET /api/billing` and `GET /api/billing/spend?start=YYYY-MM-01&end=YYYY-MM-DD`
+  (UTC month to date), both with `X-Organization-Id`.
+- The card shows the prepaid USD balance (1 USD = 1,000,000,000 nanos) as a
+  "Prepaid credits" cost block and a **Billing** section: Balance, Payment card,
+  Account status, Today (UTC) and This month (UTC). There is no quota bar.
+- A spend report that fails or does not parse shows "Spend: Unavailable" and
+  keeps the balance; a 401 anywhere reports an expired session.
+- Response bodies and cookies are never echoed in errors or logs.
+
 ### Muse (muse.ai) weekly usage
 
 Muse (muse.ai) is Meta's personal agent; it is separate from Muse Code, which
@@ -206,6 +247,64 @@ are never followed and response bodies are never echoed in errors.
 - A response that fails the `key.usage` contract (wrong currency, another key's
   budget, inconsistent coverage, malformed amounts) is a parse error, not a
   partial balance.
+
+### Synthetic
+
+Synthetic reads `GET https://api.synthetic.new/v2/quotas` with
+`Authorization: Bearer <key>`. Configure the key in Settings → Providers →
+Synthetic (or `SYNTHETIC_API_KEY`); the CLI also accepts `synthetic.new`.
+
+- `rollingFiveHourLimit` is the "Five-hour quota" lane, `weeklyTokenLimit` the
+  "Weekly tokens" lane and `search.hourly` a "Search hourly" window. Other
+  payload shapes fall back to the first quota-like objects found under
+  `quotas`, `quota`, `limits`, `usage`, `entries`, `subscription` or `data`.
+- When the five-hour quota reports `tickPercent`, the lane resets at the next
+  regen tick and its detail line reads, for example,
+  "76% after next regen · Full in ~3 regens". The weekly lane does the same
+  when it carries `maxCredits` and `nextRegenCredits`, which also give a
+  weekly USD cost.
+- The plan name (`plan`, `planName`, `tier`, ...) is shown as the plan.
+- 401 and 403 report "Invalid Synthetic API credentials."; response bodies are
+  never echoed in errors.
+
+### ClawRouter
+
+ClawRouter reports the monthly budget, spend and routed-provider usage of one
+policy key (`GET {base}/v1/usage`, `Authorization: Bearer <key>`). Configure
+the key in Settings → Providers → ClawRouter (or `CLAWROUTER_API_KEY`). Leave
+the Base URL empty for `https://clawrouter.openclaw.ai`; set it (or
+`CLAWROUTER_BASE_URL`) for another deployment. The service root and its `/v1`
+URL both work, a bare host is treated as HTTPS, and plain HTTP, embedded
+credentials, a query or a fragment are rejected before the key is read.
+Redirects are never followed and response bodies are never echoed in errors.
+
+- The primary lane is the monthly budget (spent / limit), resetting on the
+  first day of the next month (UTC). The cost line shows this month's spend
+  against the limit.
+- Details show requests, tokens, actual cost, the budget ledger and the
+  monthly budget, then up to 20 routed providers ordered by spend and
+  requests.
+- A policy without a monthly limit shows "Unmetered" and this month's actual
+  cost.
+
+### IBM Bob
+
+IBM Bob reads monthly Bobcoin usage. Configure an API key from the IBM Bob web
+portal in Settings → Providers → IBM Bob, as token accounts, or with
+`BOBSHELL_API_KEY`; the CLI also accepts `ibm-bob`, `bob` and `bobshell`.
+
+- `GET https://api.us-east.bob.ibm.com/admin/v1/profile` lists the
+  subscription instances; then each team's budget comes from
+  `GET /admin/v1/teams/{team}/users/{user}` on the instance's regional host.
+- Credentials go only to HTTPS hosts named `bob.ibm.com` or under
+  `.bob.ibm.com`; any other `region_domain` stops the refresh before a team
+  request. A JWT session token is sent as `Bearer`, any other key as `Apikey`.
+- The "Monthly Bobcoins" bar sums every visible team and shows a percentage
+  only when every team has a budget; otherwise it shows Bobcoins used. It
+  resets at the earliest `refresh_at`. The "Bobcoin usage" rows list each team
+  with its plan, and the plan names are shown as the organization.
+- 401 and 403 report that the key was rejected; response bodies are never
+  echoed in errors.
 
 ## Listing what is enabled
 

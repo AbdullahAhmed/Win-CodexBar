@@ -394,7 +394,7 @@ impl NotificationManager {
         current_percent: f64,
         settings: &Settings,
     ) {
-        if !settings.show_notifications {
+        if !settings.session_quota_notifications_enabled {
             return;
         }
 
@@ -1233,5 +1233,37 @@ mod tests {
         // Account B can still fire depleted independently.
         manager.check_session_transition(ProviderId::Claude, "account-b", 100.0, &settings);
         assert!(manager.sent_notifications.contains(&depleted_b));
+    }
+
+    #[test]
+    fn session_transition_follows_its_own_setting_not_threshold_warnings() {
+        let depleted = (
+            ProviderId::Codex,
+            "account".to_string(),
+            "session".to_string(),
+            NotificationType::SessionDepleted,
+        );
+
+        // Threshold warnings off must not silence depleted/restored alerts.
+        let mut manager = NotificationManager::new();
+        let settings = Settings {
+            show_notifications: false,
+            session_quota_notifications_enabled: true,
+            ..Settings::default()
+        };
+        manager.check_session_transition(ProviderId::Codex, "account", 40.0, &settings);
+        manager.check_session_transition(ProviderId::Codex, "account", 100.0, &settings);
+        assert!(manager.sent_notifications.contains(&depleted));
+
+        // Turning the session-quota alerts off silences them even with warnings on.
+        let mut manager = NotificationManager::new();
+        let settings = Settings {
+            show_notifications: true,
+            session_quota_notifications_enabled: false,
+            ..Settings::default()
+        };
+        manager.check_session_transition(ProviderId::Codex, "account", 40.0, &settings);
+        manager.check_session_transition(ProviderId::Codex, "account", 100.0, &settings);
+        assert!(!manager.sent_notifications.contains(&depleted));
     }
 }

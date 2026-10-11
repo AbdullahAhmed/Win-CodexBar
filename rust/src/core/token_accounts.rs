@@ -379,6 +379,17 @@ impl TokenAccountSupport {
                 requires_manual_cookie_source: false,
                 cookie_name: None,
             }),
+            // Upstream 0.73: labeled IBM Bob API keys via token accounts.
+            ProviderId::IBMBob => Some(TokenAccountSupport {
+                title: "API keys",
+                subtitle: "Store multiple IBM Bob API keys.",
+                placeholder: "Paste API key…",
+                injection: TokenInjection::Environment {
+                    key: "BOBSHELL_API_KEY".to_string(),
+                },
+                requires_manual_cookie_source: false,
+                cookie_name: None,
+            }),
             // These providers don't support token accounts
             ProviderId::Codex
             | ProviderId::Pi
@@ -432,6 +443,10 @@ impl TokenAccountSupport {
             | ProviderId::XKiro
             | ProviderId::Raycast
             | ProviderId::Vercel
+            | ProviderId::Synthetic
+            | ProviderId::ClawRouter
+            | ProviderId::Langdock
+            | ProviderId::LithosAI
             | ProviderId::MuseAI => None,
         }
     }
@@ -1055,6 +1070,20 @@ mod tests {
         assert_eq!(
             env.get("AIXY_API_KEY").map(String::as_str),
             Some("gak_fixture")
+        );
+    }
+
+    #[test]
+    fn ibmbob_token_accounts_inject_bobshell_api_key_env() {
+        let support = TokenAccountSupport::for_provider(ProviderId::IBMBob).unwrap();
+        assert_eq!(support.title, "API keys");
+        assert_eq!(support.subtitle, "Store multiple IBM Bob API keys.");
+        assert_eq!(support.placeholder, "Paste API key…");
+        assert!(!support.requires_manual_cookie_source);
+        let env = TokenAccountSupport::env_override(ProviderId::IBMBob, "bob_fixture").unwrap();
+        assert_eq!(
+            env.get("BOBSHELL_API_KEY").map(String::as_str),
+            Some("bob_fixture")
         );
     }
 

@@ -328,9 +328,12 @@ pub(super) fn usage_snapshot_from_subscription(sub: AmpSubscriptionUsage) -> Usa
                 Some(resets_at),
                 Some(reset_description),
             );
+            // Upstream `AmpProviderDescriptor.primaryLabel` / `secondaryLabel`.
             UsageSnapshot::new(primary)
                 .with_secondary(secondary)
                 .with_login_method(plan)
+                .with_primary_label("Other usage")
+                .with_secondary_label("Orb usage")
         }
         AmpSubscriptionKind::Tier {
             agent,
@@ -351,11 +354,7 @@ pub(super) fn usage_snapshot_from_subscription(sub: AmpSubscriptionUsage) -> Usa
                     agent.used_percent(),
                     window_minutes,
                     resets_at,
-                    Some(tier_allowance_description(
-                        &reset_description,
-                        &agent,
-                        AmpAllowanceUnit::Dollars,
-                    )),
+                    Some(reset_description.clone()),
                 )
             };
             let mut usage = UsageSnapshot::new(primary)
@@ -366,11 +365,7 @@ pub(super) fn usage_snapshot_from_subscription(sub: AmpSubscriptionUsage) -> Usa
                     orb.used_percent(),
                     window_minutes,
                     resets_at,
-                    Some(tier_allowance_description(
-                        &reset_description,
-                        &orb,
-                        AmpAllowanceUnit::Hours,
-                    )),
+                    Some(reset_description),
                 );
                 usage = usage
                     .with_secondary(secondary)
@@ -378,29 +373,6 @@ pub(super) fn usage_snapshot_from_subscription(sub: AmpSubscriptionUsage) -> Usa
             }
             usage
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AmpAllowanceUnit {
-    Dollars,
-    Hours,
-}
-
-fn tier_allowance_description(
-    reset_description: &str,
-    allowance: &AmpAllowance,
-    unit: AmpAllowanceUnit,
-) -> String {
-    match unit {
-        AmpAllowanceUnit::Hours => format!(
-            "{reset_description} · {:.2}h/{:.2}h remaining",
-            allowance.remaining, allowance.limit
-        ),
-        AmpAllowanceUnit::Dollars => format!(
-            "{reset_description} · ${:.2}/${:.2} remaining",
-            allowance.remaining, allowance.limit
-        ),
     }
 }
 
