@@ -14,6 +14,7 @@ const STRINGS: Partial<Record<LocaleKey, string>> = {
   CostPeriodThisMonth: "This month",
   PanelToday: "Today",
   ProviderLabelMonthly: "Monthly",
+  WindowLabelMonthlyCredits: "Monthly credits",
 };
 const t = (key: LocaleKey) => STRINGS[key] ?? key;
 
@@ -140,6 +141,25 @@ describe("cardCostSection", () => {
     expect(section?.title).toBe("Extra usage");
     expect(section?.spendLine).toBe("Balance: $125.50");
     expect(section?.inline).toBe(true);
+  });
+
+  it("prints Codex credits unitless, as upstream creditsUsageSection does", () => {
+    const balance = cardCostSection(
+      cost({ used: 125.5, period: "Credits", formattedUsed: "$125.50" }),
+      "detailed",
+      t,
+      "codex",
+    );
+    expect(balance?.spendLine).toBe("Balance: 125.5");
+    expect(balance?.inline).toBe(true);
+
+    const capped = cardCostSection(
+      cost({ used: 1234.567, limit: 2000, period: "Monthly credits", formattedUsed: "$1,234.57" }),
+      "detailed",
+      t,
+      "codex",
+    );
+    expect(capped?.spendLine).toBe("Monthly credits: 1,234.57 / 2,000");
   });
 
   it("shows an uncapped spend with its period", () => {
