@@ -47,6 +47,7 @@ fn customized_settings() -> Settings {
         menu_bar_shows_percent: true,
         tray_icon_mode: TrayIconMode::PerProvider,
         switcher_shows_icons: false,
+        providers_sorted_alphabetically: true,
         overview_layout: "detailed".to_string(),
         menu_bar_display_mode: "minimal".to_string(),
         // Loading normalizes the order to the full canonical list.

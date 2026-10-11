@@ -127,6 +127,8 @@ pub(super) struct RawSettings {
     menu_bar_shows_percent: bool,
     #[serde(default)]
     menu_bar_color_pace: bool,
+    #[serde(default)]
+    providers_sorted_alphabetically: bool,
     show_as_used: bool,
     enable_animations: bool,
     reset_time_relative: bool,
@@ -313,6 +315,7 @@ impl Default for RawSettings {
             menu_bar_shows_highest_usage: s.menu_bar_shows_highest_usage,
             menu_bar_shows_percent: s.menu_bar_shows_percent,
             menu_bar_color_pace: s.menu_bar_color_pace,
+            providers_sorted_alphabetically: s.providers_sorted_alphabetically,
             show_as_used: s.show_as_used,
             enable_animations: s.enable_animations,
             reset_time_relative: s.reset_time_relative,
@@ -660,6 +663,7 @@ impl From<RawSettings> for Settings {
             menu_bar_shows_highest_usage: raw.menu_bar_shows_highest_usage,
             menu_bar_shows_percent: raw.menu_bar_shows_percent,
             menu_bar_color_pace: raw.menu_bar_color_pace,
+            providers_sorted_alphabetically: raw.providers_sorted_alphabetically,
             show_as_used: raw.show_as_used,
             enable_animations: raw.enable_animations,
             reset_time_relative: raw.reset_time_relative,
