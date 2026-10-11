@@ -973,7 +973,7 @@ impl CodexApi {
 
         let balance = credits
             .get("balance")
-            .and_then(|v| v.as_f64())
+            .and_then(credit_balance_value)
             .unwrap_or(0.0);
 
         Some(CostSnapshot::new(balance, "USD", "Credits"))
@@ -1119,6 +1119,17 @@ fn normalize_named_windows(
 /// Returns (session, weekly, monthly, code_review). F5 (upstream 0.48.0):
 /// monthly (30-day) windows are routed to their own lane so surfaces can
 /// display a monthly reset instead of swallowing it into the weekly label.
+/// The usage API sends `credits.balance` as a number or as a numeric string
+/// ("125.50"). Upstream `CreditDetails` accepts both; anything else is unknown.
+fn credit_balance_value(value: &serde_json::Value) -> Option<f64> {
+    let balance = match value {
+        serde_json::Value::Number(number) => number.as_f64(),
+        serde_json::Value::String(text) => text.trim().parse::<f64>().ok(),
+        _ => None,
+    }?;
+    balance.is_finite().then_some(balance)
+}
+
 fn normalize_array_windows(
     windows: Vec<RateWindow>,
 ) -> (
@@ -2345,6 +2356,37 @@ mod tests {
             .expect("codex usage");
 
         assert!(usage.extra_rate_windows.is_empty());
+    }
+
+    fn credits_cost_from_json(balance: serde_json::Value) -> Option<CostSnapshot> {
+        CodexApi::new()
+            .build_result_from_json_for_test(&json!({
+                "rate_limit": {
+                    "primary_window": { "used_percent": 10, "limit_window_seconds": 18000 }
+                },
+                "credits": { "has_credits": true, "unlimited": false, "balance": balance }
+            }))
+            .expect("codex usage")
+            .1
+    }
+
+    #[test]
+    fn credits_balance_accepts_numeric_string() {
+        let cost = credits_cost_from_json(json!("125.50")).expect("credits cost");
+        assert_eq!(cost.used, 125.5);
+        assert_eq!(cost.currency_code, "USD");
+    }
+
+    #[test]
+    fn credits_balance_accepts_number() {
+        let cost = credits_cost_from_json(json!(7.5)).expect("credits cost");
+        assert_eq!(cost.used, 7.5);
+    }
+
+    #[test]
+    fn credits_balance_falls_back_to_zero_for_non_numeric_string() {
+        let cost = credits_cost_from_json(json!("abc")).expect("credits cost");
+        assert_eq!(cost.used, 0.0);
     }
 
     #[test]
