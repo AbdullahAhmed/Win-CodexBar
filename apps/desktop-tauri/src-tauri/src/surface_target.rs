@@ -185,4 +185,14 @@ mod tests {
         assert!(!is_supported_settings_tab("providers:openai"));
         assert!(!is_supported_settings_tab("apiKeys"));
     }
+
+    #[test]
+    fn every_provider_catalog_id_is_a_valid_provider_pane_tab() {
+        // The Settings catalog sends `cli_name` as the provider id, and the
+        // sidebar builds `providers:<id>` from it.
+        for id in codexbar::core::ProviderId::all() {
+            let tab = format!("providers:{}", id.cli_name());
+            assert!(is_supported_settings_tab(&tab), "{tab} rejected");
+        }
+    }
 }
