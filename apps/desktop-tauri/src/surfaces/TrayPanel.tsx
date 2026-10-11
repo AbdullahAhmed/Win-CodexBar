@@ -158,6 +158,25 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   );
 }
 
+/**
+ * Splits "Usage & Spend · {}" into the semibold heading and the secondary
+ * "· range" tail, whatever the locale puts around the placeholder.
+ */
+export function splitSpendTitle(
+  template: string,
+  range: string,
+): { heading: string; detail: string | null } {
+  const at = template.indexOf("{}");
+  if (at < 0) return { heading: template, detail: null };
+  const before = template.slice(0, at);
+  const after = template.slice(at + 2);
+  const dot = before.lastIndexOf("·");
+  const cut = dot < 0 ? before.length : dot;
+  const heading = before.slice(0, cut).trim();
+  const detail = `${before.slice(cut).trim()} ${range}${after}`.trim();
+  return heading ? { heading, detail } : { heading: detail, detail: null };
+}
+
 function OverviewSpendSummary({
   providerIds,
   period,
@@ -199,22 +218,34 @@ function OverviewSpendSummary({
   if (aggregate.total == null && aggregate.considered === 0) return null;
   const partial = aggregate.included < aggregate.considered;
 
+  const { heading, detail } = splitSpendTitle(
+    t("OverviewSpendPeriodTitle"),
+    costPeriodShortLabel(summaryPeriod, t),
+  );
+  const total =
+    aggregate.total == null
+      ? "—"
+      : `${partial ? "~" : ""}${new Intl.NumberFormat(undefined, { style: "currency", currency: target === "AUTO" ? "USD" : target, maximumFractionDigits: 2 }).format(aggregate.total)}`;
+
+  // Upstream `OverviewSpendSummaryView`: headline, the title2 total, then captions.
   return (
-    <div className="provider-detail-section" style={{ margin: "8px 8px 10px", padding: "10px 12px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
-        <strong>{title}</strong>
-        <strong>
-          {aggregate.total == null
-            ? "—"
-            : `${partial ? "~" : ""}${new Intl.NumberFormat(undefined, { style: "currency", currency: target === "AUTO" ? "USD" : target, maximumFractionDigits: 2 }).format(aggregate.total)}`}
-        </strong>
+    <section className="overview-spend" aria-label={title}>
+      <div className="overview-spend__headline">
+        <span className="overview-spend__heading">{heading}</span>
+        {detail && (
+          <>
+            {" "}
+            <span className="overview-spend__range">{detail}</span>
+          </>
+        )}
       </div>
-      <div className="settings-section__caption" style={{ marginTop: 4 }}>
+      <strong className="overview-spend__total">{total}</strong>
+      <div className="overview-spend__caption">
         {t("OverviewSpendProviderCoverage")
           .replace("{}", String(aggregate.included))
           .replace("{}", String(aggregate.considered))}{" "}
         · {t("OverviewSpendEstimate")}
       </div>
-    </div>
+    </section>
   );
 }

@@ -265,6 +265,47 @@ mod tests {
         assert_eq!(SurfaceMode::parse("bogus"), None);
     }
 
+    /// Reads `const NAME = <integer>;` from a TypeScript source.
+    fn ts_integer_const(source: &str, name: &str) -> u32 {
+        let prefix = format!("const {name} = ");
+        let line = source
+            .lines()
+            .find_map(|line| {
+                line.trim_start()
+                    .strip_prefix("export ")
+                    .unwrap_or(line.trim_start())
+                    .strip_prefix(&prefix)
+            })
+            .unwrap_or_else(|| panic!("{name} not found"));
+        line.trim_end_matches(';')
+            .trim()
+            .parse()
+            .unwrap_or_else(|_| panic!("{name} is not an integer: {line}"))
+    }
+
+    #[test]
+    fn tray_panel_width_matches_the_frontend_layout_base_width() {
+        let layout = include_str!("../../src/hooks/useTrayPanelLayout.ts");
+        let width = SurfaceMode::TrayPanel.window_properties().width;
+        assert_eq!(
+            f64::from(ts_integer_const(layout, "TRAY_BASE_WIDTH")),
+            width
+        );
+    }
+
+    #[test]
+    fn tray_scale_bounds_match_the_frontend_scale_bounds() {
+        let scale = include_str!("../../src/lib/trayScale.ts");
+        assert_eq!(
+            ts_integer_const(scale, "TRAY_SCALE_MIN"),
+            u32::from(codexbar::settings::TRAY_SCALE_PERCENT_MIN)
+        );
+        assert_eq!(
+            ts_integer_const(scale, "TRAY_SCALE_MAX"),
+            u32::from(codexbar::settings::TRAY_SCALE_PERCENT_MAX)
+        );
+    }
+
     #[test]
     fn tray_panel_properties() {
         let props = SurfaceMode::TrayPanel.window_properties();

@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useReducer, useState } from "react";
-import type { SettingsSnapshot, SettingsUpdate } from "../../../types/bridge";
+import type {
+  ProviderUsageSnapshot,
+  SettingsSnapshot,
+  SettingsUpdate,
+} from "../../../types/bridge";
 import { useLocale } from "../../../hooks/useLocale";
 import { providerAllowsPace } from "../../../lib/providerPace";
 import {
@@ -29,6 +33,7 @@ import { UsageItemVisibilitySection } from "./sections/UsageItemVisibilitySectio
 import { AutoResumeSection } from "./sections/AutoResumeSection";
 import { OptionalDetailsSection } from "./sections/OptionalDetailsSection";
 import { PaceSection } from "./sections/PaceSection";
+import { UsageDetailsSection } from "./sections/UsageDetailsSection";
 import { CostSection } from "./sections/CostSection";
 import { QuickActionsSection } from "./sections/QuickActionsSection";
 import { ChartsSection } from "./sections/charts/ChartsSection";
@@ -57,8 +62,12 @@ import { MuseBrowserTeamSection } from "./sections/MuseBrowserTeamSection";
 
 interface Props {
   providerId: string | null;
+  /** Live tray snapshot for `providerId`; feeds the details moved out of the tray card. */
+  liveSnapshot?: ProviderUsageSnapshot | null;
   cookieDomain?: string | null;
   resetTimeRelative: boolean;
+  /** Show "N% used" next to remaining on per-account usage rows. */
+  showAsUsed?: boolean;
   providerMetrics: SettingsSnapshot["providerMetrics"];
   copilotSeatCreditEntitlement: SettingsSnapshot["copilotSeatCreditEntitlement"];
   /** Per-provider accent color overrides (CLI name → hex color). */
@@ -78,8 +87,10 @@ interface Props {
  */
 export function ProviderDetailPane({
   providerId,
+  liveSnapshot = null,
   cookieDomain = null,
   resetTimeRelative,
+  showAsUsed = false,
   providerMetrics,
   copilotSeatCreditEntitlement,
   providerAccentColors,
@@ -328,8 +339,22 @@ export function ProviderDetailPane({
       {detail.id === "codex" && (
         <CodexAccountsSection t={t} hidePersonalInfo={hidePersonalInfo} />
       )}
-      {detail.id === "claude" && <ClaudeAccountsSection t={t} language={language} />}
-      {detail.id === "grok" && <GrokAccountsSection t={t} />}
+      {detail.id === "claude" && (
+        <ClaudeAccountsSection
+          t={t}
+          language={language}
+          hidePersonalInfo={hidePersonalInfo}
+          showAsUsed={showAsUsed}
+          resetTimeRelative={resetTimeRelative}
+        />
+      )}
+      {detail.id === "grok" && (
+        <GrokAccountsSection
+          t={t}
+          hidePersonalInfo={hidePersonalInfo}
+          resetTimeRelative={resetTimeRelative}
+        />
+      )}
 
       {detail.lastError && (
         <ProviderIssueNotice detail={detail} t={t} />
@@ -397,6 +422,9 @@ export function ProviderDetailPane({
             : null
         }
         t={t}
+      />
+      <UsageDetailsSection
+        provider={liveSnapshot?.providerId === detail.id ? liveSnapshot : null}
       />
       <CostSection cost={detail.cost} t={t} />
 

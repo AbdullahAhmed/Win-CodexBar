@@ -22,7 +22,7 @@ import { useProviderSwitcherKeys } from "./useProviderSwitcherKeys";
 import { useSurfaceTarget } from "./useSurfaceMode";
 import { useTrayPanelLayout } from "./useTrayPanelLayout";
 import type { MenuFooterRow } from "../components/MenuSurface";
-import { hasSuccessfulClaudeCliQuota } from "../lib/claudeAccountActions";
+import { accountMenuAction } from "../lib/accountMenuRow";
 import { orderProviderSnapshots } from "../lib/providerOrder";
 import { clampTrayScalePercent } from "../lib/trayScale";
 import {
@@ -211,11 +211,13 @@ export function useTrayPanelController(state: BootstrapState) {
   }, []);
 
   const actionRows: MenuFooterRow[] = [];
-  if (actionProvider !== null && hasSuccessfulClaudeCliQuota(actionProvider)) {
+  const accountAction = accountMenuAction(actionProvider);
+  if (accountAction !== null) {
+    const { settingsTab } = accountAction;
     actionRows.push({
       id: "switchAccount",
-      label: t("TrayMenuSwitchAccount"),
-      onClick: () => void openSettingsWindow("providers").catch(() => {}),
+      label: t(accountAction.labelKey),
+      onClick: () => void openSettingsWindow(settingsTab).catch(() => {}),
     });
   }
   if (links?.dashboard) {

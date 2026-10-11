@@ -443,8 +443,13 @@ fn default_tray_scale_percent() -> u16 {
     100
 }
 
+/// Smallest Panel scale; `apps/desktop-tauri/src/lib/trayScale.ts` mirrors it.
+pub const TRAY_SCALE_PERCENT_MIN: u16 = 100;
+/// Largest Panel scale; `apps/desktop-tauri/src/lib/trayScale.ts` mirrors it.
+pub const TRAY_SCALE_PERCENT_MAX: u16 = 200;
+
 pub fn clamp_tray_scale_percent(value: u16) -> u16 {
-    value.clamp(100, 200)
+    value.clamp(TRAY_SCALE_PERCENT_MIN, TRAY_SCALE_PERCENT_MAX)
 }
 
 fn default_float_bar_opacity() -> u8 {
