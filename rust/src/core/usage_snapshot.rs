@@ -66,6 +66,10 @@ pub struct WayfinderUsageSnapshot {
     pub unit: String,
     pub priced: bool,
     pub routes: Vec<WayfinderRouteSummary>,
+    /// Mean router decision latency from `/metrics`, in milliseconds. `None`
+    /// when the gateway exposes no latency histogram or has routed nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avg_decision_ms: Option<f64>,
 }
 
 /// Per-route savings data reported by Wayfinder.
