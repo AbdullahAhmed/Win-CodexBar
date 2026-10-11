@@ -491,12 +491,16 @@ impl ZaiProvider {
 
         // Upstream 0.48.0 `rateWindow`/`resetDescription`: only token-type
         // windows keep duration minutes; TIME_LIMIT (MCP) carries the "MCP"
-        // label and no window duration; 5-hour token windows are labeled
-        // "5-hour"; otherwise the explicit window label is used.
+        // label and no window duration, except upstream v0.70.0 zai.js's
+        // monthly MCP marker (unit 5, number 1), which gets the 30-day
+        // sentinel; 5-hour token windows are labeled "5-hour"; otherwise the
+        // explicit window label is used.
         let now = Utc::now();
         let make_window = |l: &ZaiLimit| -> RateWindow {
             let window_mins = if is_token_limit_type(l.limit_type.as_deref()) {
                 ZaiProvider::window_minutes(l)
+            } else if is_monthly_mcp_marker(l) {
+                Some(crate::core::MONTHLY_WINDOW_SENTINEL_MINUTES)
             } else {
                 None
             };
@@ -576,6 +580,10 @@ impl ZaiProvider {
         };
         Some(number * minutes_per_unit)
     }
+}
+
+fn is_monthly_mcp_marker(l: &ZaiLimit) -> bool {
+    is_time_limit_type(l.limit_type.as_deref()) && l.unit == Some(5) && l.number == Some(1)
 }
 
 /// Upstream `ZaiProviderDescriptor.isMonthlyMCPWindow`: the MCP window with
