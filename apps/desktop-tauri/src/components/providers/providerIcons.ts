@@ -63,6 +63,7 @@ import replicate from "./icons/ProviderIcon-replicate.svg?raw";
 import sakana from "./icons/ProviderIcon-sakana.svg?raw";
 import stepfun from "./icons/ProviderIcon-stepfun.svg?raw";
 import sub2api from "./icons/ProviderIcon-sub2api.svg?raw";
+import synthetic from "./icons/ProviderIcon-synthetic.svg?raw";
 import clawrouter from "./icons/ProviderIcon-clawrouter.svg?raw";
 import t3chat from "./icons/ProviderIcon-t3chat.svg?raw";
 import venice from "./icons/ProviderIcon-venice.svg?raw";
@@ -158,6 +159,7 @@ const RAW: Record<string, string> = {
   sakana: tint(sakana),
   stepfun: tint(stepfun),
   sub2api: tint(sub2api),
+  synthetic: tint(synthetic),
   clawrouter: tint(clawrouter),
   t3chat: tint(t3chat),
   venice: tint(venice),
@@ -252,6 +254,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   sub2api:     { id: "sub2api",     brandColor: "#14b8a6", fallbackLetter: "S", svgPath: RAW.sub2api },
   venice:      { id: "venice",      brandColor: "#3c8fdd", fallbackLetter: "V", svgPath: RAW.venice },
   vercel:      { id: "vercel",      brandColor: "#737373", fallbackLetter: "V", svgPath: RAW.vercel },
+  synthetic:   { id: "synthetic",   brandColor: "#141414", fallbackLetter: "S", svgPath: RAW.synthetic },
   clawrouter:  { id: "clawrouter",  brandColor: "#596EF6", fallbackLetter: "C", svgPath: RAW.clawrouter },
   openaiapi:   { id: "openaiapi",   brandColor: "#10a37f", fallbackLetter: "O" },
   chutes:      { id: "chutes",      brandColor: "#ff5c35", fallbackLetter: "C" },

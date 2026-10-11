@@ -10,12 +10,13 @@ use crate::core::{
 use crate::providers::format::usd;
 
 use super::subscription::{
-    next_free_tier_reset, parse_amp_number, parse_amp_subscription_usage,
+    AmpSubscriptionUsage, next_free_tier_reset, parse_amp_number, parse_amp_subscription_usage,
     usage_snapshot_from_subscription,
 };
 
 const AMOUNT: &str = r"([0-9][0-9,]*(?:\.[0-9]+)?)";
 const CREDITS_SECTION: &str = "Credits";
+const ALLOWANCES_SECTION: &str = "Monthly allowances";
 
 /// Parsed Amp usage: quota windows plus the credit balances shown as rows.
 pub(super) struct AmpDisplayUsage {
@@ -25,8 +26,26 @@ pub(super) struct AmpDisplayUsage {
 
 impl AmpDisplayUsage {
     pub fn into_fetch_result(self, source_label: &str) -> ProviderFetchResult {
-        ProviderFetchResult::new(self.usage, source_label).with_display_details(self.details)
+        let allows_pace = window_allows_pace(&self.usage.primary);
+        let result =
+            ProviderFetchResult::new(self.usage, source_label).with_display_details(self.details);
+        if allows_pace {
+            result
+        } else {
+            result.with_non_authoritative_pace()
+        }
     }
+}
+
+/// Upstream `AmpProviderDescriptor` pace rule: only a subscription window
+/// (a known length and a "renews in ..." reset) has a pace. The Amp Free
+/// allowance refills hourly or daily, so a pace line under it is noise.
+pub(super) fn window_allows_pace(window: &RateWindow) -> bool {
+    window.window_minutes.is_some()
+        && window
+            .reset_description
+            .as_deref()
+            .is_some_and(|text| text.starts_with("renews in "))
 }
 
 /// Amp Free allowance, from either the dollar or the percentage line.
@@ -67,6 +86,10 @@ pub(super) fn parse_amp_display_text(
     }
 
     let free_window = free.as_ref().map(|free| free_tier_window(free, now));
+    let mut details = subscription
+        .as_ref()
+        .map(allowance_details)
+        .unwrap_or_default();
     let mut usage = match (subscription, free_window) {
         (Some(subscription), free_window) => {
             let usage = usage_snapshot_from_subscription(subscription);
@@ -89,10 +112,31 @@ pub(super) fn parse_amp_display_text(
         }
     }
 
-    Ok(AmpDisplayUsage {
-        usage,
-        details: credit_details(individual_credits, &workspaces),
-    })
+    details.extend(credit_details(individual_credits, &workspaces));
+    Ok(AmpDisplayUsage { usage, details })
+}
+
+/// Upstream "Monthly allowances" section: the Tier agent balance in dollars
+/// and the orb balance in whole hours.
+fn allowance_details(subscription: &AmpSubscriptionUsage) -> Vec<ProviderDisplayDetail> {
+    let agent = subscription.agent_remaining().and_then(|remaining| {
+        ProviderDisplayDetail::new("amp-allowance-agent", "Agent", usd(remaining))?
+            .with_section_title(ALLOWANCES_SECTION)
+    });
+    let orb = subscription.orb_hours_remaining().and_then(|remaining| {
+        ProviderDisplayDetail::new("amp-allowance-orb", "Orb", orb_hours_text(remaining))?
+            .with_section_title(ALLOWANCES_SECTION)?
+            .with_secondary_value("a1.small-equivalent hours")
+    });
+    agent.into_iter().chain(orb).collect()
+}
+
+fn orb_hours_text(remaining: f64) -> String {
+    if remaining > 0.0 && remaining < 1.0 {
+        "< 1h".to_string()
+    } else {
+        format!("{:.0}h", remaining.floor())
+    }
 }
 
 /// Test helper: the quota snapshot only.

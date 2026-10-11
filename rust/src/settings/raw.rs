@@ -133,6 +133,9 @@ pub(super) struct RawSettings {
     show_reset_when_exhausted: bool,
     predictive_pace_warning_enabled: bool,
     credential_expiry_notifications_enabled: bool,
+    /// `None` when the file predates the key; it then inherits `show_notifications`.
+    #[serde(default)]
+    session_quota_notifications_enabled: Option<bool>,
     #[serde(default = "default_true")]
     show_pace: bool,
     menu_bar_display_mode: String,
@@ -316,6 +319,7 @@ impl Default for RawSettings {
             show_reset_when_exhausted: s.show_reset_when_exhausted,
             predictive_pace_warning_enabled: s.predictive_pace_warning_enabled,
             credential_expiry_notifications_enabled: s.credential_expiry_notifications_enabled,
+            session_quota_notifications_enabled: Some(s.session_quota_notifications_enabled),
             show_pace: s.show_pace,
             menu_bar_display_mode: s.menu_bar_display_mode,
             overview_layout: s.overview_layout,
@@ -662,6 +666,9 @@ impl From<RawSettings> for Settings {
             show_reset_when_exhausted: raw.show_reset_when_exhausted,
             predictive_pace_warning_enabled: raw.predictive_pace_warning_enabled,
             credential_expiry_notifications_enabled: raw.credential_expiry_notifications_enabled,
+            session_quota_notifications_enabled: raw
+                .session_quota_notifications_enabled
+                .unwrap_or(raw.show_notifications),
             show_pace: raw.show_pace,
             menu_bar_display_mode: raw.menu_bar_display_mode,
             overview_layout: normalize_overview_layout(&raw.overview_layout),

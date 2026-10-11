@@ -185,6 +185,25 @@ are never followed and response bodies are never echoed in errors.
   budget, inconsistent coverage, malformed amounts) is a parse error, not a
   partial balance.
 
+### Synthetic
+
+Synthetic reads `GET https://api.synthetic.new/v2/quotas` with
+`Authorization: Bearer <key>`. Configure the key in Settings → Providers →
+Synthetic (or `SYNTHETIC_API_KEY`); the CLI also accepts `synthetic.new`.
+
+- `rollingFiveHourLimit` is the "Five-hour quota" lane, `weeklyTokenLimit` the
+  "Weekly tokens" lane and `search.hourly` a "Search hourly" window. Other
+  payload shapes fall back to the first quota-like objects found under
+  `quotas`, `quota`, `limits`, `usage`, `entries`, `subscription` or `data`.
+- When the five-hour quota reports `tickPercent`, the lane resets at the next
+  regen tick and its detail line reads, for example,
+  "76% after next regen · Full in ~3 regens". The weekly lane does the same
+  when it carries `maxCredits` and `nextRegenCredits`, which also give a
+  weekly USD cost.
+- The plan name (`plan`, `planName`, `tier`, ...) is shown as the plan.
+- 401 and 403 report "Invalid Synthetic API credentials."; response bodies are
+  never echoed in errors.
+
 ### ClawRouter
 
 ClawRouter reports the monthly budget, spend and routed-provider usage of one

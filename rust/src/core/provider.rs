@@ -103,6 +103,7 @@ pub enum ProviderId {
     XKiro,
     Raycast,
     Vercel,
+    Synthetic,
     ClawRouter,
 }
 
@@ -199,6 +200,7 @@ impl ProviderId {
             ProviderId::XKiro,
             ProviderId::Raycast,
             ProviderId::Vercel,
+            ProviderId::Synthetic,
             ProviderId::ClawRouter,
         ]
     }
@@ -256,6 +258,7 @@ impl ProviderId {
             ProviderId::XKiro => "xkiro",
             ProviderId::Raycast => "raycast",
             ProviderId::Vercel => "vercel",
+            ProviderId::Synthetic => "synthetic",
             ProviderId::ClawRouter => "clawrouter",
             ProviderId::AiAnd => "aiand",
             ProviderId::Windsurf => "windsurf",
@@ -353,6 +356,7 @@ impl ProviderId {
             ProviderId::XKiro => "xKiro",
             ProviderId::Raycast => "Raycast",
             ProviderId::Vercel => "Vercel AI Gateway",
+            ProviderId::Synthetic => "Synthetic",
             ProviderId::ClawRouter => "ClawRouter",
             ProviderId::AiAnd => "ai&",
             ProviderId::Windsurf => "Windsurf",
@@ -466,6 +470,7 @@ impl ProviderId {
             ProviderId::DevPass => None,
             ProviderId::XKiro => None,
             ProviderId::Vercel => None,
+            ProviderId::Synthetic => None,
             ProviderId::ClawRouter => None,
             ProviderId::AiAnd => None,
             ProviderId::Windsurf => None,
@@ -619,6 +624,7 @@ impl ProviderId {
             "replicate" | "r8" => Some(ProviderId::Replicate),
             "atlascloud" | "atlas-cloud" | "atlas cloud" => Some(ProviderId::AtlasCloud),
             "raycast" | "raycast-ai" => Some(ProviderId::Raycast),
+            "synthetic" | "synthetic.new" => Some(ProviderId::Synthetic),
             "clawrouter" | "claw-router" => Some(ProviderId::ClawRouter),
             _ => None,
         }
@@ -1148,6 +1154,7 @@ pub fn cli_name_map() -> HashMap<&'static str, ProviderId> {
     map.insert("vercel ai gateway", ProviderId::Vercel);
     map.insert("ai-gateway", ProviderId::Vercel);
     map.insert("ai gateway", ProviderId::Vercel);
+    map.insert("synthetic.new", ProviderId::Synthetic);
     map.insert("claw-router", ProviderId::ClawRouter);
     map.insert("metaspark", ProviderId::Meta);
     map.insert("meta-spark", ProviderId::Meta);
@@ -1312,6 +1319,7 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::Raycast => "#FF6363",
         // Upstream uses white; a mid neutral keeps contrast on light and dark surfaces.
         ProviderId::Vercel => "#737373",
+        ProviderId::Synthetic => "#141414",
         ProviderId::ClawRouter => "#596EF6",
     }
 }
@@ -1327,7 +1335,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 90);
+        assert_eq!(all.len(), 91);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Pi));
@@ -1397,6 +1405,7 @@ mod tests {
         assert!(all.contains(&ProviderId::XKiro));
         assert!(all.contains(&ProviderId::Raycast));
         assert!(all.contains(&ProviderId::Vercel));
+        assert!(all.contains(&ProviderId::Synthetic));
         assert!(all.contains(&ProviderId::ClawRouter));
     }
 

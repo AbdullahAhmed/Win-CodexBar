@@ -158,3 +158,11 @@ describe("DisplayTab stacked tray providers", () => {
     expect(set).toHaveBeenCalledWith({ stackedTrayBottomProvider: "codex" });
   });
 });
+
+describe("DisplayTab switcher shortcuts", () => {
+  it("no longer hosts the provider switcher shortcuts on the Menu tab", () => {
+    renderTab(vi.fn(), "menu");
+    expect(screen.queryByText("SwitcherShortcutsTitle")).toBeNull();
+    expect(screen.queryByRole("button", { name: "SwitcherShortcutReset" })).toBeNull();
+  });
+});

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SettingsTabId } from "../../types/bridge";
 
-import { isSettingsTab, TAB_META } from "./settingsTabs";
+import { isSettingsTab, parseSettingsTabRequest, providersTabRequest, TAB_META } from "./settingsTabs";
 
 describe("isSettingsTab", () => {
   it.each(["general", "providers", "notifications", "menuBar", "menu", "usageSpend", "advanced", "about"])(
@@ -51,5 +51,51 @@ describe("TAB_META", () => {
 
   it("has unique ids", () => {
     expect(new Set(TAB_META.map((m) => m.id)).size).toBe(TAB_META.length);
+  });
+});
+
+describe("parseSettingsTabRequest", () => {
+  it("reads a plain tab id with no provider", () => {
+    expect(parseSettingsTabRequest("providers")).toEqual({ tab: "providers", providerId: null });
+    expect(parseSettingsTabRequest("about")).toEqual({ tab: "about", providerId: null });
+  });
+
+  it("reads a provider deep link on the Providers tab", () => {
+    expect(parseSettingsTabRequest("providers:claude")).toEqual({
+      tab: "providers",
+      providerId: "claude",
+    });
+  });
+
+  it("ignores an empty provider id", () => {
+    expect(parseSettingsTabRequest("providers:")).toEqual({ tab: "providers", providerId: null });
+  });
+
+  it("keeps an unknown provider id for the tab to resolve", () => {
+    expect(parseSettingsTabRequest("providers:nope")).toEqual({
+      tab: "providers",
+      providerId: "nope",
+    });
+  });
+
+  it("drops a provider id on any other tab", () => {
+    expect(parseSettingsTabRequest("general:claude")).toEqual({ tab: "general", providerId: null });
+  });
+
+  it("returns null for an unknown tab", () => {
+    expect(parseSettingsTabRequest("dashboard")).toBeNull();
+    expect(parseSettingsTabRequest("dashboard:claude")).toBeNull();
+    expect(parseSettingsTabRequest("")).toBeNull();
+    expect(parseSettingsTabRequest(undefined)).toBeNull();
+  });
+});
+
+describe("providersTabRequest", () => {
+  it("builds the deep link that parseSettingsTabRequest reads", () => {
+    expect(providersTabRequest("codex")).toBe("providers:codex");
+    expect(parseSettingsTabRequest(providersTabRequest("grok"))).toEqual({
+      tab: "providers",
+      providerId: "grok",
+    });
   });
 });
