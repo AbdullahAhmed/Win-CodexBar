@@ -15,7 +15,7 @@ import { localizeWindowLabel } from "../lib/windowLabels";
 import { inlineDashboardModel } from "../lib/inlineDashboard";
 import { useMonthlyLimitBlockNow } from "../hooks/useMonthlyLimitBlockNow";
 import type { UsageThresholdSettings } from "../lib/metricRowModel";
-import { getProviderIcon } from "./providers/providerIcons";
+import { providerBarAccent } from "./providers/providerIcons";
 import CardHeader, { displayPlanName } from "./card/CardHeader";
 import CardMetricRow, { type MetricEntry } from "./card/CardMetricRow";
 import DetailSections from "./card/DetailSections";
@@ -239,7 +239,7 @@ export default function MenuCard({
   ]
     .filter(Boolean)
     .join(" ");
-  const accent = accentColor ?? getProviderIcon(provider.providerId).brandColor;
+  const accent = providerBarAccent(provider.providerId, accentColor);
 
   return (
     <article

@@ -1212,7 +1212,9 @@ pub fn cli_name_map() -> HashMap<&'static str, ProviderId> {
 ///
 /// Upstream 0.70.0 audited the palette (#4075, `docs/provider-palette.md`).
 /// The 16 accents it adopted are pinned in the tests below; changing one
-/// must not materially reduce contrast on white or `#222222`.
+/// must not materially reduce contrast on white or `#222222`. The Mac 0.70.0
+/// parity pass adopted 24 more Mac descriptor colors, also pinned below;
+/// Vercel is the one Mac color Windows does not take.
 pub fn brand_color(id: ProviderId) -> &'static str {
     match id {
         ProviderId::Codex => "#49A3B0",
@@ -1232,55 +1234,55 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::Kimi => "#FE603C",
         ProviderId::KimiK2 => "#4C00FF",
         ProviderId::Amp => "#F34E3F",
-        ProviderId::Warp => "#6366F1",
-        ProviderId::Ollama => "#8B95B0",
+        ProviderId::Warp => "#938BB4",
+        ProviderId::Ollama => "#888888",
         ProviderId::AzureOpenAI => "#0078D4",
-        ProviderId::T3Chat => "#8B5CF6",
-        ProviderId::OpenRouter => "#6B7280",
+        ProviderId::T3Chat => "#F56647",
+        ProviderId::OpenRouter => "#6467F2",
         ProviderId::JetBrains => "#FF3399",
         ProviderId::Alibaba => "#FF6A00",
         ProviderId::AlibabaTokenPlan => "#FF6A00",
         ProviderId::NanoGPT => "#687FA1",
         ProviderId::Infini => "#687FA1",
-        ProviderId::Perplexity => "#1FB8CD",
+        ProviderId::Perplexity => "#20B2AA",
         ProviderId::Abacus => "#814EE8",
         ProviderId::Mistral => "#FF5229",
         ProviderId::OpenCodeGo => "#3B82F6",
-        ProviderId::Kilo => "#5D87FF",
+        ProviderId::Kilo => "#F27027",
         ProviderId::Bedrock => "#01A88D",
         ProviderId::Codebuff => "#00FF95",
         ProviderId::CodeRabbit => "#FF5C35",
         ProviderId::DeepSeek => "#4D6BFE",
         ProviderId::DeepInfra => "#2A3275",
         ProviderId::AiAnd => "#E25C2B",
-        ProviderId::Windsurf => "#22C55E",
+        ProviderId::Windsurf => "#34E8BB",
         ProviderId::Manus => "#34322D",
         ProviderId::MiMo => "#FF6900",
-        ProviderId::Doubao => "#2563EB",
+        ProviderId::Doubao => "#3370FF",
         ProviderId::CommandCode => "#8C4EDD",
-        ProviderId::StepFun => "#999999",
+        ProviderId::StepFun => "#2196F2",
         ProviderId::Venice => "#3C8FDD",
-        ProviderId::OpenAIApi => "#10A37F",
-        ProviderId::Grok => "#111827",
+        ProviderId::OpenAIApi => "#0F826E",
+        ProviderId::Grok => "#10A37F",
         ProviderId::ElevenLabs => "#111827",
-        ProviderId::Deepgram => "#13EF93",
-        ProviderId::Groq => "#F55036",
+        ProviderId::Deepgram => "#6467F2",
+        ProviderId::Groq => "#F56844",
         ProviderId::HuggingFace => "#FFD21E",
-        ProviderId::Helmcode => "#4F46E5",
-        ProviderId::V0 => "#111827",
-        ProviderId::TypeSafe => "#2563EB",
-        ProviderId::LLMProxy => "#4F46E5",
-        ProviderId::Chutes => "#FF5C35",
-        ProviderId::LiteLLM => "#0EA5E9",
-        ProviderId::Poe => "#5D5FEF",
+        ProviderId::Helmcode => "#4934E1",
+        ProviderId::V0 => "#111111",
+        ProviderId::TypeSafe => "#111111",
+        ProviderId::LLMProxy => "#24B47E",
+        ProviderId::Chutes => "#3184FF",
+        ProviderId::LiteLLM => "#4C89F0",
+        ProviderId::Poe => "#5D5CDE",
         ProviderId::Devin => "#317CFF",
-        ProviderId::Zed => "#084CCF",
+        ProviderId::Zed => "#084EFF",
         ProviderId::CrossModel => "#C084FC",
-        ProviderId::Qoder => "#2563EB",
+        ProviderId::Qoder => "#10B981",
         ProviderId::CodeBuddy => "#0052D9",
-        ProviderId::Sakana => "#0EA5E9",
+        ProviderId::Sakana => "#2975DB",
         ProviderId::Sub2Api => "#14B8A6",
-        ProviderId::Wayfinder => "#14B8A6",
+        ProviderId::Wayfinder => "#10A37F",
         ProviderId::ZenMux => "#6C5CE7",
         ProviderId::ClinePass => "#5487C8",
         ProviderId::LongCat => "#29E154",
@@ -1303,7 +1305,9 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::DevPass => "#2563EB",
         ProviderId::XKiro => "#52C99B",
         ProviderId::Raycast => "#FF6363",
-        // Upstream uses white; a mid neutral keeps contrast on light and dark surfaces.
+        // Mac uses white, which is invisible on the light bar track; a mid
+        // neutral keeps contrast on light and dark surfaces (user decision
+        // 2026-10-10, Mac-parity palette pass).
         ProviderId::Vercel => "#737373",
     }
 }
@@ -1737,10 +1741,8 @@ mod tests {
     ];
 
     /// Audited providers whose accent upstream kept, where the Windows accent
-    /// already equals upstream's final value. Chutes, Deepgram, Doubao, Groq,
-    /// Kilo, LiteLLM, Perplexity, Qoder, Sakana, T3 Chat and Warp keep older
-    /// Windows accents that differ from upstream; aligning them is out of
-    /// scope for the 0.70.0 port.
+    /// already equals upstream's final value. The audited providers whose
+    /// older Windows accents differed are aligned in `MAC_PARITY_ACCENTS`.
     const RETAINED_ACCENTS: [(ProviderId, &str); 7] = [
         (ProviderId::AiAnd, "#E25C2B"),
         (ProviderId::Copilot, "#A855F7"),
@@ -1749,6 +1751,51 @@ mod tests {
         (ProviderId::Kimi, "#FE603C"),
         (ProviderId::Notion, "#337EA9"),
         (ProviderId::OpenCode, "#3B82F6"),
+    ];
+
+    /// Mac CodexBar 0.70.0 descriptor colors adopted for parity: (provider,
+    /// previous Windows accent, Mac color). Source: the `color:` of each
+    /// `CodexBarCore/Providers/<Name>/<Name>ProviderDescriptor.swift`.
+    const MAC_PARITY_ACCENTS: [(ProviderId, &str, &str); 24] = [
+        (ProviderId::Chutes, "#FF5C35", "#3184FF"),
+        (ProviderId::Deepgram, "#13EF93", "#6467F2"),
+        (ProviderId::Doubao, "#2563EB", "#3370FF"),
+        (ProviderId::Grok, "#111827", "#10A37F"),
+        (ProviderId::Groq, "#F55036", "#F56844"),
+        (ProviderId::Helmcode, "#4F46E5", "#4934E1"),
+        (ProviderId::Kilo, "#5D87FF", "#F27027"),
+        (ProviderId::LiteLLM, "#0EA5E9", "#4C89F0"),
+        (ProviderId::LLMProxy, "#4F46E5", "#24B47E"),
+        (ProviderId::Ollama, "#8B95B0", "#888888"),
+        (ProviderId::OpenAIApi, "#10A37F", "#0F826E"),
+        (ProviderId::OpenRouter, "#6B7280", "#6467F2"),
+        (ProviderId::Perplexity, "#1FB8CD", "#20B2AA"),
+        (ProviderId::Poe, "#5D5FEF", "#5D5CDE"),
+        (ProviderId::Qoder, "#2563EB", "#10B981"),
+        (ProviderId::Sakana, "#0EA5E9", "#2975DB"),
+        (ProviderId::StepFun, "#999999", "#2196F2"),
+        (ProviderId::T3Chat, "#8B5CF6", "#F56647"),
+        (ProviderId::TypeSafe, "#2563EB", "#111111"),
+        (ProviderId::V0, "#111827", "#111111"),
+        (ProviderId::Warp, "#6366F1", "#938BB4"),
+        (ProviderId::Wayfinder, "#14B8A6", "#10A37F"),
+        (ProviderId::Windsurf, "#22C55E", "#34E8BB"),
+        (ProviderId::Zed, "#084CCF", "#084EFF"),
+    ];
+
+    /// Mac-parity accents that fail the regression rule on one surface. They
+    /// are bar fills and icon tints, not text, and the Mac ships them as is;
+    /// the user chose exact Mac colors (2026-10-10). Each entry names the
+    /// only surface it is exempt on; every other check still applies.
+    const MAC_PARITY_CONTRAST_EXEMPTIONS: [(ProviderId, &str); 4] = [
+        // Mac green, 6.29 -> 2.66 on white.
+        (ProviderId::LLMProxy, "#FFFFFF"),
+        // Mac emerald, 5.17 -> 2.54 on white.
+        (ProviderId::Qoder, "#FFFFFF"),
+        // Mac near-black, 3.08 -> 1.19 on #222222.
+        (ProviderId::TypeSafe, "#222222"),
+        // Mac mint, 2.28 -> 1.57 on white.
+        (ProviderId::Windsurf, "#FFFFFF"),
     ];
 
     /// WCAG relative luminance of a `#RRGGBB` color, as upstream's
@@ -1794,6 +1841,33 @@ mod tests {
         }
         for (id, retained) in RETAINED_ACCENTS {
             assert_eq!(brand_color(id), retained, "{id:?}");
+        }
+    }
+
+    #[test]
+    fn mac_parity_accents_are_pinned() {
+        for (id, _, mac) in MAC_PARITY_ACCENTS {
+            assert_eq!(brand_color(id), mac, "{id:?}");
+        }
+        // Mac ships #FFFFFF, invisible on the light track (user decision 2026-10-10).
+        assert_eq!(brand_color(ProviderId::Vercel), "#737373");
+    }
+
+    #[test]
+    fn mac_parity_accents_do_not_materially_regress_contrast() {
+        // Same rule as the upstream audit below, applied to the Mac-parity
+        // pass. Only the listed provider/surface pairs are exempt.
+        for (id, previous, _) in MAC_PARITY_ACCENTS {
+            for background in ["#FFFFFF", "#222222"] {
+                let current = contrast_ratio(brand_color(id), background);
+                let before = contrast_ratio(previous, background);
+                let passes = current >= 3.0 || before - current < 0.5;
+                let exempt = MAC_PARITY_CONTRAST_EXEMPTIONS.contains(&(id, background));
+                assert!(
+                    passes != exempt,
+                    "{id:?} on {background}: {before:.2} -> {current:.2} (exempt: {exempt})"
+                );
+            }
         }
     }
 
