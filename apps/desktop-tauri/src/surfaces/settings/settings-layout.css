@@ -1156,6 +1156,11 @@
   padding: 12px 0;
 }
 
+/* macOS: usage rows stack with 12px between them. */
+.provider-usage-main .menu-metric + .menu-metric {
+  margin-top: 12px;
+}
+
 /* Error group: a plain row in its box, red only on the title. */
 .provider-detail-error-group .provider-detail-error {
   margin: 0;
@@ -1175,7 +1180,6 @@
 }
 
 .provider-detail-error-group .provider-detail-error__full {
-  font-family: var(--font-mono, monospace);
   white-space: pre-wrap;
 }
 
