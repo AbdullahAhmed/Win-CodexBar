@@ -2,7 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import type { SettingsTabId } from "../../types/bridge";
 
-import { isSettingsTab, parseSettingsTabRequest, providersTabRequest, TAB_META } from "./settingsTabs";
+import {
+  SIDEBAR_PANES,
+  TAB_META,
+  canReorderProviders,
+  filterProvidersByQuery,
+  isSettingsTab,
+  parseSettingsTabRequest,
+  providersTabRequest,
+  sortProvidersAlphabetically,
+} from "./settingsTabs";
 
 describe("isSettingsTab", () => {
   it.each(["general", "providers", "notifications", "menuBar", "menu", "usageSpend", "advanced", "about"])(
@@ -97,5 +106,79 @@ describe("providersTabRequest", () => {
       tab: "providers",
       providerId: "grok",
     });
+  });
+});
+
+describe("SIDEBAR_PANES", () => {
+  it("lists the app panes in the macOS order with their chip colors", () => {
+    expect(SIDEBAR_PANES.map((pane) => [pane.id, pane.chip])).toEqual([
+      ["general", "gray"],
+      ["usageSpend", "green"],
+      ["notifications", "red"],
+      ["menuBar", "blue"],
+      ["menu", "teal"],
+      ["advanced", "purple"],
+      ["about", null],
+    ]);
+  });
+
+  it("covers every settings tab except the provider panes", () => {
+    const paneIds = new Set<string>(SIDEBAR_PANES.map((pane) => pane.id));
+    for (const tab of TAB_META) {
+      expect(paneIds.has(tab.id)).toBe(tab.id !== "providers");
+    }
+  });
+});
+
+const catalog = [
+  { id: "codex", displayName: "Codex" },
+  { id: "zai", displayName: "z.ai" },
+  { id: "claude", displayName: "Claude" },
+  { id: "amp", displayName: "Amp" },
+  { id: "clawrouter", displayName: "ClawRouter" },
+];
+
+describe("filterProvidersByQuery", () => {
+  it("matches name or id, ignoring case and surrounding spaces", () => {
+    expect(filterProvidersByQuery(catalog, "  CL ").map((p) => p.id)).toEqual([
+      "claude",
+      "clawrouter",
+    ]);
+    expect(filterProvidersByQuery(catalog, "zai").map((p) => p.id)).toEqual(["zai"]);
+    expect(filterProvidersByQuery(catalog, "Z.A").map((p) => p.id)).toEqual(["zai"]);
+  });
+
+  it("keeps every provider for a blank query", () => {
+    expect(filterProvidersByQuery(catalog, "   ")).toBe(catalog);
+  });
+});
+
+describe("sortProvidersAlphabetically", () => {
+  it("puts enabled providers first, each group by name ignoring case", () => {
+    const sorted = sortProvidersAlphabetically(catalog, new Set(["zai", "codex"]));
+    expect(sorted.map((p) => p.id)).toEqual(["codex", "zai", "amp", "claude", "clawrouter"]);
+  });
+
+  it("does not reorder its input", () => {
+    const input = [...catalog];
+    sortProvidersAlphabetically(input, new Set());
+    expect(input).toEqual(catalog);
+  });
+
+  it("breaks name ties by id", () => {
+    const twins = [
+      { id: "b", displayName: "Same" },
+      { id: "a", displayName: "same" },
+    ];
+    expect(sortProvidersAlphabetically(twins, new Set()).map((p) => p.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("canReorderProviders", () => {
+  it("allows reordering only in the saved order with no search", () => {
+    expect(canReorderProviders(false, "")).toBe(true);
+    expect(canReorderProviders(false, "  ")).toBe(true);
+    expect(canReorderProviders(true, "")).toBe(false);
+    expect(canReorderProviders(false, "cl")).toBe(false);
   });
 });

@@ -35,6 +35,7 @@ pub struct SettingsUpdate {
     pub menu_bar_shows_highest_usage: Option<bool>,
     pub menu_bar_shows_percent: Option<bool>,
     pub menu_bar_color_pace: Option<bool>,
+    pub providers_sorted_alphabetically: Option<bool>,
     pub show_as_used: Option<bool>,
     pub show_all_token_accounts_in_menu: Option<bool>,
     pub enable_animations: Option<bool>,
@@ -297,6 +298,9 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.menu_bar_color_pace {
             settings.menu_bar_color_pace = v;
+        }
+        if let Some(v) = self.providers_sorted_alphabetically {
+            settings.providers_sorted_alphabetically = v;
         }
         if let Some(v) = self.show_all_token_accounts_in_menu {
             settings.show_all_token_accounts_in_menu = v;
@@ -853,6 +857,18 @@ mod tests {
         }
         .apply_display_settings(&mut settings);
         assert!(!settings.menu_bar_color_pace);
+    }
+
+    #[test]
+    fn providers_sidebar_sort_applies_without_touching_order_or_tray() {
+        let mut settings = Settings::default();
+        let order = settings.provider_order.clone();
+        let update: SettingsUpdate =
+            serde_json::from_str(r#"{"providersSortedAlphabetically":true}"#).unwrap();
+        assert!(!update.refreshes_tray_presentation());
+        update.apply_display_settings(&mut settings);
+        assert!(settings.providers_sorted_alphabetically);
+        assert_eq!(settings.provider_order, order);
     }
 
     #[test]
