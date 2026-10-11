@@ -433,6 +433,43 @@ mod tests {
         assert_eq!(provider_pace.expected_used_percent, 50.0);
     }
 
+    /// Alibaba's monthly quota sits on the tertiary lane, which has no pace
+    /// of its own, and the provider module already expands the 30-day
+    /// sentinel to the real cycle (31 days ending Mar 31 here). The lane
+    /// still gets reset-window pace outside 30-day months.
+    #[test]
+    fn alibaba_monthly_tertiary_gets_reset_window_pace_in_a_31_day_cycle() {
+        let resets_at = Utc.with_ymd_and_hms(2026, 3, 31, 0, 0, 0).unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 3, 15, 12, 0, 0).unwrap();
+        let monthly = RateWindow::with_details(40.0, Some(44_640), Some(resets_at), None);
+        let usage = UsageSnapshot::new(RateWindow::with_details(
+            10.0,
+            Some(300),
+            Some(now + Duration::hours(2)),
+            None,
+        ))
+        .with_tertiary(monthly);
+        let metadata = instantiate_provider(ProviderId::Alibaba).metadata().clone();
+        let result = ProviderFetchResult::new(usage, "web");
+
+        let snap = ProviderUsageSnapshot::from_fetch_result_at(
+            ProviderId::Alibaba,
+            &metadata,
+            &result,
+            None,
+            None,
+            now,
+        );
+
+        let pace = lane_pace(snap.tertiary.as_ref().expect("monthly lane"));
+        // 15.5 of 31 days elapsed.
+        assert_eq!(pace.expected_used_percent, 50.0);
+        assert_eq!(pace.delta_percent, -10.0);
+        assert_eq!(pace.stage, "behind");
+        assert!(pace.will_last_to_reset);
+        assert!(pace.reset_window);
+    }
+
     /// Providers upstream does not opt in keep the existing flat window.
     #[test]
     fn providers_without_reset_window_pace_keep_the_raw_window() {

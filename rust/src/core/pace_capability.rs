@@ -28,6 +28,25 @@ pub type PaceWindowPredicate = fn(&RateWindow, DateTime<Utc>) -> bool;
 /// Provider-owned predicate over a window.
 pub type PaceDurationPredicate = fn(&RateWindow) -> bool;
 
+/// A monthly billing window: upstream's 30-day sentinel, or the calendar
+/// month ending at the reset. Windows provider modules (Alibaba,
+/// CommandCode, Doubao, MiMo, StepFun, OpenCodeGo, ...) already expand the
+/// sentinel to that real length via `RateWindow::monthly_window_minutes`, so
+/// matching the sentinel alone would drop pace in every 28-, 29- and 31-day
+/// cycle.
+fn is_calendar_month_window(window: &RateWindow) -> bool {
+    match window.window_minutes {
+        Some(MONTHLY_WINDOW_SENTINEL_MINUTES) => true,
+        Some(minutes) => {
+            window
+                .resets_at
+                .and_then(RateWindow::calendar_month_window_minutes)
+                == Some(minutes)
+        }
+        None => false,
+    }
+}
+
 /// Which windows get reset-window pace (upstream `ProviderPaceWindowRule`).
 #[derive(Debug, Clone, Copy)]
 pub enum PaceWindowRule {
@@ -35,6 +54,9 @@ pub enum PaceWindowRule {
     ResetDatePresent,
     WindowDurationPresent,
     WindowDuration(u32),
+    /// Upstream `.calendarMonthResetWindow`'s `.windowDuration(minutes:
+    /// monthlyWindowSentinelMinutes)`. See [`is_calendar_month_window`].
+    CalendarMonth,
     Custom(PaceWindowPredicate),
 }
 
@@ -45,6 +67,7 @@ impl PaceWindowRule {
             Self::ResetDatePresent => window.resets_at.is_some(),
             Self::WindowDurationPresent => window.window_minutes.is_some(),
             Self::WindowDuration(minutes) => window.window_minutes == Some(*minutes),
+            Self::CalendarMonth => is_calendar_month_window(window),
             Self::Custom(predicate) => predicate(window, now),
         }
     }
@@ -57,6 +80,8 @@ pub enum PaceDurationRule {
     Unsupported,
     WindowDurationMissing,
     WindowDuration(u32),
+    /// See [`PaceWindowRule::CalendarMonth`].
+    CalendarMonth,
     Custom(PaceDurationPredicate),
 }
 
@@ -66,6 +91,7 @@ impl PaceDurationRule {
             Self::Unsupported => false,
             Self::WindowDurationMissing => window.window_minutes.is_none(),
             Self::WindowDuration(minutes) => window.window_minutes == Some(*minutes),
+            Self::CalendarMonth => is_calendar_month_window(window),
             Self::Custom(predicate) => predicate(window),
         }
     }
@@ -87,10 +113,8 @@ impl ProviderPaceCapability {
 
     /// Upstream `.calendarMonthResetWindow`.
     pub const CALENDAR_MONTH_RESET_WINDOW: Self = Self {
-        reset_window_pace: PaceWindowRule::WindowDuration(MONTHLY_WINDOW_SENTINEL_MINUTES),
-        inferred_monthly_duration: PaceDurationRule::WindowDuration(
-            MONTHLY_WINDOW_SENTINEL_MINUTES,
-        ),
+        reset_window_pace: PaceWindowRule::CalendarMonth,
+        inferred_monthly_duration: PaceDurationRule::CalendarMonth,
     };
 
     pub const fn reset_window(rule: PaceWindowRule) -> Self {
@@ -361,6 +385,165 @@ mod tests {
                 !capability.supports_reset_window_pace(&weekly, now),
                 "{provider:?}"
             );
+        }
+    }
+
+    /// Windows provider modules (Alibaba, CommandCode, Doubao, MiMo,
+    /// StepFun, OpenCodeGo, ...) already expand upstream's 30-day sentinel to
+    /// the calendar month ending at the reset. That shape is the same monthly
+    /// window, so it keeps reset-window pace in 28-, 29- and 31-day cycles.
+    #[test]
+    fn calendar_month_rule_accepts_an_already_resolved_cycle() {
+        let alibaba = ProviderId::Alibaba.pace_capability();
+        // 31-day cycle ending Mar 31 (Feb 28 -> Mar 31 clamps to 31 days).
+        let march = window(50.0, Some(44_640), at(2026, 3, 31, 0));
+        let now = at(2026, 3, 15, 12);
+        assert!(alibaba.supports_reset_window_pace(&march, now));
+        assert!(alibaba.uses_inferred_monthly_duration(&march));
+        assert_eq!(
+            alibaba
+                .resolved_reset_window_for_pace(&march)
+                .window_minutes,
+            Some(44_640)
+        );
+        let pace = alibaba
+            .reset_window_pace(&march, now, None)
+            .expect("31-day cycle pace");
+        // 15.5 of 31 days elapsed.
+        assert_eq!(pace.expected_used_percent, 50.0);
+        assert_eq!(pace.delta_percent, 0.0);
+        // 28-day February cycle ending Mar 1.
+        let february = window(60.0, Some(40_320), at(2026, 3, 1, 0));
+        let pace = alibaba
+            .reset_window_pace(&february, at(2026, 2, 15, 0), None)
+            .expect("28-day cycle pace");
+        assert_eq!(pace.expected_used_percent, 50.0);
+        assert_eq!(pace.delta_percent, 10.0);
+        // A 31-day length that is not the month ending at this reset is not
+        // a calendar-month window.
+        let mismatched = window(50.0, Some(44_640), at(2026, 3, 1, 0));
+        assert!(!alibaba.supports_reset_window_pace(&mismatched, at(2026, 2, 15, 0)));
+        assert!(!alibaba.uses_inferred_monthly_duration(&mismatched));
+        // Without a reset only the sentinel identifies the monthly window.
+        let unknown_reset = RateWindow::with_details(50.0, Some(44_640), None, None);
+        assert!(!alibaba.uses_inferred_monthly_duration(&unknown_reset));
+        // Providers upstream does not opt in still ignore it.
+        assert!(
+            !ProviderId::Claude
+                .pace_capability()
+                .supports_reset_window_pace(&march, now)
+        );
+    }
+
+    /// Port of upstream `ProviderPaceCapabilityTests` "descriptor pace
+    /// capabilities match the supported provider mapping" (v0.70.0), over
+    /// every Windows provider.
+    #[test]
+    fn descriptor_pace_capabilities_match_the_supported_provider_mapping() {
+        const WEEKLY: u32 = 7 * 24 * 60;
+        const MONTHLY: u32 = MONTHLY_WINDOW_SENTINEL_MINUTES;
+        let now = DateTime::<Utc>::from_timestamp(1_750_000_000, 0).unwrap();
+        let in_secs = |seconds: i64| Some(now + chrono::Duration::seconds(seconds));
+        let day = 24 * 60 * 60;
+        let w = |minutes: Option<u32>, resets_at: Option<DateTime<Utc>>, text: Option<&str>| {
+            RateWindow::with_details(50.0, minutes, resets_at, text.map(str::to_string))
+        };
+        let fixtures = [
+            w(None, None, None),
+            w(None, in_secs(4 * day), None),
+            w(None, in_secs(8 * day), None),
+            w(None, in_secs(30 * day), None),
+            w(Some(60), in_secs(30 * 60), None),
+            w(Some(WEEKLY), None, None),
+            w(Some(WEEKLY), in_secs(4 * day), None),
+            w(Some(WEEKLY), in_secs(8 * day), None),
+            w(Some(MONTHLY), None, None),
+            w(Some(MONTHLY), in_secs(20 * day), None),
+            w(Some(MONTHLY), in_secs(20 * day), Some("MCP")),
+            w(Some(0), in_secs(60), None),
+            w(Some(WEEKLY), in_secs(-60), None),
+        ];
+        // Upstream `GrokProviderDescriptor.primaryLabel(window:now:)`.
+        let grok_is_weekly = |window: &RateWindow| {
+            let seconds = match window.window_minutes {
+                Some(minutes) => f64::from(minutes) * 60.0,
+                None => match window.resets_at {
+                    Some(resets_at) => (resets_at - now).num_seconds() as f64,
+                    None => return false,
+                },
+            };
+            seconds > 3600.0 && (4.0..=12.0).contains(&(seconds / 86_400.0).round())
+        };
+        let calendar_month = |window: &RateWindow| window.window_minutes == Some(MONTHLY);
+        let expected_reset_window = |provider: ProviderId, window: &RateWindow| match provider {
+            ProviderId::Copilot => window.resets_at.is_some(),
+            ProviderId::Cursor => window.window_minutes.is_some(),
+            ProviderId::Grok => {
+                let Some(resets_at) = window.resets_at else {
+                    return false;
+                };
+                let minutes = window.window_minutes.unwrap_or(WEEKLY);
+                let until = (resets_at - now).num_seconds();
+                grok_is_weekly(window)
+                    && minutes > 0
+                    && until > 0
+                    && until <= i64::from(minutes) * 60
+            }
+            ProviderId::Kimi => window.window_minutes == Some(WEEKLY),
+            ProviderId::Zai => {
+                window.window_minutes == Some(MONTHLY)
+                    && window.reset_description.as_deref() == Some("MCP")
+            }
+            ProviderId::Amp => {
+                window.window_minutes.is_some()
+                    && window
+                        .reset_description
+                        .as_deref()
+                        .is_some_and(|text| text.starts_with("renews in "))
+            }
+            ProviderId::Alibaba
+            | ProviderId::AlibabaTokenPlan
+            | ProviderId::CommandCode
+            | ProviderId::Doubao
+            | ProviderId::MiMo
+            | ProviderId::Notion
+            | ProviderId::Ollama
+            | ProviderId::OpenCodeGo
+            | ProviderId::StepFun => calendar_month(window),
+            _ => false,
+        };
+        let expected_monthly_inference = |provider: ProviderId, window: &RateWindow| match provider
+        {
+            ProviderId::Copilot => window.window_minutes.is_none(),
+            ProviderId::Zai => {
+                window.window_minutes == Some(MONTHLY)
+                    && window.reset_description.as_deref() == Some("MCP")
+            }
+            ProviderId::Alibaba
+            | ProviderId::AlibabaTokenPlan
+            | ProviderId::CommandCode
+            | ProviderId::Doubao
+            | ProviderId::MiMo
+            | ProviderId::Notion
+            | ProviderId::Ollama
+            | ProviderId::OpenCodeGo
+            | ProviderId::StepFun => calendar_month(window),
+            _ => false,
+        };
+        for &provider in ProviderId::all() {
+            let capability = provider.pace_capability();
+            for window in &fixtures {
+                assert_eq!(
+                    capability.supports_reset_window_pace(window, now),
+                    expected_reset_window(provider, window),
+                    "reset-window pace for {provider:?}, {window:?}"
+                );
+                assert_eq!(
+                    capability.uses_inferred_monthly_duration(window),
+                    expected_monthly_inference(provider, window),
+                    "monthly inference for {provider:?}, {window:?}"
+                );
+            }
         }
     }
 
