@@ -14,6 +14,7 @@ import { useProviders } from "../hooks/useProviders";
 import { closeSettingsWindow, getWorkAreaRect, setSurfaceMode } from "../lib/tauri";
 import {
   TAB_META,
+  filterProvidersByQuery,
   parseSettingsTabRequest,
   providersTabRequest,
   type SettingsTabRequest,
@@ -108,7 +109,14 @@ export default function Settings({
     setPrevShellTab(rawShellTab);
     if (shellRequest) {
       setActiveTab(shellRequest.tab);
-      if (shellRequest.providerId) setSelectedProviderId(shellRequest.providerId);
+      const id = shellRequest.providerId;
+      if (id) {
+        setSelectedProviderId(id);
+        // Clear a search that hides the target. The main window's echo of the
+        // user's own row click names a visible row, so that search is kept.
+        const target = state.providers.filter((p) => p.id === id);
+        if (filterProvidersByQuery(target, searchText).length === 0) setSearchText("");
+      }
     }
   }
 

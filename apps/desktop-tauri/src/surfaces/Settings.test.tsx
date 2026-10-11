@@ -239,6 +239,31 @@ describe("Settings deep links", () => {
     expect(row("cline")).toHaveAttribute("aria-selected", "true");
   });
 
+  it("clears a search that would hide a provider named by the shell target", () => {
+    mocks.windowLabel = "main";
+    mocks.shellTarget = { kind: "settings", tab: "general" };
+    const { rerender } = render(<Settings state={state} />);
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "zai" } });
+    mocks.shellTarget = { kind: "settings", tab: "providers:cline" };
+    rerender(<Settings state={state} />);
+    expect(screen.getByRole("searchbox")).toHaveValue("");
+    expect(row("cline")).toHaveAttribute("aria-selected", "true");
+    expect(title()).toBe("Cline");
+  });
+
+  it("keeps the search when the shell target echoes a visible row click", () => {
+    mocks.windowLabel = "main";
+    mocks.shellTarget = { kind: "settings", tab: "general" };
+    const { rerender } = render(<Settings state={state} />);
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "c" } });
+    fireEvent.click(row("claude"));
+    mocks.shellTarget = { kind: "settings", tab: "providers:claude" };
+    rerender(<Settings state={state} />);
+    expect(screen.getByRole("searchbox")).toHaveValue("c");
+    expect(providerNames()).toEqual(["codex", "claude", "cline"]);
+    expect(row("claude")).toHaveAttribute("aria-selected", "true");
+  });
+
   it("keeps the last provider when a plain providers request arrives", () => {
     const { rerender } = render(
       <Settings state={state} initialTab="providers:grok" tabRequestId={1} />,
