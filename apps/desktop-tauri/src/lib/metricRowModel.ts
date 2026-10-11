@@ -197,7 +197,10 @@ export function metricResetText(
   return formatCountdown((target - now) / 1000, RESET_KEYS, t) ?? t("ProviderTextResetsNow");
 }
 
-function paceKind(lane: MetricLane, windowMinutes: number | null): PaceKind | null {
+function paceKind(lane: MetricLane, windowMinutes: number | null, resetWindow: boolean): PaceKind | null {
+  // Reset-window pace is weekly pace on every card lane, as on the Mac;
+  // extra windows keep their exact-window rule.
+  if (resetWindow && lane !== "extra") return "weekly";
   const rule = LANE_POLICY[lane].pace;
   if (rule === "never" || windowMinutes == null) return null;
   if (rule === "exactWindow") {
@@ -212,7 +215,7 @@ function visiblePace(input: MetricRowInput): { pace: WindowPaceSnapshot; kind: P
   const pace = snap.pace;
   if (!input.paceEnabled || !pace || !(snap.usedPercent < 100)) return null;
   if (!Number.isFinite(pace.expectedUsedPercent) || !Number.isFinite(pace.actualUsedPercent)) return null;
-  const kind = paceKind(input.lane, snap.windowMinutes);
+  const kind = paceKind(input.lane, snap.windowMinutes, pace.resetWindow === true);
   if (!kind) return null;
   const expectsEnough = pace.expectedUsedPercent >= 3;
   if (kind === "session" ? !expectsEnough : !expectsEnough && pace.etaSeconds !== 0) return null;
