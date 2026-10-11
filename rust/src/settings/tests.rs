@@ -60,7 +60,8 @@ fn groq_cookie_source_defaults_to_automatic_session_import() {
 
 #[test]
 fn langdock_cookie_source_defaults_to_automatic_session_import() {
-    // Upstream's Langdock cookie source falls back to `.auto`.
+    // Upstream has no Langdock source picker (it reads one Edge profile), so
+    // Windows defaults to automatic browser import.
     let mut settings = Settings::default();
     assert_eq!(settings.cookie_source(ProviderId::Langdock), "auto");
     settings.set_cookie_source(ProviderId::Langdock, "off");

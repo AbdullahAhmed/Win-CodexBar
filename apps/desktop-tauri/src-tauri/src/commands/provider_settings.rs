@@ -854,8 +854,8 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
             cookie_option(lang, "manual", None),
             cookie_option(lang, "off", None),
         ],
-        // Upstream's Langdock cookie source: automatic browser import,
-        // a pasted header, or off.
+        // Upstream picks one Edge profile instead; Windows uses the shared
+        // cookie-source choices: automatic browser import, a pasted header, or off.
         "langdock" => vec![
             cookie_option(lang, "auto", None),
             cookie_option(lang, "manual", None),

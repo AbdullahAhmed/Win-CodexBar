@@ -147,8 +147,8 @@ impl Provider for LangdockProvider {
         true
     }
 
-    /// Upstream sends only the pasted header in Manual mode, so an empty
-    /// manual source must not fall back to a browser session.
+    /// Manual means a pasted or imported header only, as for upstream's
+    /// other cookie providers, so an empty one must not read a browser.
     fn manual_empty_cookie_policy(&self) -> ManualEmptyCookiePolicy {
         ManualEmptyCookiePolicy::FailClosedWeb
     }
