@@ -40,6 +40,7 @@ import jetbrains from "./icons/ProviderIcon-jetbrains.svg?raw";
 import kilo from "./icons/ProviderIcon-kilo.svg?raw";
 import kimi from "./icons/ProviderIcon-kimi.svg?raw";
 import kiro from "./icons/ProviderIcon-kiro.svg?raw";
+import lithosai from "./icons/ProviderIcon-lithosai.svg?raw";
 import llmman from "./icons/ProviderIcon-llmman.svg?raw";
 import llmproxy from "./icons/ProviderIcon-llmproxy.svg?raw";
 import manus from "./icons/ProviderIcon-manus.svg?raw";
@@ -134,6 +135,7 @@ const RAW: Record<string, string> = {
   kilo: tint(kilo),
   kimi: tint(kimi),
   kiro: tint(kiro),
+  lithosai: tint(lithosai),
   llmman: tint(llmman),
   llmproxy: tint(llmproxy),
   manus: tint(manus),
@@ -250,6 +252,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   sub2api:     { id: "sub2api",     brandColor: "#14b8a6", fallbackLetter: "S", svgPath: RAW.sub2api },
   venice:      { id: "venice",      brandColor: "#3c8fdd", fallbackLetter: "V", svgPath: RAW.venice },
   vercel:      { id: "vercel",      brandColor: "#737373", fallbackLetter: "V", svgPath: RAW.vercel },
+  lithosai:    { id: "lithosai",    brandColor: "#6B7280", fallbackLetter: "L", svgPath: RAW.lithosai },
   openaiapi:   { id: "openaiapi",   brandColor: "#10a37f", fallbackLetter: "O" },
   chutes:      { id: "chutes",      brandColor: "#ff5c35", fallbackLetter: "C" },
   litellm:     { id: "litellm",     brandColor: "#0ea5e9", fallbackLetter: "L" },

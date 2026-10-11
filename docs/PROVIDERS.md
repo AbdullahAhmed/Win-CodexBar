@@ -112,6 +112,26 @@ the bearer key are never sent together. Rate limits, server errors and
 malformed balances are final and do not fall back. Upstream's multiple API-key
 token accounts are not ported yet.
 
+### LithosAI prepaid balance
+
+LithosAI is disabled by default and has no billing API key. It reads the
+signed-in console at `https://console.lithosai.cloud` with both session cookies,
+`__Host-console_session` and `__Host-console_csrf`; the CSRF value is echoed as
+`X-Console-Csrf`. A header missing either cookie never sends a request.
+
+- The cookie source picks the session: Automatic imports the
+  `console.lithosai.cloud` cookies from the selected browser, Manual uses a
+  pasted Cookie header, and Off reads nothing.
+- Requests, in order: `GET /api/me` (active organization, email), then
+  `GET /api/billing` and `GET /api/billing/spend?start=YYYY-MM-01&end=YYYY-MM-DD`
+  (UTC month to date), both with `X-Organization-Id`.
+- The card shows the prepaid USD balance (1 USD = 1,000,000,000 nanos) as a
+  "Prepaid credits" cost block and a **Billing** section: Balance, Payment card,
+  Account status, Today (UTC) and This month (UTC). There is no quota bar.
+- A spend report that fails or does not parse shows "Spend: Unavailable" and
+  keeps the balance; a 401 anywhere reports an expired session.
+- Response bodies and cookies are never echoed in errors or logs.
+
 ### llmman daemon
 
 llmman reads a local (or LAN) llmman daemon: `GET {base}/llmman/node` for the

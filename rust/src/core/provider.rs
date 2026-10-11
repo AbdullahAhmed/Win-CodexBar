@@ -103,6 +103,7 @@ pub enum ProviderId {
     XKiro,
     Raycast,
     Vercel,
+    LithosAI,
 }
 
 impl ProviderId {
@@ -198,6 +199,7 @@ impl ProviderId {
             ProviderId::XKiro,
             ProviderId::Raycast,
             ProviderId::Vercel,
+            ProviderId::LithosAI,
         ]
     }
 
@@ -254,6 +256,7 @@ impl ProviderId {
             ProviderId::XKiro => "xkiro",
             ProviderId::Raycast => "raycast",
             ProviderId::Vercel => "vercel",
+            ProviderId::LithosAI => "lithosai",
             ProviderId::AiAnd => "aiand",
             ProviderId::Windsurf => "windsurf",
             ProviderId::Manus => "manus",
@@ -350,6 +353,7 @@ impl ProviderId {
             ProviderId::XKiro => "xKiro",
             ProviderId::Raycast => "Raycast",
             ProviderId::Vercel => "Vercel AI Gateway",
+            ProviderId::LithosAI => "LithosAI",
             ProviderId::AiAnd => "ai&",
             ProviderId::Windsurf => "Windsurf",
             ProviderId::Manus => "Manus",
@@ -462,6 +466,7 @@ impl ProviderId {
             ProviderId::DevPass => None,
             ProviderId::XKiro => None,
             ProviderId::Vercel => None,
+            ProviderId::LithosAI => Some("console.lithosai.cloud"),
             ProviderId::AiAnd => None,
             ProviderId::Windsurf => None,
             ProviderId::Doubao => None,
@@ -614,6 +619,7 @@ impl ProviderId {
             "replicate" | "r8" => Some(ProviderId::Replicate),
             "atlascloud" | "atlas-cloud" | "atlas cloud" => Some(ProviderId::AtlasCloud),
             "raycast" | "raycast-ai" => Some(ProviderId::Raycast),
+            "lithosai" => Some(ProviderId::LithosAI),
             _ => None,
         }
     }
@@ -1305,6 +1311,7 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::Raycast => "#FF6363",
         // Upstream uses white; a mid neutral keeps contrast on light and dark surfaces.
         ProviderId::Vercel => "#737373",
+        ProviderId::LithosAI => "#6B7280",
     }
 }
 
@@ -1319,7 +1326,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 89);
+        assert_eq!(all.len(), 90);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Pi));
@@ -1389,6 +1396,7 @@ mod tests {
         assert!(all.contains(&ProviderId::XKiro));
         assert!(all.contains(&ProviderId::Raycast));
         assert!(all.contains(&ProviderId::Vercel));
+        assert!(all.contains(&ProviderId::LithosAI));
     }
 
     #[test]
