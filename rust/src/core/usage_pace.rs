@@ -719,6 +719,87 @@ mod tests {
             assert_eq!(utc_pace.expected_used_percent, 0.0);
             assert!(kiribati.expected_used_percent > 0.0);
         }
+
+        // Windows-only edge: a spring-forward week. The window starts Thu
+        // Mar 5 23:00 PST and resets Fri Mar 13 00:00 PDT; Sunday Mar 8 is
+        // 23 hours long and not a workday. Work time is 1 h of Thursday plus
+        // five full local days = 435 600 s; by Mon Mar 9 12:00 PDT, 1 h + Fri
+        // + half of Monday = 133 200 s have elapsed.
+        #[test]
+        fn workday_pace_counts_local_days_across_a_spring_forward_week() {
+            let la = chrono_tz::America::Los_Angeles;
+            let resets_at = la
+                .with_ymd_and_hms(2026, 3, 13, 0, 0, 0)
+                .unwrap()
+                .with_timezone(&Utc);
+            let now = la
+                .with_ymd_and_hms(2026, 3, 9, 12, 0, 0)
+                .unwrap()
+                .with_timezone(&Utc);
+            let w = window(30.0, 10080, Some(resets_at));
+            let pace = UsagePace::weekly_in(&w, Some(now), 10080, Some(5), &la).unwrap();
+            assert_eq!(pace.expected_used_percent, 133_200.0 / 435_600.0 * 100.0);
+            assert!(close(pace.expected_used_percent, 30.578_512, 1e-6));
+            // 70% left at 30% per 133 200 work seconds needs 310 800 s, more
+            // than the 302 400 work seconds left.
+            assert!(pace.will_last_to_reset);
+            assert_eq!(pace.eta_seconds, None);
+        }
+
+        // Windows-only edge: Chile skips local midnight on Sun Sep 6 2026
+        // (00:00 -04 becomes 01:00 -03). Saturday still ends at the first
+        // existing instant of Sunday, so with six work days (Mon-Sat) the
+        // week holds exactly 6 x 86 400 s of work time.
+        #[test]
+        fn workday_pace_survives_a_skipped_local_midnight() {
+            let santiago = chrono_tz::America::Santiago;
+            assert!(matches!(
+                santiago.with_ymd_and_hms(2026, 9, 6, 0, 0, 0),
+                chrono::LocalResult::None
+            ));
+            let resets_at = santiago
+                .with_ymd_and_hms(2026, 9, 7, 0, 0, 0)
+                .unwrap()
+                .with_timezone(&Utc);
+            let w = window(50.0, 10080, Some(resets_at));
+            let saturday_noon = santiago
+                .with_ymd_and_hms(2026, 9, 5, 12, 0, 0)
+                .unwrap()
+                .with_timezone(&Utc);
+            let pace =
+                UsagePace::weekly_in(&w, Some(saturday_noon), 10080, Some(6), &santiago).unwrap();
+            assert_eq!(pace.expected_used_percent, 475_200.0 / 518_400.0 * 100.0);
+            assert!(close(pace.expected_used_percent, 91.666_667, 1e-6));
+            // Sunday after the gap: every work second is spent.
+            let sunday_noon = santiago
+                .with_ymd_and_hms(2026, 9, 6, 12, 0, 0)
+                .unwrap()
+                .with_timezone(&Utc);
+            let sunday =
+                UsagePace::weekly_in(&w, Some(sunday_noon), 10080, Some(6), &santiago).unwrap();
+            assert_eq!(sunday.expected_used_percent, 100.0);
+            assert_eq!(sunday.delta_percent, -50.0);
+            assert!(sunday.will_last_to_reset);
+        }
+
+        // Edge: two work days and a reset on a Saturday. The window runs Sat
+        // Jun 6 to Sat Jun 13; only Mon Jun 8 and Tue Jun 9 count (172 800 s).
+        #[test]
+        fn two_work_days_with_a_weekend_reset() {
+            let w = window(30.0, 10080, Some(utc(2026, 6, 13, 0)));
+            let pace = weekly_utc(&w, utc(2026, 6, 9, 12), Some(2)).unwrap();
+            assert_eq!(pace.expected_used_percent, 75.0);
+            assert_eq!(pace.delta_percent, -45.0);
+            assert_eq!(pace.stage, PaceStage::FarBehind);
+            assert!(pace.will_last_to_reset);
+            // On Wednesday the work week is over.
+            let later = weekly_utc(&w, utc(2026, 6, 10, 12), Some(2)).unwrap();
+            assert_eq!(later.expected_used_percent, 100.0);
+            // Six work days on the same Tuesday: the opening Saturday counts
+            // too, so Sat + Mon + half of Tue of six days have elapsed.
+            let six = weekly_utc(&w, utc(2026, 6, 9, 12), Some(6)).unwrap();
+            assert_eq!(six.expected_used_percent, 216_000.0 / 518_400.0 * 100.0);
+        }
     }
 
     #[test]
