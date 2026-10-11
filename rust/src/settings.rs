@@ -147,8 +147,6 @@ pub struct Settings {
     /// Critical usage threshold for alerts (percentage)
     pub critical_usage_threshold: f64,
 
-    pub provider_usage_thresholds: HashMap<String, UsageThresholdOverride>,
-
     /// Merge mode: show all enabled providers in a single tray icon
     pub merge_tray_icons: bool,
 
@@ -654,7 +652,6 @@ impl Default for Settings {
             notification_sound_theme: NotificationSoundTheme::default(),
             high_usage_threshold: 70.0,
             critical_usage_threshold: 90.0,
-            provider_usage_thresholds: HashMap::new(),
             merge_tray_icons: false, // Show single provider by default
             tray_icon_mode: TrayIconMode::default(), // Single icon by default
             stacked_tray_top_provider: None,
@@ -1390,6 +1387,30 @@ impl Settings {
 
     pub fn set_historical_tracking(&mut self, id: ProviderId, value: bool) {
         self.provider_config_mut(id).historical_tracking = value;
+    }
+
+    /// Codex "Local session cost estimates" option (persisted only).
+    pub fn local_session_cost_ledger_enabled(&self, id: ProviderId) -> bool {
+        self.provider_configs
+            .get(&id)
+            .is_some_and(|c| c.local_session_cost_ledger_enabled)
+    }
+
+    pub fn set_local_session_cost_ledger_enabled(&mut self, id: ProviderId, value: bool) {
+        self.provider_config_mut(id)
+            .local_session_cost_ledger_enabled = value;
+    }
+
+    /// Codex OpenAI web battery saver option (persisted only).
+    pub fn openai_web_battery_saver_enabled(&self, id: ProviderId) -> bool {
+        self.provider_configs
+            .get(&id)
+            .is_some_and(|c| c.openai_web_battery_saver_enabled)
+    }
+
+    pub fn set_openai_web_battery_saver_enabled(&mut self, id: ProviderId, value: bool) {
+        self.provider_config_mut(id)
+            .openai_web_battery_saver_enabled = value;
     }
 
     /// Per-provider "avoid keychain prompts" toggle (currently claude-only).

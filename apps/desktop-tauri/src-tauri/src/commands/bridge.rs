@@ -832,8 +832,9 @@ pub struct SettingsSnapshot {
     notification_sound_paths: codexbar::settings::NotificationSoundPaths,
     high_usage_threshold: f64,
     critical_usage_threshold: f64,
-    provider_usage_thresholds:
-        std::collections::HashMap<String, codexbar::settings::UsageThresholdOverride>,
+    /// Per-provider quota warnings keyed by CLI name; Global providers are absent.
+    provider_quota_warnings:
+        std::collections::HashMap<String, codexbar::settings::ProviderQuotaWarnings>,
     predictive_pace_warning_enabled: bool,
     credential_expiry_notifications_enabled: bool,
     session_quota_notifications_enabled: bool,
@@ -882,6 +883,11 @@ pub struct SettingsSnapshot {
     claude_swap_enabled: bool,
     claude_swap_executable_path: String,
     codex_spark_usage_visible: bool,
+    codex_openai_web_extras: bool,
+    codex_historical_tracking: bool,
+    codex_external_oauth_sources_allowed: bool,
+    codex_local_session_cost_ledger_enabled: bool,
+    codex_openai_web_battery_saver_enabled: bool,
     disable_keychain_access: bool,
     wayfinder_gateway_url: String,
     provider_metrics: std::collections::HashMap<String, &'static str>,
@@ -943,6 +949,18 @@ impl From<Settings> for SettingsSnapshot {
         let claude_swap_enabled = settings.claude_swap_enabled();
         let claude_swap_executable_path = settings.claude_swap_executable_path().to_string();
         let codex_spark_usage_visible = settings.codex_spark_usage_visible();
+        let codex_openai_web_extras = settings.codex_openai_web_extras();
+        let codex_historical_tracking = settings.codex_historical_tracking();
+        let codex_local_session_cost_ledger_enabled =
+            settings.local_session_cost_ledger_enabled(ProviderId::Codex);
+        let codex_openai_web_battery_saver_enabled =
+            settings.openai_web_battery_saver_enabled(ProviderId::Codex);
+        let provider_quota_warnings = settings
+            .provider_configs
+            .iter()
+            .filter(|(_, config)| !config.quota_warnings.is_empty())
+            .map(|(id, config)| (id.cli_name().to_string(), config.quota_warnings))
+            .collect();
         let wayfinder_gateway_url = settings.gateway_url(ProviderId::Wayfinder).to_string();
 
         let provider_order = settings.provider_display_order_names();
@@ -978,7 +996,7 @@ impl From<Settings> for SettingsSnapshot {
             notification_sound_paths: settings.notification_sound_paths,
             high_usage_threshold: settings.high_usage_threshold,
             critical_usage_threshold: settings.critical_usage_threshold,
-            provider_usage_thresholds: settings.provider_usage_thresholds,
+            provider_quota_warnings,
             predictive_pace_warning_enabled: settings.predictive_pace_warning_enabled,
             credential_expiry_notifications_enabled: settings
                 .credential_expiry_notifications_enabled,
@@ -1030,6 +1048,11 @@ impl From<Settings> for SettingsSnapshot {
             claude_swap_enabled,
             claude_swap_executable_path,
             codex_spark_usage_visible,
+            codex_openai_web_extras,
+            codex_historical_tracking,
+            codex_external_oauth_sources_allowed: settings.codex_external_oauth_sources_allowed,
+            codex_local_session_cost_ledger_enabled,
+            codex_openai_web_battery_saver_enabled,
             disable_keychain_access: settings.disable_keychain_access,
             wayfinder_gateway_url,
             provider_metrics,
