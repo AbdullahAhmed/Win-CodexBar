@@ -61,6 +61,23 @@ describe("accountMenuAction", () => {
     ).toBe("TrayMenuSwitchAccount");
   });
 
+  it("treats a live Claude identity with quota windows as signed in, like upstream", () => {
+    const oauth = snapshot({ providerId: "claude", sourceLabel: "oauth", planName: "Claude (OAuth)" });
+    expect(accountMenuAction(oauth)?.labelKey).toBe("TrayMenuSwitchAccount");
+    // No identity, no quota window, or a failed refresh does not prove an account.
+    expect(accountMenuAction({ ...oauth, planName: " " })?.labelKey).toBe("AddAccountEllipsis");
+    const informational = { ...window, isInformational: true };
+    expect(
+      accountMenuAction({ ...oauth, primary: informational, selectedMetric: informational })
+        ?.labelKey,
+    ).toBe("AddAccountEllipsis");
+    expect(accountMenuAction({ ...oauth, error: "expired" })?.labelKey).toBe("AddAccountEllipsis");
+    // The identity rule is Claude's; other providers still need an email.
+    expect(
+      accountMenuAction(snapshot({ providerId: "codex", planName: "ChatGPT Pro" }))?.labelKey,
+    ).toBe("AddAccountEllipsis");
+  });
+
   it("ignores a blank email", () => {
     expect(accountMenuAction(snapshot({ accountEmail: "  " }))?.labelKey).toBe("AddAccountEllipsis");
   });

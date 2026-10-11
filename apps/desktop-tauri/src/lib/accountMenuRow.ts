@@ -1,5 +1,5 @@
 import type { LocaleKey } from "../i18n/keys";
-import type { ProviderUsageSnapshot } from "../types/bridge";
+import type { ProviderUsageSnapshot, RateWindowSnapshot } from "../types/bridge";
 import { providersTabRequest } from "../surfaces/settings/settingsTabs";
 import { hasSuccessfulClaudeCliQuota } from "./claudeAccountActions";
 
@@ -22,9 +22,29 @@ export function accountMenuAction(
 ): AccountMenuAction | null {
   if (!provider || !ACCOUNT_MANAGER_PROVIDERS.has(provider.providerId)) return null;
   const hasAccount =
-    Boolean(provider.accountEmail?.trim()) || hasSuccessfulClaudeCliQuota(provider);
+    Boolean(provider.accountEmail?.trim()) ||
+    hasLiveClaudeIdentity(provider) ||
+    hasSuccessfulClaudeCliQuota(provider);
   return {
     labelKey: hasAccount ? "TrayMenuSwitchAccount" : "AddAccountEllipsis",
     settingsTab: providersTabRequest(provider.providerId),
   };
+}
+
+function isQuotaWindow(window: RateWindowSnapshot | null): boolean {
+  return window !== null && !window.isInformational && Number.isFinite(window.usedPercent);
+}
+
+/**
+ * Upstream `MenuDescriptor.hasAccount`: a Claude snapshot with an identity and
+ * rate-limit windows is signed in even without an email. The bridge carries
+ * the identity's login method as `planName`.
+ */
+function hasLiveClaudeIdentity(provider: ProviderUsageSnapshot): boolean {
+  return (
+    provider.providerId === "claude" &&
+    provider.error === null &&
+    Boolean(provider.planName?.trim()) &&
+    (isQuotaWindow(provider.primary) || isQuotaWindow(provider.secondary))
+  );
 }
