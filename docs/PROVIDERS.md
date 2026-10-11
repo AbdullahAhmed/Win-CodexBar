@@ -119,9 +119,11 @@ signed-in console at `https://console.lithosai.cloud` with both session cookies,
 `__Host-console_session` and `__Host-console_csrf`; the CSRF value is echoed as
 `X-Console-Csrf`. A header missing either cookie never sends a request.
 
-- The cookie source picks the session: Automatic imports the
-  `console.lithosai.cloud` cookies from the selected browser, Manual uses a
-  pasted Cookie header, and Off reads nothing.
+- The cookie source in Settings → Providers → LithosAI picks the session and
+  defaults to Automatic. Automatic and Manual first use a header imported under
+  Browser Cookies (from the browser you choose) or pasted there. Without one,
+  Automatic reads the `console.lithosai.cloud` cookies from the detected
+  browsers and Manual fails closed. Off reads nothing.
 - Requests, in order: `GET /api/me` (active organization, email), then
   `GET /api/billing` and `GET /api/billing/spend?start=YYYY-MM-01&end=YYYY-MM-DD`
   (UTC month to date), both with `X-Organization-Id`.
