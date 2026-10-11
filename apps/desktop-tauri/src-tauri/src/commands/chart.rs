@@ -183,6 +183,26 @@ pub(crate) fn build_provider_chart_data(
     build_provider_chart_data_with_cancel(provider_id, account_email, None, None)
 }
 
+/// Builds the chart snapshot on the right side of the local scans. Claude's
+/// cost, token and local-usage series come from its snapshot, so it is built
+/// first and handed to `local_scan`. Every other snapshot is built after: the
+/// Codex quota-window history reads the cost cache that the scan writes, and
+/// building it first left a cold start with no current-window totals.
+fn snapshot_around_local_scan<S, L>(
+    snapshot_feeds_scan: bool,
+    build_snapshot: impl FnOnce() -> Option<S>,
+    local_scan: impl FnOnce(Option<&S>) -> L,
+) -> (Option<S>, L) {
+    if snapshot_feeds_scan {
+        let snapshot = build_snapshot();
+        let local = local_scan(snapshot.as_ref());
+        (snapshot, local)
+    } else {
+        let local = local_scan(None);
+        (build_snapshot(), local)
+    }
+}
+
 fn build_provider_chart_data_with_cancel(
     provider_id: String,
     account_email: Option<String>,
@@ -198,119 +218,109 @@ fn build_provider_chart_data_with_cancel(
             cancel.as_deref(),
         )
     };
-    // Claude's cost, token and local-usage series come from its snapshot, so it
-    // is built first. Every other snapshot is built after the local scans below.
-    let claude_snapshot = if provider_id == "claude" {
-        build_snapshot()
-    } else {
-        None
-    };
-    let (cost_history, tokens_history, tokens_incomplete, local_usage) =
-        if let Some(snapshot) = claude_snapshot.as_ref() {
-            let cost_history = snapshot
-                .daily_cost
-                .iter()
-                .cloned()
-                .map(|(date, value)| {
-                    let incomplete_request_count = snapshot
-                        .daily_incomplete
-                        .iter()
-                        .find(|(day, _)| *day == date)
-                        .map(|(_, count)| *count);
-                    DailyCostPoint {
-                        date,
-                        value,
-                        incomplete_request_count,
-                    }
-                })
-                .collect();
-            let tokens_history = snapshot
-                .daily_tokens
-                .iter()
-                .cloned()
-                .map(|(date, tokens)| DailyTokenPoint { date, tokens })
-                .collect();
-            let period = current_reporting_period();
-            let local_usage = snapshot.local_summary.as_ref().and_then(|summary| {
-                let period_summary =
-                    period_summary_for(&provider_id, period, summary, cancel.as_deref());
-                local_usage_summary_from_cost_summary(
-                    &provider_id,
-                    summary,
-                    period,
-                    period_summary.as_ref(),
-                    snapshot.today.as_ref(),
-                )
-            });
-            store_local_usage_summary(&provider_id, local_usage.clone());
-            (
-                cost_history,
-                tokens_history,
-                snapshot.tokens_incomplete,
-                local_usage,
-            )
-        } else if provider_id == "muse" {
-            if cancel
-                .as_ref()
-                .is_some_and(|flag| flag.load(Ordering::Relaxed))
-            {
-                (Vec::new(), Vec::new(), true, None)
-            } else {
-                let report = muse_local_usage::scan(30, cancel.as_deref());
-                let tokens_history = report
-                    .daily
+    let (provider_snapshot, (cost_history, tokens_history, tokens_incomplete, local_usage)) =
+        snapshot_around_local_scan(provider_id == "claude", build_snapshot, |claude_snapshot| {
+            if let Some(snapshot) = claude_snapshot {
+                let cost_history = snapshot
+                    .daily_cost
                     .iter()
-                    .map(|day| DailyTokenPoint {
-                        date: day.day.clone(),
-                        tokens: day.total_tokens,
+                    .cloned()
+                    .map(|(date, value)| {
+                        let incomplete_request_count = snapshot
+                            .daily_incomplete
+                            .iter()
+                            .find(|(day, _)| *day == date)
+                            .map(|(_, count)| *count);
+                        DailyCostPoint {
+                            date,
+                            value,
+                            incomplete_request_count,
+                        }
                     })
                     .collect();
+                let tokens_history = snapshot
+                    .daily_tokens
+                    .iter()
+                    .cloned()
+                    .map(|(date, tokens)| DailyTokenPoint { date, tokens })
+                    .collect();
                 let period = current_reporting_period();
-                let period_report = muse_period_report(period, &report, cancel.as_deref());
-                let local_usage = muse_local_usage_summary(
-                    &report,
-                    &period_report,
-                    period,
-                    locale::current_language(),
-                );
+                let local_usage = snapshot.local_summary.as_ref().and_then(|summary| {
+                    let period_summary =
+                        period_summary_for(&provider_id, period, summary, cancel.as_deref());
+                    local_usage_summary_from_cost_summary(
+                        &provider_id,
+                        summary,
+                        period,
+                        period_summary.as_ref(),
+                        snapshot.today.as_ref(),
+                    )
+                });
+                store_local_usage_summary(&provider_id, local_usage.clone());
                 (
-                    Vec::new(),
+                    cost_history,
                     tokens_history,
-                    !report.is_complete(),
+                    snapshot.tokens_incomplete,
                     local_usage,
                 )
-            }
-        } else {
-            let raw_cost = get_daily_cost_history(&provider_id, 30);
-            let cost_history: Vec<DailyCostPoint> = raw_cost
-                .into_iter()
-                .map(|(date, value)| DailyCostPoint {
-                    date,
-                    value,
-                    incomplete_request_count: None,
-                })
-                .collect();
-
-            let (raw_tokens, tokens_incomplete) = get_daily_token_history(&provider_id, 30);
-            let tokens_history: Vec<DailyTokenPoint> = raw_tokens
-                .into_iter()
-                .map(|(date, tokens)| DailyTokenPoint { date, tokens })
-                .collect();
-            let local_usage = if cancel
-                .as_deref()
-                .is_some_and(|flag| flag.load(Ordering::Relaxed))
-            {
-                None
+            } else if provider_id == "muse" {
+                if cancel
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(Ordering::Relaxed))
+                {
+                    (Vec::new(), Vec::new(), true, None)
+                } else {
+                    let report = muse_local_usage::scan(30, cancel.as_deref());
+                    let tokens_history = report
+                        .daily
+                        .iter()
+                        .map(|day| DailyTokenPoint {
+                            date: day.day.clone(),
+                            tokens: day.total_tokens,
+                        })
+                        .collect();
+                    let period = current_reporting_period();
+                    let period_report = muse_period_report(period, &report, cancel.as_deref());
+                    let local_usage = muse_local_usage_summary(
+                        &report,
+                        &period_report,
+                        period,
+                        locale::current_language(),
+                    );
+                    (
+                        Vec::new(),
+                        tokens_history,
+                        !report.is_complete(),
+                        local_usage,
+                    )
+                }
             } else {
-                load_local_usage_summary_cached(&provider_id, cancel.as_deref())
-            };
-            (cost_history, tokens_history, tokens_incomplete, local_usage)
-        };
+                let raw_cost = get_daily_cost_history(&provider_id, 30);
+                let cost_history: Vec<DailyCostPoint> = raw_cost
+                    .into_iter()
+                    .map(|(date, value)| DailyCostPoint {
+                        date,
+                        value,
+                        incomplete_request_count: None,
+                    })
+                    .collect();
 
-    // Codex quota-window history reads the Codex cost cache that
-    // get_daily_cost_history writes above. Building it before that scan left a
-    // cold start with an empty cache and the current window without totals.
-    let provider_snapshot = claude_snapshot.or_else(build_snapshot);
+                let (raw_tokens, tokens_incomplete) = get_daily_token_history(&provider_id, 30);
+                let tokens_history: Vec<DailyTokenPoint> = raw_tokens
+                    .into_iter()
+                    .map(|(date, tokens)| DailyTokenPoint { date, tokens })
+                    .collect();
+                let local_usage = if cancel
+                    .as_deref()
+                    .is_some_and(|flag| flag.load(Ordering::Relaxed))
+                {
+                    None
+                } else {
+                    load_local_usage_summary_cached(&provider_id, cancel.as_deref())
+                };
+                (cost_history, tokens_history, tokens_incomplete, local_usage)
+            }
+        });
 
     let (credits_history, usage_breakdown) =
         load_openai_dashboard_chart_data(&provider_id, account_email.as_deref());
@@ -913,3 +923,61 @@ pub(crate) fn load_openai_dashboard_chart_data_for_test(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod snapshot_order_tests {
+    use super::snapshot_around_local_scan;
+    use std::cell::RefCell;
+
+    #[test]
+    fn codex_snapshot_reads_the_cost_cache_the_scan_just_wrote() {
+        let cost_cache: RefCell<Option<&str>> = RefCell::new(None);
+        let calls = RefCell::new(Vec::new());
+        let (snapshot, local) = snapshot_around_local_scan(
+            false,
+            || {
+                calls.borrow_mut().push("snapshot");
+                Some(format!(
+                    "current window {}",
+                    cost_cache.borrow().unwrap_or("—")
+                ))
+            },
+            |seen: Option<&String>| {
+                calls.borrow_mut().push("scan");
+                assert_eq!(seen, None);
+                *cost_cache.borrow_mut() = Some("$2.65 · 1.8M");
+                "30d $24.12"
+            },
+        );
+        assert_eq!(*calls.borrow(), vec!["scan", "snapshot"]);
+        assert_eq!(snapshot.as_deref(), Some("current window $2.65 · 1.8M"));
+        assert_eq!(local, "30d $24.12");
+    }
+
+    #[test]
+    fn claude_snapshot_is_built_first_and_feeds_the_scan() {
+        let calls = RefCell::new(Vec::new());
+        let (snapshot, local) = snapshot_around_local_scan(
+            true,
+            || {
+                calls.borrow_mut().push("snapshot");
+                Some(1.99_f64)
+            },
+            |seen: Option<&f64>| {
+                calls.borrow_mut().push("scan");
+                seen.copied()
+            },
+        );
+        assert_eq!(*calls.borrow(), vec!["snapshot", "scan"]);
+        assert_eq!(snapshot, Some(1.99));
+        assert_eq!(local, Some(1.99));
+    }
+
+    #[test]
+    fn a_provider_without_a_snapshot_still_gets_its_scan() {
+        let (snapshot, local) =
+            snapshot_around_local_scan(false, || None::<u8>, |_seen: Option<&u8>| 30_usize);
+        assert_eq!(snapshot, None);
+        assert_eq!(local, 30);
+    }
+}
