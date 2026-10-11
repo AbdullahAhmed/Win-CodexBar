@@ -288,7 +288,7 @@ export default function GeneralTab({
     async (accelerator: string) => {
       setShortcutError(null);
       try {
-        await registerGlobalShortcut(accelerator).catch(() => {});
+        await registerGlobalShortcut(accelerator);
         set({ globalShortcut: accelerator });
       } catch (err: unknown) {
         setShortcutError(err instanceof Error ? err.message : String(err));
@@ -300,7 +300,7 @@ export default function GeneralTab({
   const clearShortcut = useCallback(async () => {
     setShortcutError(null);
     try {
-      await unregisterGlobalShortcut().catch(() => {});
+      await unregisterGlobalShortcut();
       set({ globalShortcut: "" });
     } catch (err: unknown) {
       setShortcutError(err instanceof Error ? err.message : String(err));

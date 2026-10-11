@@ -519,6 +519,46 @@ describe("GeneralTab Mac grouped layout", () => {
     expect(screen.getByText("ShortcutRecordingHint")).toBeInTheDocument();
   });
 
+  it("shows the register error and does not save a shortcut that failed to register", async () => {
+    const set = vi.fn();
+    render(<GeneralTab settings={settings} set={set} saving={false} />);
+    vi.mocked(invoke).mockRejectedValueOnce("Failed to register shortcut \"Ctrl+Shift+K\": taken");
+
+    fireEvent.click(screen.getByRole("button", { name: "ShortcutRecordButton" }));
+    fireEvent.keyDown(window, { key: "k", code: "KeyK", ctrlKey: true, shiftKey: true });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Failed to register shortcut \"Ctrl+Shift+K\": taken",
+    );
+    expect(invoke).toHaveBeenCalledWith("register_global_shortcut", { accelerator: "Ctrl+Shift+K" });
+    expect(set).not.toHaveBeenCalledWith({ globalShortcut: "Ctrl+Shift+K" });
+  });
+
+  it("shows the unregister error and keeps the shortcut when clearing fails", async () => {
+    const set = vi.fn();
+    render(
+      <GeneralTab settings={{ ...settings, globalShortcut: "Ctrl+Shift+U" }} set={set} saving={false} />,
+    );
+    vi.mocked(invoke).mockRejectedValueOnce(new Error("Failed to clear shortcuts: busy"));
+
+    fireEvent.click(screen.getByRole("button", { name: "ShortcutClearButton" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Failed to clear shortcuts: busy");
+    expect(invoke).toHaveBeenCalledWith("unregister_global_shortcut");
+    expect(set).not.toHaveBeenCalledWith({ globalShortcut: "" });
+  });
+
+  it("saves the shortcut after it registers", async () => {
+    const set = vi.fn();
+    render(<GeneralTab settings={settings} set={set} saving={false} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "ShortcutRecordButton" }));
+    fireEvent.keyDown(window, { key: "k", code: "KeyK", ctrlKey: true, shiftKey: true });
+
+    await waitFor(() => expect(set).toHaveBeenCalledWith({ globalShortcut: "Ctrl+Shift+K" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("quits from the footer button", () => {
     render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
     fireEvent.click(screen.getByRole("button", { name: "QuitCodexBar" }));
