@@ -123,6 +123,8 @@ export const ALL_LOCALE_KEYS = [
   "AixyGatewayTitle",
   "AixyGatewayLabel",
   "AixyGatewayHelp",
+  "ClawRouterGatewayTitle",
+  "ClawRouterGatewayHelp",
   "WayfinderModels",
   "WayfinderRequests",
   "WayfinderTokens",

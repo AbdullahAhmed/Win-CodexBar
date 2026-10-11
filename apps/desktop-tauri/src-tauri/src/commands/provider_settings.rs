@@ -251,6 +251,10 @@ fn cookie_source_provider(provider_id: &str) -> Option<codexbar::core::ProviderI
         "typesafe" => ProviderId::TypeSafe,
         "hyper" => ProviderId::Hyper,
         "groq" => ProviderId::Groq,
+        "workbuddy" => ProviderId::WorkBuddy,
+        "museai" => ProviderId::MuseAI,
+        "lithosai" => ProviderId::LithosAI,
+        "langdock" => ProviderId::Langdock,
         _ => return None,
     })
 }
@@ -453,6 +457,7 @@ mod tests {
             (ProviderId::Wayfinder, "http://localhost:8787"),
             (ProviderId::Bifrost, "https://bifrost.example.com"),
             (ProviderId::Aixy, "https://aixy.example.com/prefix"),
+            (ProviderId::ClawRouter, "https://router.example.com/v1"),
         ] {
             settings.set_gateway_url(id, url);
             let ctx = super::super::providers::build_fetch_context(
@@ -485,6 +490,7 @@ mod tests {
         assert_eq!(gateway_provider("wayfinder"), Some(ProviderId::Wayfinder));
         assert_eq!(gateway_provider("bifrost"), Some(ProviderId::Bifrost));
         assert_eq!(gateway_provider("aixy"), Some(ProviderId::Aixy));
+        assert_eq!(gateway_provider("clawrouter"), Some(ProviderId::ClawRouter));
         assert_eq!(gateway_provider("codex"), None);
     }
 
@@ -548,6 +554,7 @@ fn gateway_provider(provider_id: &str) -> Option<codexbar::core::ProviderId> {
         "wayfinder" => Some(codexbar::core::ProviderId::Wayfinder),
         "bifrost" => Some(codexbar::core::ProviderId::Bifrost),
         "aixy" => Some(codexbar::core::ProviderId::Aixy),
+        "clawrouter" => Some(codexbar::core::ProviderId::ClawRouter),
         _ => None,
     }
 }
@@ -575,6 +582,10 @@ pub fn set_provider_gateway_url(provider_id: String, gateway_url: String) -> Res
         }
         codexbar::core::ProviderId::Aixy => {
             codexbar::providers::aixy::validate_gateway_url(gateway_url)
+                .map_err(|error| error.to_string())?;
+        }
+        codexbar::core::ProviderId::ClawRouter => {
+            codexbar::providers::clawrouter::validate_gateway_url(gateway_url)
                 .map_err(|error| error.to_string())?;
         }
         _ => unreachable!("gateway_provider only returns gateway providers"),
@@ -849,6 +860,34 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
         // keeps a pasted `stytch_session` header for browsers whose cookies
         // Windows cannot decrypt.
         "groq" => vec![
+            cookie_option(lang, "auto", None),
+            cookie_option(lang, "manual", None),
+            cookie_option(lang, "off", None),
+        ],
+        // Upstream picks one Edge profile instead; Windows uses the shared
+        // cookie-source choices: automatic browser import, a pasted header, or off.
+        "langdock" => vec![
+            cookie_option(lang, "auto", None),
+            cookie_option(lang, "manual", None),
+            cookie_option(lang, "off", None),
+        ],
+        // Upstream's LithosAI cookie source: automatic browser import,
+        // a pasted header, or off.
+        "lithosai" => vec![
+            cookie_option(lang, "auto", None),
+            cookie_option(lang, "manual", None),
+            cookie_option(lang, "off", None),
+        ],
+        // Upstream's Muse (muse.ai) cookie source: automatic browser import,
+        // a pasted header, or off.
+        "museai" => vec![
+            cookie_option(lang, "auto", None),
+            cookie_option(lang, "manual", None),
+            cookie_option(lang, "off", None),
+        ],
+        // Upstream's WorkBuddy cookie source: automatic browser import,
+        // a pasted header, or off.
+        "workbuddy" => vec![
             cookie_option(lang, "auto", None),
             cookie_option(lang, "manual", None),
             cookie_option(lang, "off", None),
