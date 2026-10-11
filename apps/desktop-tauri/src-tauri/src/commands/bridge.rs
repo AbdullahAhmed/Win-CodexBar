@@ -197,6 +197,18 @@ pub struct PaceSnapshot {
     /// Block of the window this pace comes from (upstream hides its pace).
     #[serde(default)]
     pub monthly_limit_block: Option<MonthlyLimitBlockSnapshot>,
+    /// Whether the window this pace comes from carries its own length.
+    /// Upstream `UsageStore.weeklyPace` (UsageStore+HistoricalPace.swift)
+    /// gives the menu bar no pace for a generic window without
+    /// `windowMinutes`, rather than scoring it against the 7-day fallback,
+    /// so the tray pace tint skips it. Card lanes keep their own pace.
+    /// Tray-only; not sent to the frontend.
+    #[serde(default = "default_window_has_length", skip_serializing)]
+    pub window_has_length: bool,
+}
+
+fn default_window_has_length() -> bool {
+    true
 }
 
 /// One burndown chart point (RFC 3339 capture time + remaining percent).
@@ -448,6 +460,8 @@ impl ProviderUsageSnapshot {
             expected_used_percent: p.expected_used_percent,
             actual_used_percent: p.actual_used_percent,
             monthly_limit_block: MonthlyLimitBlockSnapshot::for_pace(usage, &blocked),
+            window_has_length: primary_pace_window
+                .is_some_and(|window| window.window_minutes.is_some()),
         });
 
         // Pace of the secondary lane, which also derives the row's reserve.
