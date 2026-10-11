@@ -108,6 +108,12 @@ const ALLOWED_PREFERENCES: &[(&str, Validator)] = &[
     ("float_bar_show_reset_inline", typed::<bool>),
     ("float_bar_show_cost", typed::<bool>),
     ("cost_reporting_period", cost_reporting_period),
+    ("cost_usage_enabled", typed::<bool>),
+    ("spend_dashboard_period", cost_reporting_period),
+    (
+        "spend_dashboard_hidden_source_ids",
+        spend_dashboard_hidden_source_ids,
+    ),
     ("preferred_currency_code", preferred_currency_code),
     ("switcher_shortcuts", switcher_shortcut_overrides),
 ];
@@ -200,6 +206,13 @@ fn percent(value: &Value) -> bool {
 fn cost_reporting_period(value: &Value) -> bool {
     value.as_str().is_some_and(|raw| {
         CostReportingPeriod::parse(raw).is_some_and(|period| period.raw() == raw)
+    })
+}
+
+/// A list of source ids, as stored (sorted, unique, trimmed lowercase).
+fn spend_dashboard_hidden_source_ids(value: &Value) -> bool {
+    serde_json::from_value::<Vec<String>>(value.clone()).is_ok_and(|ids| {
+        super::normalize_spend_dashboard_hidden_source_ids(ids.iter().cloned()) == ids
     })
 }
 

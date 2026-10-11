@@ -317,6 +317,13 @@ pub(super) struct RawSettings {
     cost_reporting_period: CostReportingPeriod,
     #[serde(default)]
     cost_usage_bucket_time_zone: String,
+    #[serde(default = "default_true")]
+    cost_usage_enabled: bool,
+    /// `None` when the key is missing, so the value copies `cost_reporting_period`.
+    #[serde(default)]
+    spend_dashboard_period: Option<CostReportingPeriod>,
+    #[serde(default)]
+    spend_dashboard_hidden_source_ids: Vec<String>,
 }
 
 impl Default for RawSettings {
@@ -439,6 +446,10 @@ impl Default for RawSettings {
                 .hide_native_codex_cost_when_open_codex_present,
             cost_reporting_period: s.cost_reporting_period,
             cost_usage_bucket_time_zone: s.cost_usage_bucket_time_zone,
+            cost_usage_enabled: s.cost_usage_enabled,
+            // Missing means "copy cost_reporting_period" (legacy files).
+            spend_dashboard_period: None,
+            spend_dashboard_hidden_source_ids: s.spend_dashboard_hidden_source_ids,
         }
     }
 }
@@ -788,6 +799,13 @@ impl From<RawSettings> for Settings {
             cost_reporting_period: raw.cost_reporting_period,
             cost_usage_bucket_time_zone: super::normalize_cost_usage_bucket_time_zone(
                 &raw.cost_usage_bucket_time_zone,
+            ),
+            cost_usage_enabled: raw.cost_usage_enabled,
+            spend_dashboard_period: raw
+                .spend_dashboard_period
+                .unwrap_or(raw.cost_reporting_period),
+            spend_dashboard_hidden_source_ids: super::normalize_spend_dashboard_hidden_source_ids(
+                raw.spend_dashboard_hidden_source_ids,
             ),
         }
     }

@@ -907,6 +907,10 @@ pub struct SettingsSnapshot {
     /// History window as its persisted raw form (`rolling:N`,
     /// `month-to-date`, `all`).
     cost_reporting_period: String,
+    cost_usage_enabled: bool,
+    /// Usage & Spend time range, same raw form as `cost_reporting_period`.
+    spend_dashboard_period: String,
+    spend_dashboard_hidden_source_ids: Vec<String>,
     provider_accent_colors: std::collections::HashMap<String, String>,
 }
 
@@ -1053,6 +1057,9 @@ impl From<Settings> for SettingsSnapshot {
             hide_native_codex_cost_when_open_codex_present: settings
                 .hide_native_codex_cost_when_open_codex_present,
             cost_reporting_period: settings.cost_reporting_period.raw(),
+            cost_usage_enabled: settings.cost_usage_enabled,
+            spend_dashboard_period: settings.spend_dashboard_period.raw(),
+            spend_dashboard_hidden_source_ids: settings.spend_dashboard_hidden_source_ids,
             provider_accent_colors: settings
                 .provider_configs
                 .iter()

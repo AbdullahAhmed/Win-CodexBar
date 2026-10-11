@@ -57,13 +57,20 @@ pub async fn import_preferences(
     let mut settings = Settings::load();
     let previous_language = settings.ui_language;
     let previous_period = settings.cost_reporting_period;
+    let previous_cost_tracking = settings.cost_usage_enabled;
     let previous_enabled = settings.get_enabled_provider_ids();
     let applied = document
         .apply_to(&mut settings)
         .map_err(|error| error.to_string())?;
+    if settings.cost_usage_enabled && !previous_cost_tracking {
+        // Turning "Track costs" on pins the bucket zone, as in Settings.
+        settings.pin_cost_usage_bucket_time_zone();
+    }
     settings.save().map_err(|error| error.to_string())?;
     tracing::info!(applied, "imported portable preferences");
-    if settings.cost_reporting_period != previous_period {
+    if settings.cost_reporting_period != previous_period
+        || settings.cost_usage_enabled != previous_cost_tracking
+    {
         // Cached local cost summaries cover the old period's window.
         super::clear_provider_local_usage_cache();
     }
