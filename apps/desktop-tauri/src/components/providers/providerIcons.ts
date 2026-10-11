@@ -50,6 +50,7 @@ import mistral from "./icons/ProviderIcon-mistral.svg?raw";
 import muse from "./icons/ProviderIcon-muse.svg?raw";
 import notion from "./icons/ProviderIcon-notion.svg?raw";
 import nous from "./icons/ProviderIcon-nous.svg?raw";
+import workbuddy from "./icons/ProviderIcon-workbuddy.svg?raw";
 import xai from "./icons/ProviderIcon-xai.svg?raw";
 import xkiro from "./icons/ProviderIcon-xkiro.svg?raw";
 import ollama from "./icons/ProviderIcon-ollama.svg?raw";
@@ -146,6 +147,7 @@ const RAW: Record<string, string> = {
   xkiro: tint(xkiro),
   mistral: tint(mistral),
   muse: tint(muse),
+  workbuddy: tint(workbuddy),
   ollama: tint(ollama),
   opencode: tint(opencode),
   opencodego: tint(opencodego),
@@ -250,6 +252,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   sub2api:     { id: "sub2api",     brandColor: "#14b8a6", fallbackLetter: "S", svgPath: RAW.sub2api },
   venice:      { id: "venice",      brandColor: "#3c8fdd", fallbackLetter: "V", svgPath: RAW.venice },
   vercel:      { id: "vercel",      brandColor: "#737373", fallbackLetter: "V", svgPath: RAW.vercel },
+  workbuddy:   { id: "workbuddy",   brandColor: "#0DC8A6", fallbackLetter: "W", svgPath: RAW.workbuddy },
   openaiapi:   { id: "openaiapi",   brandColor: "#10a37f", fallbackLetter: "O" },
   chutes:      { id: "chutes",      brandColor: "#ff5c35", fallbackLetter: "C" },
   litellm:     { id: "litellm",     brandColor: "#0ea5e9", fallbackLetter: "L" },

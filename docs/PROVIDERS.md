@@ -112,6 +112,32 @@ the bearer key are never sent together. Rate limits, server errors and
 malformed balances are final and do not fall back. Upstream's multiple API-key
 token accounts are not ported yet.
 
+### WorkBuddy credits
+
+WorkBuddy is Tencent's desktop AI work assistant, billed in credits. It is
+disabled by default and reads the website billing API that the signed-in
+Plans & usage page (`https://www.workbuddy.cn/profile/plans-usage`) uses:
+`POST /billing/meter/get-user-resource-summary` with the session cookies.
+
+- The cookie source picks the session: Automatic tries each detected
+  browser's `workbuddy.cn` session in turn (only the cookies a request to
+  `www.workbuddy.cn` would carry), Manual uses a pasted Cookie header with no
+  browser fallback, and Off reads nothing.
+- WorkBuddy binds the session to the browser User-Agent. Requests send
+  Chrome's reduced Windows User-Agent for the installed Chrome major (the
+  newest version folder under the Chrome install, else the version in
+  `HKCU\Software\Google\Chrome\BLBeacon`) and retry once with the previous
+  major. Without a Chrome version no User-Agent is sent, which WorkBuddy
+  usually rejects as an expired session, so cookies should come from Chrome.
+- The card shows the credits meter with "X / Y credits left", the plan name,
+  reserved (frozen) credits, and the cycle reset from the paid and free
+  package listings (cycle ends are China Standard Time; the listings share a
+  5-second budget and a failed listing only drops the reset).
+- HTTP 401 on every User-Agent moves on to the next browser session and is
+  reported as an expired session at the end. 403, 429, server errors,
+  non-zero API codes and malformed payloads stop at once. Response bodies and
+  cookies are never logged or echoed in errors.
+
 ### llmman daemon
 
 llmman reads a local (or LAN) llmman daemon: `GET {base}/llmman/node` for the
