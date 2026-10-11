@@ -619,3 +619,24 @@ fn file_round_trip_and_size_bound() {
         Err(PreferencesError::Io(_))
     ));
 }
+
+#[test]
+fn tray_scale_document_bounds_match_the_settings_clamp() {
+    use crate::settings::{
+        TRAY_SCALE_PERCENT_MAX, TRAY_SCALE_PERCENT_MIN, clamp_tray_scale_percent,
+    };
+    assert_eq!(clamp_tray_scale_percent(0), TRAY_SCALE_PERCENT_MIN);
+    assert_eq!(clamp_tray_scale_percent(u16::MAX), TRAY_SCALE_PERCENT_MAX);
+    for accepted in [TRAY_SCALE_PERCENT_MIN, TRAY_SCALE_PERCENT_MAX] {
+        assert!(
+            parse(json!({ "tray_scale_percent": accepted })).is_ok(),
+            "{accepted} should be accepted"
+        );
+    }
+    for rejected in [TRAY_SCALE_PERCENT_MIN - 1, TRAY_SCALE_PERCENT_MAX + 1] {
+        assert!(
+            parse(json!({ "tray_scale_percent": rejected })).is_err(),
+            "{rejected} should be rejected"
+        );
+    }
+}
