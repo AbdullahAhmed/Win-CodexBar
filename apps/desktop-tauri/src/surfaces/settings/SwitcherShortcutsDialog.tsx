@@ -1,12 +1,36 @@
+import type React from "react";
 import { useEffect, useId, useRef } from "react";
 import { useLocale } from "../../hooks/useLocale";
 import SwitcherShortcutsSection from "./SwitcherShortcutsSection";
 import type { TabProps } from "./settingsTabs";
 
+const FOCUSABLE =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** Keeps Tab and Shift+Tab inside the modal sheet. */
+function trapTab(dialog: HTMLElement, event: React.KeyboardEvent) {
+  const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE));
+  if (focusable.length === 0) {
+    event.preventDefault();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const active = document.activeElement;
+  const outside = !focusable.includes(active as HTMLElement);
+  if (event.shiftKey && (active === first || outside)) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (active === last || outside)) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 /**
  * In-window sheet for the provider-switcher keys, opened from
- * Settings > General > Portable preferences. Escape or Done closes it and
- * focus returns to the button that opened it. Every change saves at once,
+ * Settings > General > Portable preferences. Tab stays inside the sheet,
+ * Escape or Done closes it and focus returns to the button that opened it. Every change saves at once,
  * like the rest of Settings.
  */
 export default function SwitcherShortcutsDialog({
@@ -43,6 +67,8 @@ export default function SwitcherShortcutsDialog({
           if (event.key === "Escape") {
             event.stopPropagation();
             onClose();
+          } else if (event.key === "Tab" && dialogRef.current) {
+            trapTab(dialogRef.current, event);
           }
         }}
       >
