@@ -629,3 +629,59 @@ fn resource_key_names(resource: &str) -> HashSet<&str> {
         .filter(|name| !name.is_empty())
         .collect()
 }
+
+/// The Claude keychain-prompt option has no Windows consumer yet, so its helper
+/// must say so instead of promising skipped credential reads.
+#[test]
+fn avoid_keychain_prompts_helper_says_it_is_not_enforced_on_windows() {
+    let expected = [
+        (
+            Language::English,
+            "Not enforced on Windows yet: Claude credentials are still read as usual. The choice is saved for when it ships.",
+        ),
+        (
+            Language::Spanish,
+            "Aún no se aplica en Windows: las credenciales de Claude se siguen leyendo como siempre. La opción se guarda para cuando esté disponible.",
+        ),
+        (
+            Language::Japanese,
+            "Windows ではまだ適用されません。Claude の資格情報は通常どおり読み取られます。この選択は機能の提供に備えて保存されます。",
+        ),
+        (
+            Language::Korean,
+            "아직 Windows에서 적용되지 않습니다. Claude 자격 증명은 평소처럼 읽습니다. 이 선택은 기능이 나올 때를 위해 저장됩니다.",
+        ),
+        (
+            Language::PortugueseBrazil,
+            "Ainda não é aplicado no Windows: as credenciais do Claude continuam sendo lidas normalmente. A escolha fica salva para quando o recurso chegar.",
+        ),
+        (
+            Language::Russian,
+            "Пока не применяется в Windows: учётные данные Claude по-прежнему читаются как обычно. Выбор сохраняется до появления функции.",
+        ),
+        (
+            Language::Turkish,
+            "Windows'ta henüz uygulanmıyor: Claude kimlik bilgileri her zamanki gibi okunur. Seçim, özellik geldiğinde kullanılmak üzere kaydedilir.",
+        ),
+        (
+            Language::Ukrainian,
+            "Поки не застосовується в Windows: облікові дані Claude і далі зчитуються як звичайно. Вибір зберігається до появи функції.",
+        ),
+        (
+            Language::Chinese,
+            "Windows 上尚未生效：仍会照常读取 Claude 凭据。此选项会保存，待该功能上线后使用。",
+        ),
+        (
+            Language::ChineseTraditional,
+            "Windows 上尚未生效：仍會照常讀取 Claude 憑據。此選項會儲存，待該功能上線後使用。",
+        ),
+    ];
+    assert_eq!(expected.len(), Language::all().len());
+    for (language, text) in expected {
+        assert_eq!(
+            get_text(language, LocaleKey::AvoidKeychainPromptsHelper),
+            text,
+            "{language:?}"
+        );
+    }
+}
