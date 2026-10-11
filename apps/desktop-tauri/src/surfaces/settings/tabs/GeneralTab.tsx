@@ -174,6 +174,7 @@ function ThresholdOverrideInputs({
     <Field label={label}>
       <div className="settings-inline-fields">
         <input
+          className="number-input"
           type="number"
           value={high}
           min={0}
@@ -186,6 +187,7 @@ function ThresholdOverrideInputs({
           onKeyDown={blurOnEnter}
         />
         <input
+          className="number-input"
           type="number"
           value={critical}
           min={0}

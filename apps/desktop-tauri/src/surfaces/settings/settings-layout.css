@@ -245,6 +245,22 @@
   margin-top: 20px;
 }
 
+/* The legacy .about-section centers its children; the Mac pane is full-width and left-aligned. */
+.about-section > .about-hero,
+.about-section > .settings-group {
+  align-self: stretch;
+}
+
+.about-section > .settings-group {
+  text-align: left;
+}
+
+/* Warning + critical override pair on one row. */
+.settings-inline-fields {
+  display: flex;
+  gap: 8px;
+}
+
 .settings-link-row {
   display: flex;
   align-items: center;
