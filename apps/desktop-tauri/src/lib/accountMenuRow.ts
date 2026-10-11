@@ -21,10 +21,13 @@ export function accountMenuAction(
   provider: ProviderUsageSnapshot | null,
 ): AccountMenuAction | null {
   if (!provider || !ACCOUNT_MANAGER_PROVIDERS.has(provider.providerId)) return null;
+  // Upstream `CodexProviderImplementation.loginMenuAction` always offers
+  // "Add Account..." for Codex, signed in or not.
   const hasAccount =
-    Boolean(provider.accountEmail?.trim()) ||
-    hasLiveClaudeIdentity(provider) ||
-    hasSuccessfulClaudeCliQuota(provider);
+    provider.providerId !== "codex" &&
+    (Boolean(provider.accountEmail?.trim()) ||
+      hasLiveClaudeIdentity(provider) ||
+      hasSuccessfulClaudeCliQuota(provider));
   return {
     labelKey: hasAccount ? "TrayMenuSwitchAccount" : "AddAccountEllipsis",
     settingsTab: providersTabRequest(provider.providerId),

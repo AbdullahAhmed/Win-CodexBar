@@ -779,6 +779,11 @@ export interface ProviderUsageSnapshot {
   cost: CostSnapshotBridge | null;
   planName: string | null;
   accountEmail: string | null;
+  /**
+   * Active token-account label, shown in the header only when the provider
+   * reports no email (upstream account fallback). Never a scoping key.
+   */
+  accountLabel?: string | null;
   subscription?: SubscriptionMetadataSnapshot | null;
   sourceLabel: string;
   /** Backend proof of a live successful Claude CLI quota fetch; only true is proof. */

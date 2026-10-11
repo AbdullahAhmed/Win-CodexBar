@@ -1,0 +1,37 @@
+import { describe, expect, it } from "vitest";
+import { headerAccount, maskEmail } from "./MenuCard";
+
+describe("headerAccount", () => {
+  it("prefers the provider email over the token-account label", () => {
+    expect(
+      headerAccount({ accountEmail: "parity.user@example.com", accountLabel: "Work" }, false),
+    ).toBe("parity.user@example.com");
+  });
+
+  it("falls back to the active token-account label", () => {
+    expect(headerAccount({ accountEmail: null, accountLabel: "parity-github" }, false)).toBe(
+      "parity-github",
+    );
+    expect(headerAccount({ accountEmail: "  ", accountLabel: " parity-github " }, false)).toBe(
+      "parity-github",
+    );
+  });
+
+  it("masks the email or the label under Hide Personal Info", () => {
+    expect(headerAccount({ accountEmail: "parity.user@example.com" }, true)).toBe(
+      "p••••••••••@example.com",
+    );
+    expect(headerAccount({ accountEmail: null, accountLabel: "parity-github" }, true)).toBe(
+      "••••@••••",
+    );
+  });
+
+  it("shows nothing without an email or label", () => {
+    expect(headerAccount({ accountEmail: null }, false)).toBeNull();
+    expect(headerAccount({ accountEmail: null, accountLabel: "" }, true)).toBeNull();
+  });
+
+  it("masks a non-email label completely", () => {
+    expect(maskEmail("parity-github")).toBe("••••@••••");
+  });
+});
