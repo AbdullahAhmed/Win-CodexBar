@@ -751,6 +751,39 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             config_file_path: None,
             dashboard_url: Some("https://dash.aixy-gateway.com"),
         },
+        ProviderConfigInfo {
+            id: ProviderId::Synthetic,
+            name: "Synthetic",
+            requires_api_key: true,
+            api_key_env_var: Some(crate::providers::synthetic::API_KEY_ENV),
+            api_key_help: Some(
+                "Save a Synthetic API key to read the quota endpoint, or set SYNTHETIC_API_KEY.",
+            ),
+            config_file_path: None,
+            dashboard_url: None,
+        },
+        ProviderConfigInfo {
+            id: ProviderId::ClawRouter,
+            name: "ClawRouter",
+            requires_api_key: true,
+            api_key_env_var: Some(crate::providers::clawrouter::API_KEY_ENV),
+            api_key_help: Some(
+                "Save a ClawRouter policy key. Leave the Base URL empty for the hosted service, or set an HTTPS URL for another deployment. Or set CLAWROUTER_API_KEY and CLAWROUTER_BASE_URL.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://clawrouter.openclaw.ai/dashboard/access"),
+        },
+        ProviderConfigInfo {
+            id: ProviderId::IBMBob,
+            name: "IBM Bob",
+            requires_api_key: true,
+            api_key_env_var: Some(crate::providers::ibmbob::API_KEY_ENV),
+            api_key_help: Some(
+                "Create an API key in the IBM Bob web portal and save it here, or set BOBSHELL_API_KEY.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://bob.ibm.com"),
+        },
     ]
 }
 

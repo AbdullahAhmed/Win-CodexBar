@@ -164,6 +164,7 @@ describe("provider icon registry", () => {
       "elevenlabs",
       "manus",
       "replicate",
+      "synthetic",
       "typesafe",
       "v0",
     ]);

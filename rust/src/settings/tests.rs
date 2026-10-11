@@ -61,6 +61,43 @@ fn groq_cookie_source_defaults_to_automatic_session_import() {
 }
 
 #[test]
+fn langdock_cookie_source_defaults_to_automatic_session_import() {
+    // Upstream has no Langdock source picker (it reads one Edge profile), so
+    // Windows defaults to automatic browser import.
+    let mut settings = Settings::default();
+    assert_eq!(settings.cookie_source(ProviderId::Langdock), "auto");
+    settings.set_cookie_source(ProviderId::Langdock, "off");
+    assert_eq!(settings.cookie_source(ProviderId::Langdock), "off");
+}
+
+#[test]
+fn lithosai_cookie_source_defaults_to_automatic_session_import() {
+    // Upstream's LithosAI cookie source falls back to `.auto`.
+    let mut settings = Settings::default();
+    assert_eq!(settings.cookie_source(ProviderId::LithosAI), "auto");
+    settings.set_cookie_source(ProviderId::LithosAI, "off");
+    assert_eq!(settings.cookie_source(ProviderId::LithosAI), "off");
+}
+
+#[test]
+fn museai_cookie_source_defaults_to_automatic_session_import() {
+    // Upstream's Muse (muse.ai) cookie source falls back to `.auto`.
+    let mut settings = Settings::default();
+    assert_eq!(settings.cookie_source(ProviderId::MuseAI), "auto");
+    settings.set_cookie_source(ProviderId::MuseAI, "off");
+    assert_eq!(settings.cookie_source(ProviderId::MuseAI), "off");
+}
+
+#[test]
+fn workbuddy_cookie_source_defaults_to_automatic_session_import() {
+    // Upstream's WorkBuddy cookie source falls back to `.auto`.
+    let mut settings = Settings::default();
+    assert_eq!(settings.cookie_source(ProviderId::WorkBuddy), "auto");
+    settings.set_cookie_source(ProviderId::WorkBuddy, "off");
+    assert_eq!(settings.cookie_source(ProviderId::WorkBuddy), "off");
+}
+
+#[test]
 fn preferred_currency_defaults_validates_and_round_trips() {
     let legacy: Settings = serde_json::from_str(r#"{"enabled_providers": []}"#)
         .expect("legacy settings without a preferred currency remain valid");
