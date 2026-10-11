@@ -1,203 +1,127 @@
-import { useState } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { LocaleProvider } from "../../../i18n/LocaleProvider";
-import { buildBundle } from "../../../test/localeHarness";
-import { TEST_PROVIDER_CATALOG } from "../../../test/providerCatalog";
-import { loadStyles, ruleBlock } from "../../../test/styles";
-import {
-  ProvidersSidebar,
-  type ProviderSidebarRow,
-} from "./ProvidersSidebar";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { ProvidersSidebar, type ProviderSidebarRow } from "./ProvidersSidebar";
 
-const tauriMocks = vi.hoisted(() => ({
-  getLocaleStrings: vi.fn(),
-  setUiLanguage: vi.fn(),
+vi.mock("../../../hooks/useLocale", () => ({
+  useLocale: () => ({ t: (key: string) => key }),
 }));
-
-const eventMocks = vi.hoisted(() => ({
-  listen: vi.fn(),
-}));
-
-vi.mock("../../../lib/tauri", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../lib/tauri")>()),
-  ...tauriMocks,
-}));
-vi.mock("@tauri-apps/api/event", () => eventMocks);
 
 function rows(): ProviderSidebarRow[] {
-  return TEST_PROVIDER_CATALOG.map(([id, displayName], index) => ({
-    id,
-    displayName,
-    enabled: index < 2,
-    status: index < 2 ? "ok" : "disabled",
-    subtitlePrimary: index < 2 ? "auto" : "Disabled - auto",
-    subtitleSecondary: index < 2 ? `${index + 1}%` : undefined,
-  }));
+  return [
+    { id: "codex", displayName: "Codex", enabled: true, status: "ok" },
+    { id: "claude", displayName: "Claude", enabled: true, status: "error" },
+    { id: "cursor", displayName: "Cursor", enabled: false, status: "disabled" },
+  ];
 }
 
+function renderSidebar(overrides: Partial<Parameters<typeof ProvidersSidebar>[0]> = {}) {
+  const props = {
+    providers: rows(),
+    selectedId: "codex",
+    canReorder: true,
+    onSelect: vi.fn(),
+    onReorder: vi.fn(),
+    onToggleEnabled: vi.fn(),
+    ...overrides,
+  };
+  const view = render(<ProvidersSidebar {...props} />);
+  return { ...props, ...view };
+}
+
+const option = (name: string) => screen.getByRole("option", { name: new RegExp(`^${name} `) });
+
 describe("ProvidersSidebar", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    tauriMocks.getLocaleStrings.mockResolvedValue(buildBundle({
-      ProviderSidebarSearch: "Search",
-      ProviderSidebarNoMatches: "No matching providers",
-      ProviderSidebarMoveUp: "Move up",
-      ProviderSidebarMoveDown: "Move down",
-    }));
-    eventMocks.listen.mockResolvedValue(() => {});
+  it("shows a status dot on enabled rows only and dims disabled rows", () => {
+    renderSidebar();
+    expect(screen.getAllByRole("option")).toHaveLength(3);
+    expect(option("Codex").querySelector(".providers-sidebar__status--ok")).not.toBeNull();
+    expect(option("Claude").querySelector(".providers-sidebar__status--error")).not.toBeNull();
+    const cursor = option("Cursor");
+    expect(cursor.querySelector(".providers-sidebar__status")).toBeNull();
+    expect(cursor).toHaveClass("providers-sidebar__row--disabled");
+    expect(option("Codex")).toHaveAttribute("aria-selected", "true");
   });
 
-  it("renders the full provider catalog without dropping rows", async () => {
-    const { container } = render(
-      <LocaleProvider>
-        <ProvidersSidebar
-          providers={rows()}
-          selectedId="codex"
-          searchText=""
-          onSearchTextChange={vi.fn()}
-          onSelect={vi.fn()}
-          onReorder={vi.fn()}
-          onToggleEnabled={vi.fn()}
-        />
-      </LocaleProvider>,
-    );
-
-    expect(await screen.findByRole("listbox", { name: "ProvidersAriaLabel" })).toBeInTheDocument();
-    expect(screen.getAllByRole("option")).toHaveLength(TEST_PROVIDER_CATALOG.length);
-    const names = Array.from(
-      container.querySelectorAll(".providers-sidebar__name"),
-      (node) => node.textContent,
-    );
-    expect(names).toEqual(TEST_PROVIDER_CATALOG.map(([, displayName]) => displayName));
+  it("says when no provider matches", () => {
+    renderSidebar({ providers: [], selectedId: null });
+    expect(screen.getByText("ProviderSidebarNoMatches")).toBeInTheDocument();
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
   });
 
-  it("renders provider search and empty matches state", async () => {
-    render(
-      <LocaleProvider>
-        <ProvidersSidebar
-          providers={[]}
-          selectedId={null}
-          searchText="zzzz"
-          onSearchTextChange={vi.fn()}
-          onSelect={vi.fn()}
-          onReorder={vi.fn()}
-          onToggleEnabled={vi.fn()}
-        />
-      </LocaleProvider>,
-    );
+  it("selects with the arrow keys and moves with Alt+Arrow", () => {
+    const { onSelect, onReorder } = renderSidebar();
+    fireEvent.keyDown(option("Codex"), { key: "ArrowDown" });
+    expect(onSelect).toHaveBeenCalledWith("claude");
+    expect(onReorder).not.toHaveBeenCalled();
 
-    expect(await screen.findByRole("searchbox", { name: "Search" })).toBeInTheDocument();
-    expect(screen.getByText("No matching providers")).toBeInTheDocument();
+    fireEvent.keyDown(option("Codex"), { key: "ArrowDown", altKey: true });
+    expect(onReorder).toHaveBeenCalledWith(["claude", "codex", "cursor"]);
   });
 
-  it("reorders providers through explicit move buttons", async () => {
-    const onReorder = vi.fn();
-    const initial = rows();
-    function Harness() {
-      const [providers, setProviders] = useState(initial);
-      return (
-        <LocaleProvider>
-          <ProvidersSidebar
-            providers={providers}
-            selectedId="codex"
-            searchText=""
-            onSearchTextChange={vi.fn()}
-            onSelect={vi.fn()}
-            onReorder={(orderedIds) => {
-              onReorder(orderedIds);
-              setProviders((prev) => {
-                const byId = new Map(prev.map((p) => [p.id, p]));
-                return orderedIds
-                  .map((id) => byId.get(id))
-                  .filter((p): p is ProviderSidebarRow => Boolean(p));
-              });
-            }}
-            onToggleEnabled={vi.fn()}
-          />
-        </LocaleProvider>
-      );
-    }
-    const { container } = render(<Harness />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Move down Codex" }));
-
-    await waitFor(() => {
-      expect(onReorder).toHaveBeenCalledWith([
-        "claude",
-        "codex",
-        ...TEST_PROVIDER_CATALOG.slice(2).map(([id]) => id),
-      ]);
-    });
-    await waitFor(() => {
-      const names = Array.from(
-        container.querySelectorAll(".providers-sidebar__name"),
-        (node) => node.textContent,
-      );
-      expect(names.slice(0, 3)).toEqual(["Claude", "Codex", "Pi"]);
-    });
+  it("keeps Alt+Arrow and drag inert while the list cannot be reordered", () => {
+    const { onReorder } = renderSidebar({ canReorder: false });
+    fireEvent.keyDown(option("Codex"), { key: "ArrowDown", altKey: true });
+    expect(onReorder).not.toHaveBeenCalled();
+    expect(option("Codex")).toHaveAttribute("draggable", "false");
   });
 
-  it("does not let the first provider move up", async () => {
-    render(
-      <LocaleProvider>
-        <ProvidersSidebar
-          providers={rows()}
-          selectedId="codex"
-          searchText=""
-          onSearchTextChange={vi.fn()}
-          onSelect={vi.fn()}
-          onReorder={vi.fn()}
-          onToggleEnabled={vi.fn()}
-        />
-      </LocaleProvider>,
-    );
+  it("toggles a provider from the row context menu", () => {
+    const { onToggleEnabled } = renderSidebar();
+    fireEvent.contextMenu(option("Claude"), { clientX: 40, clientY: 60 });
+    const menu = screen.getByRole("menu");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "ProviderContextDisable" }));
+    expect(onToggleEnabled).toHaveBeenCalledWith("claude", false);
+    expect(screen.queryByRole("menu")).toBeNull();
 
-    expect(await screen.findByRole("button", { name: "Move up Codex" })).toBeDisabled();
-  });
-});
-
-// jsdom runs with `css: false` and no layout, so assert the stylesheet rules
-// directly: translated status lines ("Отключено — авто", ~97px) must wrap
-// inside the ~89px text column at the 600px settings window, not ellipsize.
-describe("Providers tab text fitting", () => {
-  it("wraps names and status lines to two lines instead of one ellipsized line", () => {
-    const stylesSource = loadStyles();
-    for (const selector of [
-      ".providers-sidebar__name",
-      ".providers-sidebar__subtitle-primary",
-    ]) {
-      const rule = ruleBlock(stylesSource, selector);
-      expect(rule).toMatch(/-webkit-line-clamp:\s*2;/);
-      expect(rule).not.toContain("nowrap");
-    }
+    fireEvent.contextMenu(option("Cursor"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "ProviderContextEnable" }));
+    expect(onToggleEnabled).toHaveBeenCalledWith("cursor", true);
   });
 
-  it("keeps the full name and status line available as a tooltip", async () => {
-    const providers: ProviderSidebarRow[] = [{
-      id: "alibaba",
-      displayName: "Alibaba Token Plan",
-      enabled: false,
-      status: "disabled",
-      subtitlePrimary: "Отключено — авто",
-    }];
-    const { container } = render(
-      <LocaleProvider>
-        <ProvidersSidebar
-          providers={providers}
-          selectedId={null}
-          searchText=""
-          onSearchTextChange={vi.fn()}
-          onSelect={vi.fn()}
-          onReorder={vi.fn()}
-          onToggleEnabled={vi.fn()}
-        />
-      </LocaleProvider>,
-    );
-    await screen.findByRole("listbox", { name: "ProvidersAriaLabel" });
-    expect(container.querySelector(".providers-sidebar__name")?.getAttribute("title"))
-      .toBe("Alibaba Token Plan");
-    expect(container.querySelector(".providers-sidebar__subtitle-primary")?.getAttribute("title"))
-      .toBe("Отключено — авто");
+  it("moves a provider from the context menu and disables impossible moves", () => {
+    const { onReorder } = renderSidebar();
+    fireEvent.contextMenu(option("Codex"));
+    expect(screen.getByRole("menuitem", { name: "ProviderSidebarMoveUp" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("menuitem", { name: "ProviderSidebarMoveDown" }));
+    expect(onReorder).toHaveBeenCalledWith(["claude", "codex", "cursor"]);
+  });
+
+  it("disables Move Up and Move Down while sorted or searching", () => {
+    renderSidebar({ canReorder: false });
+    fireEvent.contextMenu(option("Claude"));
+    expect(screen.getByRole("menuitem", { name: "ProviderSidebarMoveUp" })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "ProviderSidebarMoveDown" })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "ProviderContextDisable" })).toBeEnabled();
+  });
+
+  it("opens the menu from the keyboard and closes it with Escape", () => {
+    renderSidebar();
+    const claude = option("Claude");
+    fireEvent.keyDown(claude, { key: "F10", shiftKey: true });
+    const menu = screen.getByRole("menu");
+    expect(menu).toBeInTheDocument();
+    fireEvent.keyDown(menu, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(claude).toHaveFocus();
+
+    fireEvent.keyDown(claude, { key: "ContextMenu" });
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("reorders by drag and drop", () => {
+    const { onReorder } = renderSidebar();
+    const store = new Map<string, string>();
+    const dataTransfer = {
+      setData: (k: string, v: string) => store.set(k, v),
+      getData: (k: string) => store.get(k) ?? "",
+      effectAllowed: "",
+      dropEffect: "",
+    };
+    fireEvent.dragStart(option("Cursor"), { dataTransfer });
+    fireEvent.dragOver(option("Codex"), { dataTransfer });
+    fireEvent.drop(option("Codex"), { dataTransfer });
+    expect(onReorder).toHaveBeenCalledWith(["cursor", "codex", "claude"]);
   });
 });

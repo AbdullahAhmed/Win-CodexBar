@@ -99,7 +99,11 @@ export type TrayPanelSurfaceTarget = { kind: "summary" };
 export type PopOutSurfaceTarget =
   | { kind: "dashboard" }
   | { kind: "provider"; providerId: string };
-export type SettingsSurfaceTarget = { kind: "settings"; tab: SettingsTabId };
+/** `tab` is a settings tab id, or `providers:<id>` for one provider's pane. */
+export type SettingsSurfaceTarget = {
+  kind: "settings";
+  tab: SettingsTabId | `providers:${string}`;
+};
 
 export type SurfaceTarget =
   | TrayPanelSurfaceTarget
@@ -202,6 +206,8 @@ export interface SettingsSnapshot {
   menuBarShowsHighestUsage: boolean;
   menuBarShowsPercent: boolean;
   menuBarColorPace: boolean;
+  /** Settings sidebar lists providers alphabetically, enabled first. Display only. */
+  providersSortedAlphabetically: boolean;
   showAsUsed: boolean;
   showAllTokenAccountsInMenu: boolean;
   enableAnimations: boolean;
@@ -334,6 +340,7 @@ export interface SettingsUpdate {
   menuBarShowsHighestUsage?: boolean;
   menuBarShowsPercent?: boolean;
   menuBarColorPace?: boolean;
+  providersSortedAlphabetically?: boolean;
   showAsUsed?: boolean;
   showAllTokenAccountsInMenu?: boolean;
   enableAnimations?: boolean;
