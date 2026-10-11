@@ -23,6 +23,7 @@ const baseSettings = {
   menuBarShowsHighestUsage: false,
   menuBarShowsPercent: false,
   menuBarColorPace: false,
+  providersSortedAlphabetically: false,
   menuBarDisplayMode: "detailed",
   overviewLayout: "detailed",
   windowScalePercent: 100,
