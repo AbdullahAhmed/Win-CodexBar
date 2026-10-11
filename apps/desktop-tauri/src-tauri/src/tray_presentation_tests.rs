@@ -835,6 +835,24 @@ fn icon_style_not_the_legacy_percent_flag_picks_the_renderer() {
             has_error: false,
         }
     );
+
+    // The two styles draw different tray pixels for the same usage.
+    let (bar_pixels, bar_w, bar_h) =
+        TrayPresentationPlan::resolve(&bars, &snapshots, None).render_icon();
+    let (percent_pixels, percent_w, percent_h) =
+        TrayPresentationPlan::resolve(&percent, &snapshots, None).render_icon();
+    assert_eq!((bar_w, bar_h), (percent_w, percent_h));
+    let changed = bar_pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(percent_pixels.as_chunks::<4>().0.iter())
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        changed > 0,
+        "bars and percent icons rendered identical pixels"
+    );
 }
 
 #[test]
