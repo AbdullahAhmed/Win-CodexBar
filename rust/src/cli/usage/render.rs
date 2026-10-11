@@ -493,36 +493,12 @@ fn format_history_line(cost: &CostSnapshot) -> String {
     let mut values = vec![spend];
     if let Some(tokens) = cost.history_tokens {
         let unit = if tokens == 1 { "token" } else { "tokens" };
-        values.push(format!("{} {unit}", format_token_count(tokens)));
+        values.push(format!(
+            "{} {unit}",
+            crate::providers::format::token_count(tokens)
+        ));
     }
     format!("  {}: {}", cost.period, values.join(" · "))
-}
-
-/// Compact token count: `999`, `1.2K`, `15K`, `2.5M`, `1B`. A unit is promoted
-/// once the lower unit would round to 1000 (upstream `tokenCountString`).
-fn format_token_count(tokens: u64) -> String {
-    const UNITS: [(u64, f64, &str); 3] = [
-        (999_500_000, 1_000_000_000.0, "B"),
-        (999_500, 1_000_000.0, "M"),
-        (1_000, 1_000.0, "K"),
-    ];
-    for (threshold, divisor, suffix) in UNITS {
-        if tokens >= threshold {
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "display rounding to at most two significant digits"
-            )]
-            let scaled = tokens as f64 / divisor;
-            let formatted = if scaled >= 10.0 {
-                format!("{scaled:.0}")
-            } else {
-                let one = format!("{scaled:.1}");
-                one.strip_suffix(".0").unwrap_or(&one).to_string()
-            };
-            return format!("{formatted}{suffix}");
-        }
-    }
-    tokens.to_string()
 }
 
 /// Render usage as text (backwards compatible version)
