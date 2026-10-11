@@ -301,23 +301,30 @@ pub(super) fn auto_top_up_label(
         return Some("off".to_string());
     }
 
-    let method = first_string(
-        &["paymentMethod", "paymentMethodType", "method", "cardBrand"],
-        &auto_top_up_contexts,
-    )
-    .map(str::trim)
-    .filter(|method| !method.is_empty())
-    .map(str::to_string)
-    .or_else(|| {
-        money_amount(
-            &["amountCents"],
-            &[],
-            &["amount", "topUpAmount", "amountUsd"],
-            &auto_top_up_contexts,
-        )
-        .filter(|amount| *amount > 0.0)
-        .map(currency_amount_label)
-    });
+    // Skip blank values so an empty "paymentMethod" does not hide a later alias.
+    let method_keys = ["paymentMethod", "paymentMethodType", "method", "cardBrand"];
+    let method = auto_top_up_contexts
+        .iter()
+        .find_map(|context| {
+            method_keys.iter().find_map(|key| {
+                context
+                    .get(*key)?
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|method| !method.is_empty())
+            })
+        })
+        .map(str::to_string)
+        .or_else(|| {
+            money_amount(
+                &["amountCents"],
+                &[],
+                &["amount", "topUpAmount", "amountUsd"],
+                &auto_top_up_contexts,
+            )
+            .filter(|amount| *amount > 0.0)
+            .map(currency_amount_label)
+        });
     Some(method.unwrap_or_else(|| "enabled".to_string()))
 }
 
@@ -496,6 +503,14 @@ mod tests {
             label(
                 none.clone(),
                 serde_json::json!({"enabled": true, "paymentMethod": " visa "})
+            ),
+            Some("visa".to_string())
+        );
+        // A blank paymentMethod must not hide the next alias.
+        assert_eq!(
+            label(
+                none.clone(),
+                serde_json::json!({"enabled": true, "paymentMethod": "", "paymentMethodType": "visa"})
             ),
             Some("visa".to_string())
         );
