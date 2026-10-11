@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useReducer, useState } from "react";
-import type { SettingsSnapshot, SettingsUpdate } from "../../../types/bridge";
+import type {
+  ProviderUsageSnapshot,
+  SettingsSnapshot,
+  SettingsUpdate,
+} from "../../../types/bridge";
 import { useLocale } from "../../../hooks/useLocale";
 import { providerAllowsPace } from "../../../lib/providerPace";
 import {
@@ -57,6 +61,8 @@ import { MuseBrowserTeamSection } from "./sections/MuseBrowserTeamSection";
 
 interface Props {
   providerId: string | null;
+  /** Live tray snapshot for `providerId`; feeds the details moved out of the tray card. */
+  liveSnapshot?: ProviderUsageSnapshot | null;
   cookieDomain?: string | null;
   resetTimeRelative: boolean;
   providerMetrics: SettingsSnapshot["providerMetrics"];
@@ -78,6 +84,7 @@ interface Props {
  */
 export function ProviderDetailPane({
   providerId,
+  liveSnapshot = null,
   cookieDomain = null,
   resetTimeRelative,
   providerMetrics,

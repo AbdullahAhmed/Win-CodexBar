@@ -10,7 +10,7 @@ import { useSettings } from "../hooks/useSettings";
 import { useSurfaceTarget } from "../hooks/useSurfaceMode";
 import { useLocale } from "../hooks/useLocale";
 import { closeSettingsWindow, getWorkAreaRect, setSurfaceMode } from "../lib/tauri";
-import { TAB_META, isSettingsTab } from "./settings/settingsTabs";
+import { TAB_META, isSettingsTab, parseSettingsTabRequest } from "./settings/settingsTabs";
 import GeneralTab from "./settings/tabs/GeneralTab";
 import DisplayTab from "./settings/tabs/DisplayTab";
 import AdvancedTab from "./settings/tabs/AdvancedTab";
@@ -136,29 +136,47 @@ async function applySettingsWindowSize() {
     .catch(() => {});
 }
 
-export default function Settings({ state, initialTab: propTab }: { state: BootstrapState; initialTab?: string }) {
+export default function Settings({
+  state,
+  initialTab: propTab,
+  tabRequestId = 0,
+}: {
+  state: BootstrapState;
+  /** Raw tab request: a tab id, or `providers:<id>` to select a provider. */
+  initialTab?: string;
+  /** Changes on every window request, so a repeated deep link applies again. */
+  tabRequestId?: number;
+}) {
   const { settings, saving, error, update } = useSettings(state.settings);
   const { t } = useLocale();
   const shellTarget = useSurfaceTarget("settings");
+  const propRequest = parseSettingsTabRequest(propTab);
   const initialTab: SettingsTabId =
-    propTab && isSettingsTab(propTab)
-      ? propTab
+    propRequest
+      ? propRequest.tab
       : shellTarget?.kind === "settings" && isSettingsTab(shellTarget.tab)
         ? shellTarget.tab
         : "general";
   const [activeTab, setActiveTab] = useState<SettingsTabId>(initialTab);
+  const [providerFocus, setProviderFocus] = useState<{ id: string | null; request: number }>({
+    id: propRequest?.providerId ?? null,
+    request: tabRequestId,
+  });
   const shellTab: SettingsTabId | null =
     shellTarget?.kind === "settings" && isSettingsTab(shellTarget.tab)
       ? shellTarget.tab
       : null;
-  const [prevPropTab, setPrevPropTab] = useState(propTab);
+  const [prevPropRequest, setPrevPropRequest] = useState({ tab: propTab, id: tabRequestId });
   const [prevShellTab, setPrevShellTab] = useState(shellTab);
 
   // Adjust local tab during render when external drivers change (no effect sync).
-  if (propTab !== prevPropTab) {
-    setPrevPropTab(propTab);
-    if (propTab && isSettingsTab(propTab)) {
-      setActiveTab(propTab);
+  if (propTab !== prevPropRequest.tab || tabRequestId !== prevPropRequest.id) {
+    setPrevPropRequest({ tab: propTab, id: tabRequestId });
+    if (propRequest) {
+      setActiveTab(propRequest.tab);
+      if (propRequest.providerId) {
+        setProviderFocus((focus) => ({ id: propRequest.providerId, request: focus.request + 1 }));
+      }
     }
   }
   if (shellTab !== prevShellTab) {
@@ -250,6 +268,8 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
             providers={state.providers}
             set={set}
             saving={saving}
+            focusProviderId={providerFocus.id}
+            focusRequest={providerFocus.request}
           />
         )}
         {activeTab === "notifications" && (

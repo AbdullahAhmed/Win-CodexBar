@@ -310,6 +310,7 @@ describe("TrayPanel provider grid", () => {
         MenuSettings: "Settings...",
         PanelMenu: "Menu",
         TrayMenuSwitchAccount: "Switch Account...",
+        AddAccountEllipsis: "Add Account...",
         TrayMenuUsageDashboard: "Usage Dashboard",
         TrayMenuStatusPage: "Status Page",
         PanelAllProviders: "All providers",
@@ -541,7 +542,15 @@ describe("TrayPanel provider grid", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Switch Account..." }));
 
-    expect(tauriMocks.openSettingsWindow).toHaveBeenCalledWith("providers");
+    expect(tauriMocks.openSettingsWindow).toHaveBeenCalledWith("providers:claude");
+  });
+
+  it("offers Add Account... for a Codex card with no account", async () => {
+    renderTrayPanel([provider("codex", "Codex", 35)]);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add Account..." }));
+
+    expect(tauriMocks.openSettingsWindow).toHaveBeenCalledWith("providers:codex");
   });
 
   it("localizes static tray panel labels in Japanese", async () => {

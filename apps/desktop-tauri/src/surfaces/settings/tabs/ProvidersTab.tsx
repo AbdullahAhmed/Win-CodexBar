@@ -22,6 +22,10 @@ interface ProvidersTabProps {
   providers: ProviderCatalogEntry[];
   set: (patch: SettingsUpdate) => void;
   saving: boolean;
+  /** Provider to select, from a `providers:<id>` Settings request (tray "Switch Account..."). */
+  focusProviderId?: string | null;
+  /** Changes on every Settings request, so repeating the same deep link reselects it. */
+  focusRequest?: number;
 }
 
 export default function ProvidersTab({
@@ -29,18 +33,29 @@ export default function ProvidersTab({
   providers,
   set,
   saving,
+  focusProviderId = null,
+  focusRequest = 0,
 }: ProvidersTabProps) {
   const { t } = useLocale();
   const { providers: snapshots } = useProviders();
   const [selectedId, setSelectedId] = useState<string | null>(
-    providers[0]?.id ?? null,
+    focusProviderId ?? providers[0]?.id ?? null,
   );
+  const [prevFocusRequest, setPrevFocusRequest] = useState(focusRequest);
   // Locally-owned catalog order so drag-reorder feels instant before the
   // backend `reorder_providers` round-trip settles.
   const [orderedProviders, setOrderedProviders] =
     useState<ProviderCatalogEntry[]>(providers);
   const [prevProviders, setPrevProviders] = useState(providers);
   const [searchText, setSearchText] = useState("");
+  // A new deep link reselects its provider and clears a search that would hide it.
+  if (focusRequest !== prevFocusRequest) {
+    setPrevFocusRequest(focusRequest);
+    if (focusProviderId) {
+      setSelectedId(focusProviderId);
+      setSearchText("");
+    }
+  }
   if (providers !== prevProviders) {
     setPrevProviders(providers);
     setOrderedProviders(providers);
@@ -120,6 +135,8 @@ export default function ProvidersTab({
 
   const selectedEntry =
     orderedProviders.find((p) => p.id === resolvedSelectedId) ?? null;
+  const liveSnapshot =
+    snapshots.find((snapshot) => snapshot.providerId === resolvedSelectedId) ?? null;
 
   return (
     <div className="provider-split">
@@ -135,6 +152,7 @@ export default function ProvidersTab({
       />
       <ProviderDetailPane
         providerId={resolvedSelectedId}
+        liveSnapshot={liveSnapshot}
         cookieDomain={selectedEntry?.cookieDomain ?? null}
         resetTimeRelative={settings.resetTimeRelative}
         providerMetrics={settings.providerMetrics}
