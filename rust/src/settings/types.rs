@@ -207,7 +207,9 @@ impl Settings {
     }
 
     /// False when the provider window's quota warnings are set to Off. Off
-    /// suppresses threshold notifications, threshold hooks and bar markers.
+    /// suppresses threshold notifications and bar markers. Threshold hooks
+    /// still fire at the window's thresholds, as on macOS, where quota hooks
+    /// are independent of the notification preferences.
     pub fn quota_warning_enabled(&self, provider: ProviderId, window: &str) -> bool {
         self.quota_warning_window(provider, window)
             .enabled
