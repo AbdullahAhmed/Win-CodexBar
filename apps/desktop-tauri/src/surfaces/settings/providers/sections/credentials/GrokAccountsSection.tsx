@@ -10,8 +10,17 @@ import {
 } from "../../../../../lib/tauri";
 import { useGrokAccounts } from "../../../../../hooks/useGrokAccounts";
 import GrokAccountUsageDetails from "../../../../../components/GrokAccountUsageDetails";
+import { maskEmail } from "../../../../../components/MenuCard";
 
-export function GrokAccountsSection({ t }: { t: (key: LocaleKey) => string }) {
+export function GrokAccountsSection({
+  t,
+  hidePersonalInfo = false,
+  resetTimeRelative = true,
+}: {
+  t: (key: LocaleKey) => string;
+  hidePersonalInfo?: boolean;
+  resetTimeRelative?: boolean;
+}) {
   const [loggingIn, setLoggingIn] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const { accounts, usage, busy, error, reportError, run, reload } = useGrokAccounts();
@@ -45,11 +54,15 @@ export function GrokAccountsSection({ t }: { t: (key: LocaleKey) => string }) {
           <li className="credential-card" key={account.id}>
             <div className="credential-card__header">
               <div className="credential-card__info">
-                <strong>{account.email}</strong>
+                <strong>{hidePersonalInfo ? maskEmail(account.email) : account.email}</strong>
                 <span className="credential-card__meta">
                   {usage[account.id]?.plan || account.plan}
                 </span>
-                <GrokAccountUsageDetails snapshot={usage[account.id]} t={t} />
+                <GrokAccountUsageDetails
+                  snapshot={usage[account.id]}
+                  t={t}
+                  relative={resetTimeRelative}
+                />
                 {account.isActive && (
                   <span className="credential-card__badge credential-card__badge--set">
                     {t("TokenAccountActive")}

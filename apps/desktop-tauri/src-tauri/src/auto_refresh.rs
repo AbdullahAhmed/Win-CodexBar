@@ -311,6 +311,7 @@ mod tests {
         let mut settings = Settings {
             enabled_providers: ["codex".to_string()].into_iter().collect(),
             refresh_interval_secs: 300,
+            adaptive_refresh: false,
             ..Default::default()
         };
         settings.set_auto_resume_after_quota_reset(ProviderId::Codex, true);
