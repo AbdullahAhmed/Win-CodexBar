@@ -124,4 +124,25 @@ describe("ProvidersSidebar", () => {
     fireEvent.drop(option("Codex"), { dataTransfer });
     expect(onReorder).toHaveBeenCalledWith(["cursor", "codex", "claude"]);
   });
+
+  it("shows no drop target when reordering stops during a drag", () => {
+    const view = renderSidebar();
+    const dataTransfer = { setData: () => {}, getData: () => "", effectAllowed: "", dropEffect: "" };
+    fireEvent.dragStart(option("Cursor"), { dataTransfer });
+    view.rerender(
+      <ProvidersSidebar
+        providers={view.providers}
+        selectedId={view.selectedId}
+        canReorder={false}
+        onSelect={view.onSelect}
+        onReorder={view.onReorder}
+        onToggleEnabled={view.onToggleEnabled}
+      />,
+    );
+    // fireEvent returns false only when the handler called preventDefault (accepted the drop).
+    expect(fireEvent.dragOver(option("Codex"), { dataTransfer })).toBe(true);
+    expect(option("Codex")).not.toHaveClass("providers-sidebar__row--drop");
+    fireEvent.drop(option("Codex"), { dataTransfer });
+    expect(view.onReorder).not.toHaveBeenCalled();
+  });
 });

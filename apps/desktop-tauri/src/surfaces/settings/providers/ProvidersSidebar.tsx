@@ -104,7 +104,8 @@ export function ProvidersSidebar({
   };
 
   const handleDragOver = (overId: string) => (e: ReactDragEvent<HTMLLIElement>) => {
-    if (!dragId || dragId === overId) return;
+    // No drop target once reordering stops mid-drag (sort, search or a save).
+    if (!reorderable || !dragId || dragId === overId) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     if (dropTargetId !== overId) setDropTargetId(overId);
