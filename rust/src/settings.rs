@@ -748,7 +748,6 @@ impl Settings {
         if settings_file_override().is_none() {
             settings.start_at_login = Self::sync_start_at_login_registry();
             settings.apply_promote_tray_default_migration();
-            settings.apply_display_mode_fold_migration();
         }
 
         // One-shot migration: materialize the persisted hidden usage-item list
@@ -855,7 +854,14 @@ impl Settings {
         true
     }
 
-    fn apply_display_mode_fold_migration(&mut self) {
+    /// Run the one-shot Display mode fold against the default config root.
+    /// The desktop shell calls this once at startup rather than from
+    /// [`Settings::load`], so unit tests and helpers that load settings never
+    /// write the marker into the real config dir. A `CODEXBAR_CONFIG` run skips it.
+    pub fn apply_display_mode_fold_migration(&mut self) {
+        if settings_file_override().is_some() {
+            return;
+        }
         let Some(marker) = Self::display_mode_fold_marker_path() else {
             return;
         };
@@ -871,7 +877,9 @@ impl Settings {
         if self.fold_minimal_display_mode(already_migrated)
             && let Err(error) = persist(self)
         {
+            // No marker: the fold retries on the next launch instead of being lost.
             tracing::warn!("Failed to persist display mode fold migration: {error}");
+            return;
         }
         if !already_migrated && let Some(parent) = marker.parent() {
             // Best-effort marker dir creation; the write below reports failure.

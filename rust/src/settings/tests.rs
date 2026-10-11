@@ -1865,6 +1865,30 @@ fn display_mode_fold_leaves_other_modes_alone_but_writes_the_marker() {
 }
 
 #[test]
+fn display_mode_fold_retries_when_the_save_fails() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker = dir.path().join(".display-mode-fold-v1");
+    let mut settings: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "menu_bar_display_mode": "minimal" }"#)
+            .expect("legacy minimal file");
+
+    settings.apply_display_mode_fold_with_marker(&marker, |_| anyhow::bail!("disk full"));
+    assert!(!marker.exists(), "no marker after a failed save");
+
+    let mut reloaded: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "menu_bar_display_mode": "minimal" }"#)
+            .expect("legacy minimal file");
+    let mut persisted = 0;
+    reloaded.apply_display_mode_fold_with_marker(&marker, |_| {
+        persisted += 1;
+        Ok(())
+    });
+    assert!(reloaded.menu_bar_shows_highest_usage);
+    assert_eq!(persisted, 1, "the next launch saves the fold");
+    assert!(marker.exists());
+}
+
+#[test]
 fn stacked_tray_mode_survives_load_with_the_new_keys() {
     let loaded: Settings = serde_json::from_str(
         r#"{ "enabled_providers": ["codex", "claude"], "tray_icon_mode": "stacked",
