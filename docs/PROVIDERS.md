@@ -219,8 +219,8 @@ Synthetic (or `SYNTHETIC_API_KEY`); the CLI also accepts `synthetic.new`.
 - When the five-hour quota reports `tickPercent`, the lane resets at the next
   regen tick and its detail line reads, for example,
   "76% after next regen · Full in ~3 regens". The weekly lane does the same
-  when it carries `maxCredits` and `nextRegenCredits`, which also give a
-  weekly USD cost.
+  when it carries `maxCredits` and `nextRegenCredits`. Like the Mac card, no
+  weekly USD cost is shown (on the card or in CLI JSON).
 - The plan name (`plan`, `planName`, `tier`, ...) is shown as the plan.
 - 401 and 403 report "Invalid Synthetic API credentials."; response bodies are
   never echoed in errors.

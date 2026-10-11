@@ -17,7 +17,7 @@ use reqwest::{Client, StatusCode, Url};
 
 use crate::core::{
     FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
-    SourceMode,
+    ProviderStateKind, SourceMode,
 };
 
 const CREDENTIAL_TARGET: &str = "codexbar-clawrouter";
@@ -27,11 +27,16 @@ const DEFAULT_BASE_URL: &str = "https://clawrouter.openclaw.ai";
 const DASHBOARD_URL: &str = "https://clawrouter.openclaw.ai/dashboard/access";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+/// Upstream `ctx.fail.authenticationExpired` text for HTTP 401/403.
+const REJECTED_KEY_MESSAGE: &str =
+    "ClawRouter rejected the API key. Check the key and its policy status.";
 
 pub struct ClawRouterProvider {
     metadata: ProviderMetadata,
     client: Option<Client>,
     default_base_url: String,
+    /// Reads the `CLAWROUTER_BASE_URL` fallback; tests inject a fixed lookup.
+    base_url_env: fn() -> Option<String>,
 }
 
 impl ClawRouterProvider {
@@ -58,6 +63,7 @@ impl ClawRouterProvider {
                 .build()
                 .ok(),
             default_base_url: DEFAULT_BASE_URL.to_owned(),
+            base_url_env: base_url_from_env,
         }
     }
 
@@ -66,13 +72,14 @@ impl ClawRouterProvider {
         let mut provider = Self::new();
         provider.client = Some(client);
         provider.default_base_url = default_base_url.to_owned();
+        provider.base_url_env = || None;
         provider
     }
 
     async fn fetch_api(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         // Validate the endpoint before touching the keyring or environment so
         // a malformed or plain-HTTP override never receives the key.
-        let url = match configured_base_url(ctx) {
+        let url = match configured_base_url(ctx, self.base_url_env) {
             Some(raw) => usage_url(&raw)?,
             None => default_usage_url(&self.default_base_url)?,
         };
@@ -134,27 +141,38 @@ impl Provider for ClawRouterProvider {
     fn available_sources(&self) -> Vec<SourceMode> {
         vec![SourceMode::Auto, SourceMode::OAuth]
     }
+
+    /// A rejected key (HTTP 401/403) is a sign-in gate, matching upstream's
+    /// `authenticationExpired`; other `Other` errors keep the default mapping.
+    fn error_state_kind(&self, error: &ProviderError) -> ProviderStateKind {
+        match error {
+            ProviderError::Other(message) if message == REJECTED_KEY_MESSAGE => {
+                ProviderStateKind::NeedsAuthentication
+            }
+            _ => error.state_kind(),
+        }
+    }
 }
 
 /// The saved Base URL, then `CLAWROUTER_BASE_URL`; `None` selects the hosted service.
-fn configured_base_url(ctx: &FetchContext) -> Option<String> {
+fn configured_base_url(ctx: &FetchContext, env: fn() -> Option<String>) -> Option<String> {
     ctx.gateway_url
         .clone()
         .filter(|url| !url.trim().is_empty())
-        .or_else(|| {
-            std::env::var(BASE_URL_ENV)
-                .ok()
-                .filter(|url| !url.trim().is_empty())
-        })
+        .or_else(|| env().filter(|url| !url.trim().is_empty()))
+}
+
+fn base_url_from_env() -> Option<String> {
+    std::env::var(BASE_URL_ENV).ok()
 }
 
 /// Classify a non-success status without reading or echoing the body.
 fn check_status(status: StatusCode) -> Result<(), ProviderError> {
     let code = status.as_u16();
     match status {
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(ProviderError::Other(
-            "ClawRouter rejected the API key. Check the key and its policy status.".into(),
-        )),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+            Err(ProviderError::Other(REJECTED_KEY_MESSAGE.into()))
+        }
         _ if status.is_success() => Ok(()),
         _ => Err(ProviderError::Other(format!(
             "ClawRouter API returned HTTP {code}."
