@@ -665,6 +665,17 @@ impl From<RawSettings> for Settings {
                 .avoid_keychain_prompts = true;
         }
 
+        for config in provider_configs.values_mut() {
+            config.quota_warnings = config.quota_warnings.normalized();
+        }
+        // Migration #5: legacy per-provider threshold overrides move into
+        // `provider_configs.<id>.quota_warnings`; only the new key is saved.
+        let legacy_usage_thresholds_pending = !raw.provider_usage_thresholds.is_empty();
+        super::types::migrate_legacy_usage_thresholds(
+            &mut provider_configs,
+            raw.provider_usage_thresholds,
+        );
+
         let low_power_mode_preference = match raw.low_power_mode_preference {
             // A legacy writer may know only the boolean and leave the new field
             // at its serialized default. Preserve the previously enabled state.
@@ -695,9 +706,6 @@ impl From<RawSettings> for Settings {
             notification_sound_theme: raw.notification_sound_theme,
             high_usage_threshold: raw.high_usage_threshold,
             critical_usage_threshold: raw.critical_usage_threshold,
-            provider_usage_thresholds: normalize_usage_threshold_overrides(
-                raw.provider_usage_thresholds,
-            ),
             merge_tray_icons: raw.merge_tray_icons,
             tray_icon_mode: raw.tray_icon_mode,
             stacked_tray_top_provider: raw
@@ -796,6 +804,7 @@ impl From<RawSettings> for Settings {
             hide_native_codex_cost_when_open_codex_present: raw
                 .hide_native_codex_cost_when_open_codex_present,
             codex_external_oauth_sources_allowed: raw.codex_external_oauth_sources_allowed,
+            legacy_usage_thresholds_pending,
             cost_reporting_period: raw.cost_reporting_period,
             cost_usage_bucket_time_zone: super::normalize_cost_usage_bucket_time_zone(
                 &raw.cost_usage_bucket_time_zone,

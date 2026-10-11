@@ -1,7 +1,5 @@
 use super::*;
-use crate::settings::{
-    Language, ProviderConfig, ThemePreference, TrayIconMode, UsageThresholdOverride,
-};
+use crate::settings::{Language, ProviderConfig, ThemePreference, TrayIconMode};
 use serde_json::json;
 use std::collections::BTreeMap;
 
@@ -82,13 +80,6 @@ fn customized_settings() -> Settings {
         ..Settings::default()
     };
     settings.enabled_providers = ["claude", "codex", "zai"].map(String::from).into();
-    settings.provider_usage_thresholds.insert(
-        "codex:weekly".to_string(),
-        UsageThresholdOverride {
-            high: Some(60.0),
-            critical: None,
-        },
-    );
     settings.provider_metrics.insert(
         "claude".to_string(),
         crate::settings::MetricPreference::Weekly,
@@ -200,13 +191,6 @@ fn export_skips_provider_preferences_unknown_to_this_build() {
         "future-provider".to_string(),
         crate::settings::MetricPreference::Weekly,
     );
-    settings.provider_usage_thresholds.insert(
-        "future-provider:weekly".to_string(),
-        UsageThresholdOverride {
-            high: Some(65.0),
-            critical: None,
-        },
-    );
 
     let exported = PreferencesDocument::from_settings(&settings)
         .expect("stale provider IDs do not prevent export");
@@ -225,17 +209,32 @@ fn export_skips_provider_preferences_unknown_to_this_build() {
             .get("future-provider")
             .is_none()
     );
-    assert!(
-        preferences["provider_usage_thresholds"]
-            .get("future-provider:weekly")
-            .is_none()
-    );
     assert!(preferences["provider_metrics"].get("claude").is_some());
-    assert!(
-        preferences["provider_usage_thresholds"]
-            .get("codex:weekly")
-            .is_some()
-    );
+    // Per-provider quota warnings live in `provider_configs`, which is not
+    // portable, so the legacy threshold key is no longer exported.
+    assert!(preferences.get("provider_usage_thresholds").is_none());
+}
+
+#[test]
+fn importing_legacy_threshold_overrides_migrates_them_to_quota_warnings() {
+    let mut settings = Settings::default();
+    parse(json!({
+        "provider_usage_thresholds": {
+            "codex:session": { "high": 55 },
+            "claude": { "critical": 97 }
+        }
+    }))
+    .expect("legacy key still validates")
+    .apply_to(&mut settings)
+    .expect("apply");
+
+    let codex = settings.quota_warnings(crate::core::ProviderId::Codex);
+    assert_eq!(codex.session.high, Some(55.0));
+    assert!(codex.weekly.is_global());
+    let claude = settings.quota_warnings(crate::core::ProviderId::Claude);
+    assert_eq!(claude.session.critical, Some(97.0));
+    assert_eq!(claude.weekly.critical, Some(97.0));
+    assert_eq!(claude.weekly.high, None);
 }
 
 #[test]
@@ -555,7 +554,6 @@ fn null_restores_the_default() {
     assert_eq!(settings.window_scale_percent, defaults.window_scale_percent);
     assert_eq!(settings.theme, defaults.theme);
     assert_eq!(settings.enabled_providers, defaults.enabled_providers);
-    assert!(settings.provider_usage_thresholds.is_empty());
     assert!(settings.provider_metrics.is_empty());
     assert!(settings.provider_order.is_empty());
     assert!(settings.show_pace);

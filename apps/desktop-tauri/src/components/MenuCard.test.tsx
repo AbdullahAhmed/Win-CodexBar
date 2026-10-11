@@ -1200,14 +1200,15 @@ describe("MenuCard", () => {
   it.each([
     ["global thresholds on a % left bar", false, {}, ["5%", "20%"]],
     ["global thresholds on a % used bar", true, {}, ["80%", "95%"]],
-    ["a provider session override", false, { "claude:session": { high: 60 } }, ["5%", "40%"]],
+    ["a Custom session quota warning", false, { claude: { session: { high: 60 } } }, ["5%", "40%"]],
+    ["a session quota warning set to Off", false, { claude: { session: { enabled: false } } }, []],
   ])("draws quota warning markers from %s", async (_case, showAsUsed, overrides, expected) => {
     const { container } = renderCard(provider(null, 30), {
       showAsUsed,
       usageThresholds: {
         highUsageThreshold: 80,
         criticalUsageThreshold: 95,
-        providerUsageThresholds: overrides,
+        providerQuotaWarnings: overrides,
       },
     });
 
@@ -1218,7 +1219,9 @@ describe("MenuCard", () => {
       ),
     ).toEqual(expected);
     expect(container.querySelector(".menu-metric__progress")?.getAttribute("aria-valuetext")).toBe(
-      `${showAsUsed ? 30 : 70}%. Quota warnings: ${expected.join(", ")}`,
+      expected.length
+        ? `${showAsUsed ? 30 : 70}%. Quota warnings: ${expected.join(", ")}`
+        : `${showAsUsed ? 30 : 70}%`,
     );
   });
 

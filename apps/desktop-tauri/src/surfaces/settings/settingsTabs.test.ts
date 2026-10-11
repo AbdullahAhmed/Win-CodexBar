@@ -11,6 +11,7 @@ import {
   parseSettingsTabRequest,
   providersTabRequest,
   sortProvidersAlphabetically,
+  nextEnabledProviders,
 } from "./settingsTabs";
 
 describe("isSettingsTab", () => {
@@ -180,5 +181,23 @@ describe("canReorderProviders", () => {
     expect(canReorderProviders(false, "  ")).toBe(true);
     expect(canReorderProviders(true, "")).toBe(false);
     expect(canReorderProviders(false, "cl")).toBe(false);
+  });
+});
+
+describe("nextEnabledProviders", () => {
+  const catalog = [{ id: "codex" }, { id: "claude" }, { id: "cursor" }];
+
+  it("adds a provider in catalog order", () => {
+    expect(nextEnabledProviders(catalog, ["cursor", "codex"], "claude", true)).toEqual([
+      "codex",
+      "claude",
+      "cursor",
+    ]);
+  });
+
+  it("removes a provider and drops ids missing from the catalog", () => {
+    expect(nextEnabledProviders(catalog, ["codex", "gone", "cursor"], "codex", false)).toEqual([
+      "cursor",
+    ]);
   });
 });

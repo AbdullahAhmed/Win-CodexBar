@@ -49,6 +49,13 @@ pub enum PreferencesError {
 
 type Validator = fn(&Value) -> bool;
 
+/// Legacy keys accepted on import only. They are no longer `Settings` fields;
+/// the settings loader migrates them, so they are never exported.
+const IMPORT_ONLY_PREFERENCES: &[(&str, Validator)] = &[
+    // Migration #5: folded into `provider_configs.<id>.quota_warnings`.
+    ("provider_usage_thresholds", provider_usage_thresholds),
+];
+
 /// Portable keys, named after the `Settings` fields, with their validators.
 const ALLOWED_PREFERENCES: &[(&str, Validator)] = &[
     ("refresh_interval_secs", refresh_interval_secs),
@@ -63,7 +70,6 @@ const ALLOWED_PREFERENCES: &[(&str, Validator)] = &[
     ("sound_enabled", typed::<bool>),
     ("high_usage_threshold", percent),
     ("critical_usage_threshold", percent),
-    ("provider_usage_thresholds", provider_usage_thresholds),
     ("predictive_pace_warning_enabled", typed::<bool>),
     ("show_pace", typed::<bool>),
     ("show_as_used", typed::<bool>),
@@ -320,7 +326,11 @@ impl PreferencesDocument {
 
     fn validated(preferences: Map<String, Value>) -> Result<Self, PreferencesError> {
         for (key, value) in &preferences {
-            let Some((_, valid)) = ALLOWED_PREFERENCES.iter().find(|(name, _)| name == key) else {
+            let Some((_, valid)) = ALLOWED_PREFERENCES
+                .iter()
+                .chain(IMPORT_ONLY_PREFERENCES)
+                .find(|(name, _)| name == key)
+            else {
                 return Err(invalid(key));
             };
             if !value.is_null() && !valid(value) {
@@ -356,12 +366,6 @@ impl PreferencesDocument {
         }
         if let Some(Value::Object(metrics)) = preferences.get_mut("provider_metrics") {
             metrics.retain(|provider, _| known.contains(provider.as_str()));
-        }
-        if let Some(Value::Object(thresholds)) = preferences.get_mut("provider_usage_thresholds") {
-            thresholds.retain(|key, _| {
-                let provider = key.split_once(':').map_or(key.as_str(), |(id, _)| id);
-                known.contains(provider)
-            });
         }
         if let Some(Value::Array(ids)) = preferences.get_mut("enabled_providers") {
             // `enabled_providers` is a set; keep exports deterministic.

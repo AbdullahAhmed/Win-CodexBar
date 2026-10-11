@@ -145,6 +145,7 @@ fn main() {
     let force_start_visible = std::env::var_os("CODEXBAR_START_VISIBLE").is_some();
     let mut settings = codexbar::settings::Settings::load();
     settings.apply_display_mode_fold_migration();
+    settings.apply_quota_warning_migration();
     let launch = launch_behavior(
         force_start_visible,
         settings.start_minimized,

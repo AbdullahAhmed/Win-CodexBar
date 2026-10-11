@@ -30,12 +30,17 @@ export function ClaudeAccountsSection({
   hidePersonalInfo = false,
   showAsUsed = false,
   resetTimeRelative = true,
+  claudeSwapEnabled = false,
+  claudeSwapExecutablePath = "",
 }: {
   t: (key: LocaleKey) => string;
   language?: Language;
   hidePersonalInfo?: boolean;
   showAsUsed?: boolean;
   resetTimeRelative?: boolean;
+  /** Settings `claudeSwapEnabled`; the claude-swap list renders only while on. */
+  claudeSwapEnabled?: boolean;
+  claudeSwapExecutablePath?: string;
 }) {
   const [accounts, setAccounts] = useState<ClaudeAccount[]>([]);
   const [busy, setBusy] = useState(false);
@@ -205,7 +210,12 @@ export function ClaudeAccountsSection({
           </button>
         )}
       </section>
-      <ClaudeSwapAccountsSection t={t} language={language} />
+      <ClaudeSwapAccountsSection
+        t={t}
+        language={language}
+        enabled={claudeSwapEnabled}
+        executablePath={claudeSwapExecutablePath}
+      />
     </>
   );
 }
