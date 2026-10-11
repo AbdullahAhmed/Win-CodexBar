@@ -243,11 +243,9 @@ fn subtract_one_calendar_month(dt: DateTime<Utc>) -> Option<DateTime<Utc>> {
     let (py, pm) = if m == 1 { (y - 1, 12) } else { (y, m - 1) };
     let max_day = days_in_month(py, pm);
     let day = dt.day().min(max_day);
-    dt.date_naive()
-        .with_year(py)?
-        .with_month(pm)?
-        .with_day(day)
-        .map(|d| d.and_time(dt.time()).and_utc())
+    // Build the date in one step: chaining `with_month` on the 29th-31st fails
+    // when the previous month is shorter (Mar 31 -> Feb 31).
+    chrono::NaiveDate::from_ymd_opt(py, pm, day).map(|d| d.and_time(dt.time()).and_utc())
 }
 
 fn days_in_month(year: i32, month: u32) -> u32 {
@@ -374,6 +372,28 @@ mod tests {
             Some(31 * 24 * 60)
         );
         assert_eq!(RateWindow::monthly_window_minutes(None), None);
+    }
+
+    #[test]
+    fn calendar_month_window_clamps_the_day_into_a_shorter_month() {
+        // Mar 31 minus one month is Feb 28 (Foundation clamps the day): 31 days.
+        let resets = Utc.with_ymd_and_hms(2026, 3, 31, 0, 0, 0).unwrap();
+        assert_eq!(
+            RateWindow::calendar_month_window_minutes(resets),
+            Some(44_640)
+        );
+        // May 31 minus one month is Apr 30: 31 days.
+        let resets = Utc.with_ymd_and_hms(2026, 5, 31, 12, 0, 0).unwrap();
+        assert_eq!(
+            RateWindow::calendar_month_window_minutes(resets),
+            Some(44_640)
+        );
+        // Mar 30 2028 minus one month is Feb 29 (leap year): 30 days.
+        let resets = Utc.with_ymd_and_hms(2028, 3, 30, 0, 0, 0).unwrap();
+        assert_eq!(
+            RateWindow::calendar_month_window_minutes(resets),
+            Some(43_200)
+        );
     }
 
     #[test]
