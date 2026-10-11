@@ -1306,6 +1306,42 @@ describe("MenuCard", () => {
     expect(container.querySelector(".card-extra__track")).toBeNull();
   });
 
+  it("drops a balance-only cost row when the detail sections already show that balance", async () => {
+    tauriMocks.getLocaleStrings.mockResolvedValue(
+      buildBundle({ ExtraUsage: "Extra usage", DetailCostBalance: "Balance" }),
+    );
+    const snapshot = provider(null, 20);
+    snapshot.cost = {
+      used: 17.25,
+      limit: null,
+      remaining: null,
+      currencyCode: "USD",
+      period: "Team credits",
+      resetsAt: null,
+      formattedUsed: "$17.25",
+      formattedLimit: null,
+      balance: 42.5,
+      formattedBalance: null,
+    };
+    snapshot.displayDetails = [
+      {
+        id: "team-balance",
+        sectionTitle: "Team credits",
+        title: "Available balance",
+        value: "$42.50",
+        secondaryValue: null,
+        progress: null,
+      },
+    ];
+
+    const { container } = renderCard(snapshot);
+
+    expect(await screen.findByText("$42.50")).toBeInTheDocument();
+    expect(screen.getAllByText(/\$42\.50/)).toHaveLength(1);
+    expect(screen.queryByText("Extra usage")).not.toBeInTheDocument();
+    expect(container.querySelector(".card-extra")).toBeNull();
+  });
+
   it("localizes the relative updated-at time in Japanese without duplicated prefix", async () => {
     tauriMocks.getLocaleStrings.mockResolvedValue(
       buildBundle({

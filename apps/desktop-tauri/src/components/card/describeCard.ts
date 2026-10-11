@@ -3,6 +3,7 @@ import type {
   ProviderChartData,
   ProviderUsageSnapshot,
 } from "../../types/bridge";
+import { formatCostAmount } from "../../lib/cardCost";
 import type { MetricEntry } from "./CardMetricRow";
 
 export interface MenuCardPresence {
@@ -13,6 +14,20 @@ export interface MenuCardPresence {
   localUsage: ProviderChartData["localUsage"] | null;
   wayfinderUsage: ProviderUsageSnapshot["wayfinderUsage"] | null;
   hasDetails: boolean;
+}
+
+/**
+ * A cost that carries only a balance (no cap, not a spend summary) adds
+ * nothing when a provider detail row already shows that balance. Upstream
+ * has no cost block for such providers, so the card keeps the detail row.
+ */
+function balanceRepeatsDetail(provider: ProviderUsageSnapshot): boolean {
+  const cost = provider.cost;
+  if (!cost || cost.balance == null || (cost.limit ?? 0) > 0 || cost.alwaysVisible === true) {
+    return false;
+  }
+  const balance = cost.formattedBalance || formatCostAmount(cost.balance, cost.currencyCode);
+  return (provider.displayDetails ?? []).some((detail) => detail.value.trim() === balance);
 }
 
 /**
@@ -34,7 +49,8 @@ export function describeCard(
   const hasCost =
     !hasError &&
     !!provider.cost &&
-    (costSummaryDisplayStyle !== "hidden" || provider.cost.alwaysVisible === true);
+    (costSummaryDisplayStyle !== "hidden" || provider.cost.alwaysVisible === true) &&
+    !balanceRepeatsDetail(provider);
   const localUsage = hasError ? null : chartData?.localUsage ?? null;
   const wayfinderUsage =
     !hasError && provider.providerId === "wayfinder" ? provider.wayfinderUsage ?? null : null;
