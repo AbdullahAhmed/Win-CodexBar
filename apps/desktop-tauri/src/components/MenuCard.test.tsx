@@ -104,6 +104,7 @@ function renderCard(
     costSummaryDisplayStyle?: "compact" | "detailed" | "hidden";
     usageThresholds?: UsageThresholdSettings | null;
     weeklyProgressWorkDays?: number | null;
+    hideEmail?: boolean;
   } = {},
 ) {
   return render(
@@ -111,7 +112,7 @@ function renderCard(
       <MenuCard
         provider={snapshot}
         display={{
-          hideEmail: false,
+          hideEmail: opts.hideEmail ?? false,
           resetTimeRelative: true,
           showAsUsed: opts.showAsUsed,
           showResetWhenExhausted: opts.showResetWhenExhausted,
@@ -128,6 +129,25 @@ function renderCard(
 }
 
 describe("MenuCard", () => {
+  it("masks the header email under Hide Personal Info", async () => {
+    const snapshot = { ...provider(null, 20), accountEmail: "parity.user@example.com" };
+    const { container, unmount } = renderCard(snapshot, { hideEmail: true });
+    await waitFor(() =>
+      expect(container.querySelector(".card-header__email")).toHaveTextContent(
+        "p••••••••••@example.com",
+      ),
+    );
+    expect(container.textContent).not.toContain("parity.user@");
+    unmount();
+
+    const shown = renderCard(snapshot);
+    await waitFor(() =>
+      expect(shown.container.querySelector(".card-header__email")).toHaveTextContent(
+        "parity.user@example.com",
+      ),
+    );
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     tauriMocks.claudeAccountsList.mockResolvedValue([]);
