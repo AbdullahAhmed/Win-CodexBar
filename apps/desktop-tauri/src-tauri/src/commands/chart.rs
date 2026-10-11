@@ -708,7 +708,7 @@ pub(crate) async fn refresh_provider_local_usage_cache(provider_ids: Vec<String>
             .await
             .unwrap_or(summary);
         }
-        store_local_usage_summary(&provider_id, summary);
+        store_local_usage_summary_if_tracking(&provider_id, summary);
     }
 }
 
@@ -748,8 +748,29 @@ fn load_local_usage_summary_cached(
         return None;
     }
 
-    store_local_usage_summary(provider_id, summary.clone());
+    store_local_usage_summary_if_tracking(provider_id, summary.clone());
     summary
+}
+
+/// A scan can outlive a "Track costs" off switch, which clears the cache; drop
+/// its result rather than refill the cache that the PowerToys pipe reads.
+fn store_local_usage_summary_if_tracking(
+    provider_id: &str,
+    summary: Option<ProviderLocalUsageSummary>,
+) {
+    let tracking = summary.is_none() || cost_tracking_enabled();
+    store_scanned_local_usage_summary(provider_id, summary, tracking);
+}
+
+fn store_scanned_local_usage_summary(
+    provider_id: &str,
+    summary: Option<ProviderLocalUsageSummary>,
+    cost_tracking_enabled: bool,
+) {
+    if summary.is_some() && !cost_tracking_enabled {
+        return;
+    }
+    store_local_usage_summary(provider_id, summary);
 }
 
 fn store_local_usage_summary(provider_id: &str, summary: Option<ProviderLocalUsageSummary>) {
