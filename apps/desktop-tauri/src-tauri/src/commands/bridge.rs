@@ -395,6 +395,24 @@ impl ProviderUsageSnapshot {
         token_account_id: Option<uuid::Uuid>,
         pace_work_days: Option<u8>,
     ) -> Self {
+        Self::from_fetch_result_at(
+            id,
+            metadata,
+            result,
+            token_account_id,
+            pace_work_days,
+            chrono::Utc::now(),
+        )
+    }
+
+    pub(super) fn from_fetch_result_at(
+        id: ProviderId,
+        metadata: &ProviderMetadata,
+        result: &ProviderFetchResult,
+        token_account_id: Option<uuid::Uuid>,
+        pace_work_days: Option<u8>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
         let usage = &result.usage;
         let allows_pace = result.pace_authoritative;
 
@@ -406,14 +424,21 @@ impl ProviderUsageSnapshot {
         } else {
             Some(&usage.primary)
         };
+        // Upstream `UsageStore.weeklyPace`: a window with a length expands a
+        // monthly sentinel to the real calendar cycle before scoring, so the
+        // tray agrees with the card.
         let primary_pace = allows_pace.then(|| {
             primary_pace_window.and_then(|window| {
-                codexbar::core::UsagePace::weekly(window, None, 10080, pace_work_days)
+                let pace_window = if window.window_minutes.is_some() {
+                    id.pace_capability().resolved_reset_window_for_pace(window)
+                } else {
+                    window.clone()
+                };
+                codexbar::core::UsagePace::weekly(&pace_window, Some(now), 10080, pace_work_days)
             })
         });
         let primary_pace = primary_pace.flatten();
 
-        let now = chrono::Utc::now();
         let blocked = BlockedWindows::evaluate(id, usage, now);
         let pace = primary_pace.as_ref().map(|p| PaceSnapshot {
             stage: pace::stage_str(p.stage).to_string(),
@@ -425,38 +450,54 @@ impl ProviderUsageSnapshot {
             monthly_limit_block: MonthlyLimitBlockSnapshot::for_pace(usage, &blocked),
         });
 
-        // Compute pace for secondary window (weekly) to derive reserve info
+        // Pace of the secondary lane, which also derives the row's reserve.
         let secondary_pace = allows_pace.then(|| {
-            usage
-                .secondary
-                .as_ref()
-                .and_then(|sw| codexbar::core::UsagePace::weekly(sw, None, 10080, pace_work_days))
+            usage.secondary.as_ref().and_then(|sw| {
+                pace::lane_usage_pace(
+                    id,
+                    pace::PaceLane::Card,
+                    sw,
+                    pace::WEEKLY_FALLBACK_MINUTES,
+                    now,
+                    pace_work_days,
+                )
+                .map(|(pace, _)| pace)
+            })
         });
         let secondary_pace = secondary_pace.flatten();
 
-        let lane =
-            |window: &RateWindow, is_blocked: bool, default_minutes: u32| RateWindowSnapshot {
-                pace: allows_pace
-                    .then(|| {
-                        pace::WindowPaceSnapshot::for_window(
-                            window,
-                            default_minutes,
-                            now,
-                            pace_work_days,
-                        )
-                    })
-                    .flatten(),
-                ..RateWindowSnapshot::from_rate_window(window)
-                    .with_quota_block(is_blocked, &blocked)
-            };
+        let lane = |window: &RateWindow,
+                    is_blocked: bool,
+                    default_minutes: u32,
+                    pace_lane: pace::PaceLane| RateWindowSnapshot {
+            pace: allows_pace
+                .then(|| {
+                    pace::WindowPaceSnapshot::for_lane(
+                        id,
+                        pace_lane,
+                        window,
+                        default_minutes,
+                        now,
+                        pace_work_days,
+                    )
+                })
+                .flatten(),
+            ..RateWindowSnapshot::from_rate_window(window).with_quota_block(is_blocked, &blocked)
+        };
         let primary_snap = lane(
             &usage.primary,
             blocked.primary,
             pace::SESSION_FALLBACK_MINUTES,
+            pace::PaceLane::Card,
         );
 
         let secondary_snap = usage.secondary.as_ref().map(|sw| {
-            let mut s = lane(sw, blocked.secondary, pace::WEEKLY_FALLBACK_MINUTES);
+            let mut s = lane(
+                sw,
+                blocked.secondary,
+                pace::WEEKLY_FALLBACK_MINUTES,
+                pace::PaceLane::Card,
+            );
             if let Some(ref p) = secondary_pace {
                 s = s.with_pace_reserve(p);
             }
@@ -498,14 +539,22 @@ impl ProviderUsageSnapshot {
                     .clone()
                     .unwrap_or_else(|| metadata.weekly_label.to_string())
             }),
-            model_specific: usage
-                .model_specific
-                .as_ref()
-                .map(|w| lane(w, blocked.model_specific, pace::WEEKLY_FALLBACK_MINUTES)),
-            tertiary: usage
-                .tertiary
-                .as_ref()
-                .map(|w| lane(w, blocked.tertiary, pace::WEEKLY_FALLBACK_MINUTES)),
+            model_specific: usage.model_specific.as_ref().map(|w| {
+                lane(
+                    w,
+                    blocked.model_specific,
+                    pace::WEEKLY_FALLBACK_MINUTES,
+                    pace::PaceLane::Card,
+                )
+            }),
+            tertiary: usage.tertiary.as_ref().map(|w| {
+                lane(
+                    w,
+                    blocked.tertiary,
+                    pace::WEEKLY_FALLBACK_MINUTES,
+                    pace::PaceLane::Card,
+                )
+            }),
             // F5 (upstream 0.48.0): label the tertiary lane by its duration cadence
             // so surfaces (MenuCard, CLI, tray) can show "Monthly" instead of the
             // generic "DetailWindowTertiary" slot key.
@@ -524,7 +573,12 @@ impl ProviderUsageSnapshot {
                 .map(|(extra, &is_blocked)| NamedRateWindowSnapshot {
                     id: extra.id.clone(),
                     title: extra.title.clone(),
-                    window: lane(&extra.window, is_blocked, pace::WEEKLY_FALLBACK_MINUTES),
+                    window: lane(
+                        &extra.window,
+                        is_blocked,
+                        pace::WEEKLY_FALLBACK_MINUTES,
+                        pace::PaceLane::Extra,
+                    ),
                     fallback_lane: extra.fallback_lane,
                     icon_fallback: extra.icon_fallback,
                 })

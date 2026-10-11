@@ -31,6 +31,41 @@ pub struct WindowPaceSnapshot {
     pub eta_seconds: Option<f64>,
     #[serde(default)]
     pub will_last_to_reset: bool,
+    /// Scored against the provider's reset window (upstream
+    /// `ProviderPaceCapability.resetWindowPace`): cards show it as weekly
+    /// pace on any card lane, whatever the window's length.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reset_window: bool,
+}
+
+/// Where a window is rendered. Reset-window pace applies to the card's
+/// primary, secondary and tertiary bars only, as on the Mac; extra windows
+/// keep plain lane pace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PaceLane {
+    Card,
+    Extra,
+}
+
+/// Pace of one window and whether it came from the provider's reset-window
+/// capability. The monthly sentinel and Copilot's missing length resolve to
+/// the calendar month ending at the reset before scoring.
+pub(crate) fn lane_usage_pace(
+    id: ProviderId,
+    lane: PaceLane,
+    window: &RateWindow,
+    default_window_minutes: u32,
+    now: DateTime<Utc>,
+    work_days: Option<u8>,
+) -> Option<(codexbar::core::UsagePace, bool)> {
+    let capability = id.pace_capability();
+    if lane == PaceLane::Card && capability.supports_reset_window_pace(window, now) {
+        return capability
+            .reset_window_pace(window, now, work_days)
+            .map(|pace| (pace, true));
+    }
+    codexbar::core::UsagePace::weekly(window, Some(now), default_window_minutes, work_days)
+        .map(|pace| (pace, false))
 }
 
 impl WindowPaceSnapshot {
@@ -49,14 +84,36 @@ impl WindowPaceSnapshot {
             default_window_minutes,
             work_days,
         )?;
-        Some(Self {
+        Some(Self::from_pace(&pace, false))
+    }
+
+    /// Lane pace with the provider's reset-window capability applied.
+    pub(crate) fn for_lane(
+        id: ProviderId,
+        lane: PaceLane,
+        window: &RateWindow,
+        default_window_minutes: u32,
+        now: DateTime<Utc>,
+        work_days: Option<u8>,
+    ) -> Option<Self> {
+        if window.is_informational {
+            return None;
+        }
+        let (pace, reset_window) =
+            lane_usage_pace(id, lane, window, default_window_minutes, now, work_days)?;
+        Some(Self::from_pace(&pace, reset_window))
+    }
+
+    fn from_pace(pace: &codexbar::core::UsagePace, reset_window: bool) -> Self {
+        Self {
             stage: stage_str(pace.stage).to_string(),
             delta_percent: pace.delta_percent,
             expected_used_percent: pace.expected_used_percent,
             actual_used_percent: pace.actual_used_percent,
             eta_seconds: pace.eta_seconds,
             will_last_to_reset: pace.will_last_to_reset,
-        })
+            reset_window,
+        }
     }
 }
 
@@ -109,6 +166,7 @@ mod tests {
                 actual_used_percent: 30.0,
                 eta_seconds: None,
                 will_last_to_reset: true,
+                reset_window: false,
             })
         );
     }
@@ -261,5 +319,153 @@ mod tests {
         // Each call reads the clock again, so compare within a small tolerance.
         assert!((expected(Some(7)) - linear).abs() < 0.01);
         assert!(expected(Some(5)) > linear);
+    }
+
+    // --- Reset-window pace (upstream `ProviderPaceCapability`) ---
+
+    /// Feb 15 00:00 UTC in a billing cycle that resets Mar 1 00:00 UTC:
+    /// 14 of the 28 February days have elapsed.
+    fn february_now() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 2, 15, 0, 0, 0).unwrap()
+    }
+
+    fn march_reset() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap()
+    }
+
+    fn monthly(used: f64, minutes: Option<u32>) -> RateWindow {
+        RateWindow::with_details(used, minutes, Some(march_reset()), None)
+    }
+
+    fn snapshot_at(id: ProviderId, usage: UsageSnapshot) -> ProviderUsageSnapshot {
+        let metadata = instantiate_provider(id).metadata().clone();
+        let result = ProviderFetchResult::new(usage, "web");
+        ProviderUsageSnapshot::from_fetch_result_at(
+            id,
+            &metadata,
+            &result,
+            None,
+            None,
+            february_now(),
+        )
+    }
+
+    fn lane_pace(window: &RateWindowSnapshot) -> &WindowPaceSnapshot {
+        window.pace.as_ref().expect("lane pace")
+    }
+
+    /// Copilot windows carry a reset date and no length. The Mac resolves
+    /// them to the calendar month ending at the reset (28 days here).
+    #[test]
+    fn copilot_monthly_lanes_get_reset_window_pace() {
+        let usage = UsageSnapshot::new(monthly(60.0, None))
+            .with_secondary(monthly(20.0, None))
+            .with_extra_rate_window("copilot-seat", "Seat credits", monthly(60.0, None));
+
+        let snap = snapshot_at(ProviderId::Copilot, usage);
+
+        let premium = lane_pace(&snap.primary);
+        assert_eq!(premium.expected_used_percent, 50.0);
+        assert_eq!(premium.delta_percent, 10.0);
+        assert_eq!(premium.stage, "ahead");
+        // 40% left at 60% per 14 days runs out in 9 days 8 hours.
+        assert!((premium.eta_seconds.expect("eta") - 806_400.0).abs() < 1e-6);
+        assert!(!premium.will_last_to_reset);
+        assert!(premium.reset_window);
+
+        let chat_snap = snap.secondary.as_ref().expect("chat");
+        let chat = lane_pace(chat_snap);
+        assert_eq!(chat.expected_used_percent, 50.0);
+        assert_eq!(chat.delta_percent, -30.0);
+        assert!(chat.will_last_to_reset);
+        assert!(chat.reset_window);
+        // The row's reserve comes from the same resolved pace.
+        assert_eq!(chat_snap.reserve_percent, Some(30.0));
+        assert!(chat_snap.reserve_will_last_to_reset);
+
+        // Extras keep plain lane pace, as on the Mac: a 14-day reset does not
+        // fit the 7-day fallback, so the seat-credit window shows none.
+        assert_eq!(snap.extra_rate_windows[0].window.pace, None);
+        // The provider-level pace (tray colour) needs a window length, as
+        // upstream `UsageStore.weeklyPace` does, so it stays unset here.
+        assert!(snap.pace.is_none());
+    }
+
+    /// Cursor's plan bars carry the billing-cycle length; the API bar is the
+    /// model-specific lane, which the card renders on the tertiary lane.
+    #[test]
+    fn cursor_plan_lanes_get_reset_window_pace_including_the_api_bar() {
+        let mut usage = UsageSnapshot::new(monthly(30.0, Some(40_320)))
+            .with_secondary(monthly(70.0, Some(40_320)));
+        usage.model_specific = Some(monthly(10.0, Some(40_320)));
+
+        let snap = snapshot_at(ProviderId::Cursor, usage);
+
+        let total = lane_pace(&snap.primary);
+        assert_eq!(total.expected_used_percent, 50.0);
+        assert_eq!(total.delta_percent, -20.0);
+        assert!(total.reset_window);
+        let auto = lane_pace(snap.secondary.as_ref().expect("auto"));
+        assert_eq!(auto.delta_percent, 20.0);
+        assert!(auto.reset_window);
+        let api = lane_pace(snap.model_specific.as_ref().expect("api"));
+        assert_eq!(api.expected_used_percent, 50.0);
+        assert_eq!(api.delta_percent, -40.0);
+        assert!(api.reset_window);
+        let provider_pace = snap.pace.as_ref().expect("provider pace");
+        assert_eq!(provider_pace.expected_used_percent, 50.0);
+    }
+
+    /// A 30-day sentinel resolves to February's 28 days: 50% expected, not
+    /// the flat-30-day 53.33%. The provider-level pace resolves too.
+    #[test]
+    fn notion_sentinel_window_is_scored_against_the_real_month() {
+        let usage = UsageSnapshot::new(monthly(50.0, Some(43_200)));
+
+        let snap = snapshot_at(ProviderId::Notion, usage);
+
+        let pace = lane_pace(&snap.primary);
+        assert_eq!(pace.expected_used_percent, 50.0);
+        assert_eq!(pace.delta_percent, 0.0);
+        assert_eq!(pace.stage, "on_track");
+        assert!(pace.reset_window);
+        let provider_pace = snap.pace.as_ref().expect("provider pace");
+        assert_eq!(provider_pace.expected_used_percent, 50.0);
+    }
+
+    /// Providers upstream does not opt in keep the existing flat window.
+    #[test]
+    fn providers_without_reset_window_pace_keep_the_raw_window() {
+        let usage =
+            UsageSnapshot::new(RateWindow::new(10.0)).with_secondary(monthly(50.0, Some(43_200)));
+
+        let snap = snapshot_at(ProviderId::Claude, usage);
+
+        let pace = lane_pace(snap.secondary.as_ref().expect("weekly lane"));
+        assert!((pace.expected_used_percent - 160.0 / 3.0).abs() < 1e-9);
+        assert!(!pace.reset_window);
+    }
+
+    #[test]
+    fn exhausted_reset_window_has_no_pace() {
+        let usage = UsageSnapshot::new(monthly(100.0, None));
+
+        let snap = snapshot_at(ProviderId::Copilot, usage);
+
+        assert_eq!(snap.primary.pace, None);
+    }
+
+    #[test]
+    fn reset_window_flag_serializes_only_when_set() {
+        let usage = UsageSnapshot::new(monthly(60.0, None));
+        let snap = snapshot_at(ProviderId::Copilot, usage);
+
+        let json = serde_json::to_value(snap.primary.pace.as_ref().unwrap()).unwrap();
+        assert_eq!(json["resetWindow"], serde_json::Value::Bool(true));
+        let cached: WindowPaceSnapshot = serde_json::from_str(
+            r#"{"stage":"on_track","deltaPercent":0.0,"expectedUsedPercent":50.0,"actualUsedPercent":50.0}"#,
+        )
+        .unwrap();
+        assert!(!cached.reset_window);
     }
 }
