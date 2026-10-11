@@ -840,6 +840,8 @@ export interface WayfinderUsageSnapshot {
   unit: string;
   priced: boolean;
   routes: WayfinderRouteSummary[];
+  /** Mean router decision latency in ms, from the gateway's /metrics. */
+  avgDecisionMs?: number;
 }
 
 /** Line item cost for one UTC day; descending by cost, then name. */
