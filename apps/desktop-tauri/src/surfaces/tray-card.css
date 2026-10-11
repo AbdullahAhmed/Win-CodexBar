@@ -480,6 +480,12 @@
   overflow-wrap: anywhere;
 }
 
+/* The percent stays whole on the right while a long spend line wraps. */
+.menu-surface--tray .card-extra__line > .card-extra__caption {
+  flex: none;
+  white-space: nowrap;
+}
+
 /* ── Provider switcher (spec 3.1): radius 6, accent selection, instant hover ── */
 .menu-surface--tray .provider-grid__item {
   position: relative;
