@@ -33,6 +33,11 @@ const LANE_POLICY: Record<MetricLane, LanePolicy> = {
   extra: { thresholdWindow: null, workdayTicks: false, pace: "exactWindow" },
 };
 
+/** The quota warning window a lane follows (`null` for extra windows), as notifications do. */
+export function quotaWarningWindowForLane(lane: MetricLane): "session" | "weekly" | null {
+  return LANE_POLICY[lane].thresholdWindow;
+}
+
 const PACE_DIRECTION: Record<PaceStage, "onPace" | "deficit" | "reserve"> = {
   on_track: "onPace",
   slightly_ahead: "deficit",

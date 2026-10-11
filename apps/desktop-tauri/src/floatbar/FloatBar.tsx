@@ -24,17 +24,42 @@ import { costPeriodShortLabel } from "../lib/costPeriod";
 import { describeProviderState } from "../lib/providerState";
 import { resetDescriptionFallback, windowDetailText } from "../lib/usageWindows";
 import { localizeProviderText } from "../lib/providerText";
+import { type MetricLane, quotaWarningWindowForLane } from "../lib/metricRowModel";
 import { type QuotaWarningSettings, resolveQuotaWarning } from "../lib/quotaWarnings";
 import type {
   BootstrapState,
   ProviderLocalUsageSummary,
   ProviderUsageSnapshot,
+  RateWindowSnapshot,
   SettingsSnapshot,
 } from "../types/bridge";
 import { FLOAT_BAR_CONFIG_CHANGED_EVENT, resizeFloatBar } from "./api";
 import "./FloatBar.css";
 
-const WEEK_MINUTES = 7 * 24 * 60;
+function sameWindow(a: RateWindowSnapshot, b: RateWindowSnapshot): boolean {
+  return (
+    a.usedPercent === b.usedPercent &&
+    a.windowMinutes === b.windowMinutes &&
+    a.resetsAt === b.resetsAt &&
+    a.resetDescription === b.resetDescription &&
+    a.isExhausted === b.isExhausted &&
+    a.isInformational === b.isInformational
+  );
+}
+
+/**
+ * The card lane the selected metric came from, so the pill tone follows the
+ * same quota warning window as the card markers and the toasts (primary is
+ * Session, secondary and tertiary are Weekly). `null` for a window that is not
+ * one of the three lanes, such as an icon fallback extra window.
+ */
+function selectedMetricLane(provider: ProviderUsageSnapshot): MetricLane | null {
+  const selected = provider.selectedMetric;
+  if (sameWindow(selected, provider.primary)) return "primary";
+  if (provider.secondary && sameWindow(selected, provider.secondary)) return "secondary";
+  if (provider.tertiary && sameWindow(selected, provider.tertiary)) return "tertiary";
+  return null;
+}
 
 function ResetIcon({ size }: { size: number }) {
   return (
@@ -229,12 +254,17 @@ function ProviderPill({
   const displayPercent = showAsUsed ? used : remaining;
   const displaySuffix = showAsUsed ? usedSuffix : remainingSuffix;
   const state = describeProviderState(provider.errorState);
-  // Tone follows this provider's quota warning thresholds for the shown window.
-  const warning = resolveQuotaWarning(
-    thresholds,
-    provider.providerId,
-    (rateWindow.windowMinutes ?? 0) >= WEEK_MINUTES ? "weekly" : "session",
-  );
+  // Tone follows this provider's quota warning thresholds for the shown lane;
+  // a window outside the lanes keeps the global thresholds.
+  const lane = selectedMetricLane(provider);
+  const warningWindow = lane ? quotaWarningWindowForLane(lane) : null;
+  const warning = warningWindow
+    ? resolveQuotaWarning(thresholds, provider.providerId, warningWindow)
+    : {
+        enabled: true,
+        high: thresholds.highUsageThreshold,
+        critical: thresholds.criticalUsageThreshold,
+      };
   // A window set to Off keeps only the exhausted tone.
   const highRemaining = warning.enabled ? 100 - warning.high : -1;
   const critRemaining = warning.enabled ? 100 - warning.critical : -1;
