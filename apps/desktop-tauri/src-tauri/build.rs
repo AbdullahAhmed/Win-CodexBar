@@ -7,8 +7,15 @@ fn main() {
 
 /// Expose the UTC build date as `CODEXBAR_BUILD_DATE` (YYYY-MM-DD) for the
 /// About pane. `SOURCE_DATE_EPOCH` pins it for reproducible builds.
+///
+/// `tauri_build` registers its own rerun triggers, so Cargo would otherwise
+/// keep this script's first date across later incremental builds. Rerunning
+/// when the shell or `codexbar` sources change keeps the date current; those
+/// changes recompile this crate anyway.
 fn emit_build_date() {
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
+    println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed=../../../rust/src");
     let seconds = std::env::var("SOURCE_DATE_EPOCH")
         .ok()
         .and_then(|value| value.trim().parse::<u64>().ok())
