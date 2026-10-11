@@ -383,53 +383,6 @@ html {
 }
 
 /* tab bar */
-.settings-tabs {
-  display: flex;
-  gap: 1px;
-  padding: 2px;
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.06);
-  margin-bottom: 16px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.settings-tabs::-webkit-scrollbar {
-  display: none;
-}
-
-.settings-tab {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 5px 12px;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 0.78rem;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.settings-tab:hover {
-  color: var(--text-primary);
-}
-
-.settings-tab--active {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--text-primary);
-  font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-}
-
-.settings-tab__icon {
-  font-size: 1rem;
-}
 
 /* status strip */
 .settings-status {
@@ -1957,152 +1910,7 @@ body:has(.tray-panel-reveal),
   color: var(--provider-brand, var(--accent));
 }
 
-/* ── Providers sidebar (Phase 6a) ─────────────────────────────────── */
-
-.providers-sidebar-shell {
-  width: 244px;
-  flex-shrink: 0;
-  background: rgba(255, 255, 255, 0.03);
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.04);
-  height: 100%;
-  min-height: 0;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.providers-sidebar-search {
-  position: relative;
-  padding: 8px 10px 6px;
-}
-
-.providers-sidebar-search__input {
-  width: 100%;
-  height: 30px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.20);
-  color: var(--text);
-  font-size: var(--font-body);
-  outline: none;
-  padding: 0 30px 0 10px;
-}
-
-.providers-sidebar-search__input:focus-visible {
-  border-color: var(--provider-row-border-selected);
-  box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.22);
-}
-
-.providers-sidebar-search__clear {
-  position: absolute;
-  right: 16px;
-  top: 13px;
-  width: 20px;
-  height: 20px;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 1rem;
-  line-height: 1;
-}
-
-.providers-sidebar-search__clear:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
-}
-
-.providers-sidebar {
-  flex: 1;
-  min-height: 0;
-  box-sizing: border-box;
-  overflow-y: auto;
-  overscroll-behavior-y: contain;
-  scrollbar-width: auto;
-  scrollbar-color: rgba(255, 255, 255, 0.45) rgba(255, 255, 255, 0.08);
-  list-style: none;
-  margin: 0;
-  padding: 4px 10px 20px 4px;
-  scroll-padding-bottom: 20px;
-}
-
-.providers-sidebar__empty {
-  padding: 16px 12px;
-  color: var(--muted);
-  font-size: var(--font-body);
-  text-align: center;
-}
-
-.providers-sidebar__row {
-  position: relative;
-  display: grid;
-  grid-template-columns: 8px 24px 1fr auto auto auto;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 16px 8px 10px;
-  border-radius: 8px;
-  cursor: pointer;
-  user-select: none;
-  border: 1px solid transparent;
-  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
-  outline: none;
-}
-
-.providers-sidebar__row:hover {
-  background: var(--provider-row-bg-hover);
-}
-
-.providers-sidebar__row:focus-visible {
-  border-color: var(--provider-row-border-selected);
-  box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.25);
-}
-
-.providers-sidebar__row--selected {
-  background: var(--provider-row-bg-selected);
-  border-color: var(--provider-row-border-selected);
-}
-
-.providers-sidebar__row--selected::before {
-  content: "";
-  position: absolute;
-  left: 2px;
-  top: 10px;
-  bottom: 10px;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--provider-row-accent-selected);
-}
-
-.providers-sidebar__row--disabled .providers-sidebar__name,
-.providers-sidebar__row--disabled .providers-sidebar__subtitle {
-  color: var(--provider-row-text-disabled);
-}
-
-.providers-sidebar__row--dragging {
-  opacity: 0.55;
-}
-
-.providers-sidebar__row--drop {
-  box-shadow: inset 0 2px 0 0 var(--provider-row-drop-outline);
-}
-
-.providers-sidebar__row--reveal {
-  animation: provider-sidebar-reveal 220ms ease-out both;
-}
-
-@keyframes provider-sidebar-reveal {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
+/* ── Providers sidebar status dot ──────────────────────────────────── */
 
 .providers-sidebar__status {
   width: 6px;
@@ -2136,109 +1944,6 @@ body:has(.tray-panel-reveal),
 @keyframes provider-sidebar-pulse {
   0%, 100% { opacity: 0.5; }
   50%      { opacity: 1; }
-}
-
-.providers-sidebar__text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  gap: 1px;
-}
-
-/* Long names and translated status lines ("Отключено — авто") wrap to a
-   second line instead of ellipsizing in the narrow sidebar; the row's
-   title attribute carries the full text if even two lines are not enough. */
-.providers-sidebar__name {
-  font-size: 0.88rem;
-  font-weight: 600;
-  color: var(--provider-row-text-primary);
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  overflow: hidden;
-  overflow-wrap: anywhere;
-}
-
-.providers-sidebar__subtitle-primary {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  overflow: hidden;
-  overflow-wrap: anywhere;
-}
-
-.providers-sidebar__subtitle {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  font-size: 0.72rem;
-  color: var(--provider-row-text-secondary);
-  line-height: 1.25;
-}
-
-.providers-sidebar__subtitle-secondary {
-  color: var(--provider-row-text-secondary);
-  opacity: 0.8;
-  font-variant-numeric: tabular-nums;
-}
-
-.providers-sidebar__handle {
-  opacity: 0;
-  font-size: 0.7rem;
-  color: var(--provider-row-text-secondary);
-  cursor: grab;
-  letter-spacing: -2px;
-  transition: opacity 120ms ease;
-}
-
-.providers-sidebar__row:hover .providers-sidebar__handle,
-.providers-sidebar__row--selected .providers-sidebar__handle,
-.providers-sidebar__row--dragging .providers-sidebar__handle {
-  opacity: 0.7;
-}
-
-.providers-sidebar__reorder-controls {
-  display: inline-flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.providers-sidebar__reorder-button {
-  width: 18px;
-  height: 16px;
-  display: inline-grid;
-  place-items: center;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--provider-row-text-secondary);
-  cursor: pointer;
-  font-size: 0.62rem;
-  line-height: 1;
-  opacity: 0.72;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease;
-}
-
-.providers-sidebar__reorder-button:hover:not(:disabled),
-.providers-sidebar__reorder-button:focus-visible {
-  background: var(--surface-card-hover);
-  border-color: var(--provider-row-border-selected);
-  color: var(--provider-row-text-primary);
-  opacity: 1;
-  outline: none;
-}
-
-.providers-sidebar__reorder-button:disabled {
-  cursor: default;
-  opacity: 0.2;
-}
-
-.providers-sidebar__checkbox {
-  margin: 0;
-  cursor: pointer;
 }
 
 /* ── Provider detail pane (Phase 6b) ──────────────────────────────── */
@@ -4413,85 +4118,6 @@ html:has(.menu-surface--tray) {
   background: #e81123;
   color: #fff;
 }
-.settings-tabs {
-  display: flex;
-  gap: 2px;
-  padding: 6px 12px;
-  margin: 0 0 4px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0));
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 0;
-  /* `safe`: when long translations overflow, start-align instead of pushing the
-     first tabs past the left edge where scrolling can't reach them. */
-  justify-content: safe center;
-  overflow-x: auto;
-  /* Only shows when the tabs still overflow (very narrow window). */
-  scrollbar-width: thin;
-}
-[data-theme="light"] .settings-tabs {
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.02), rgba(0, 0, 0, 0));
-}
-.settings-tab {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  /* Shrink before overflowing: multi-word labels wrap to two lines. */
-  flex: 0 1 auto;
-  min-width: 56px;
-  padding: 6px 12px;
-  border-radius: 6px;
-  white-space: normal;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 0.65rem;
-  font-weight: 500;
-  line-height: 1;
-  letter-spacing: 0;
-  text-transform: none;
-  transition: background 0.12s ease, color 0.12s ease;
-  border: none;
-  cursor: pointer;
-}
-.settings-tab__icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  font-size: 16px;
-  line-height: 1;
-  color: inherit;
-}
-.settings-tab__icon > svg {
-  width: 16px;
-  height: 16px;
-  display: block;
-}
-
-.settings-tab__label {
-  display: block;
-  line-height: 1.1;
-  text-align: center;
-}
-.settings-tab:hover {
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-primary);
-}
-[data-theme="light"] .settings-tab:hover {
-  background: rgba(0, 0, 0, 0.05);
-}
-.settings-tab--active {
-  background: rgba(10, 132, 255, 0.12);
-  color: var(--accent);
-  font-weight: 500;
-  box-shadow: none;
-}
-[data-theme="light"] .settings-tab--active {
-  background: rgba(10, 132, 255, 0.12);
-  color: var(--accent);
-}
 
 /* ── Settings body container: padded, centered, capped at 560px ─── */
 .settings-body {
@@ -4502,10 +4128,6 @@ html:has(.menu-surface--tray) {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-}
-.settings-body--providers {
-  max-width: 100%;
-  overflow: clip;
 }
 .settings-status {
   max-width: 560px;
@@ -4706,40 +4328,6 @@ html:has(.menu-surface--tray) {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
   border-color: var(--accent);
-}
-
-/* ── Provider sidebar (Preferences › Providers) ───────────────────── */
-/* provider-split consolidated above (line ~1765) */
-/* providers-sidebar overrides consolidated above (line ~1981) */
-.providers-sidebar::-webkit-scrollbar {
-  width: 10px;
-}
-.providers-sidebar::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 5px;
-  margin: 4px 0;
-}
-.providers-sidebar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.45);
-  border-radius: 5px;
-}
-.providers-sidebar::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.65);
-}
-[data-theme="light"] .providers-sidebar-shell {
-  background: rgba(0, 0, 0, 0.025);
-  border: 1px solid rgba(0, 0, 0, 0.10);
-}
-.providers-sidebar__row {
-  grid-template-columns: 12px var(--icon-sidebar) 1fr auto auto auto;
-  padding: 6px 8px;
-}
-.providers-sidebar__name {
-  font-size: var(--font-body);
-  font-weight: 500;
-}
-.providers-sidebar__subtitle {
-  font-size: var(--font-caption);
 }
 
 /* ── Provider detail pane ─────────────────────────────────────────── */
@@ -5081,35 +4669,6 @@ html:has(.menu-surface--tray) {
 
 .provider-grid__item--more:hover .provider-grid__icon-overview {
   background: rgba(var(--surface-tint-rgb), 0.16);
-}
-
-.settings-tabs {
-  gap: 4px;
-  padding: 5px 12px;
-  background: rgba(255, 255, 255, 0.035);
-}
-
-.settings-tab {
-  border: 1px solid transparent;
-  min-height: 42px;
-  padding: 5px 12px 6px;
-}
-
-.settings-tab:hover:not(.settings-tab--active) {
-  background: rgba(255, 255, 255, 0.055);
-}
-
-.settings-tab--active,
-.settings-tab[aria-selected="true"] {
-  border-color: rgba(10, 132, 255, 0.48);
-  background: rgba(10, 132, 255, 0.18);
-  color: var(--text-primary);
-  box-shadow: inset 0 0 0 1px rgba(10, 132, 255, 0.12);
-}
-
-.settings-tab--active .settings-tab__icon,
-.settings-tab[aria-selected="true"] .settings-tab__icon {
-  color: var(--accent);
 }
 
 .provider-detail-error {
