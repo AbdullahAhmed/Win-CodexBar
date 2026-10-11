@@ -342,12 +342,15 @@ export function ProviderDetailPane({
     onSettingsChange({
       enabledProviders: nextEnabledProviders(catalog, settings.enabledProviders, detail.id, on),
     });
+  // macOS shows the error group only for a recorded fetch error; every
+  // snapshot carries an errorState, including "ready" after a good fetch.
+  const hasFetchError = Boolean(detail.lastError?.trim());
   const updatedMs = detail.lastUpdated ? Date.parse(detail.lastUpdated) : Number.NaN;
   const updatedText = Number.isFinite(updatedMs)
     ? formatRelativeUpdated(updatedMs, t)
     : busy
       ? t("SectionRefreshing")
-      : detail.lastError || detail.errorState
+      : hasFetchError
         ? t("ProviderTextUnavailable")
         : t("ProviderNotFetchedYetTitle");
   const showClaudeSwapPath = detail.id === "claude" && (settings.claudeSwapEnabled ?? false);
@@ -412,7 +415,7 @@ export function ProviderDetailPane({
         onChange={onSettingsChange}
       />
 
-      {(detail.lastError || detail.errorState) && (
+      {hasFetchError && (
         <ProviderIssueNotice detail={detail} t={t} hidePersonalInfo={hidePersonalInfo} />
       )}
 

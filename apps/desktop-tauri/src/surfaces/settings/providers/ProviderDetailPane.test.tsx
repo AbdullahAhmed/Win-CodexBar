@@ -194,6 +194,12 @@ describe("ProviderDetailPane", () => {
     expect(within(accounts as HTMLElement).getByTestId("codex-accounts")).toBeTruthy();
   });
 
+  it("leaves out the error group when the last fetch recorded no error", async () => {
+    tauri.getProviderDetail.mockResolvedValue(detail("codex", { errorState: "ready" }));
+    const { container } = await renderPane("codex");
+    expect(container.querySelector(".provider-detail-error-group")).toBeNull();
+  });
+
   it("drives the enabled-providers list from the header switch", async () => {
     tauri.getProviderDetail.mockResolvedValue(detail("codex"));
     const { onSettingsChange } = await renderPane("codex");
