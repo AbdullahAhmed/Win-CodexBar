@@ -15,6 +15,7 @@ import { CostHistoryChart } from "./CostHistoryChart";
 import { CreditsHistoryChart } from "./CreditsHistoryChart";
 import { TokensHistoryChart } from "./TokensHistoryChart";
 import { UsageBreakdownChart } from "./UsageBreakdownChart";
+import { QuotaWindowHistory } from "../../../../../components/QuotaWindowHistory";
 
 type T = ReturnType<typeof useLocale>["t"];
 
@@ -108,7 +109,17 @@ export function ChartsSection({
   // Tokens mode needs at least one day with exact local token data.
   const hasTokens = data.tokensHistory.some((p) => p.tokens > 0);
 
-  if (!hasCost && !hasCredits && !hasUsage && !hasTokens) return null;
+  // Recent quota windows (moved from the tray card's "Usage details").
+  const history =
+    (data.quotaWindowHistory?.windows.length ?? 0) > 0 ? (
+      <QuotaWindowHistory history={data.quotaWindowHistory} t={t} />
+    ) : null;
+
+  if (!hasCost && !hasCredits && !hasUsage && !hasTokens) {
+    return history ? (
+      <section className="provider-detail-section provider-detail-charts">{history}</section>
+    ) : null;
+  }
 
   const available: TabKey[] = [];
   if (hasCost) available.push("cost");
@@ -196,6 +207,7 @@ export function ChartsSection({
           />
         )}
       </div>
+      {history}
     </section>
   );
 }

@@ -21,6 +21,8 @@ fn test_settings_default() {
     assert!(!settings.show_reset_when_exhausted);
     assert!(!settings.predictive_pace_warning_enabled);
     assert!(!settings.credential_expiry_notifications_enabled);
+    assert!(settings.session_quota_notifications_enabled);
+    assert!(settings.adaptive_refresh);
     assert!(!settings.float_bar_show_cost);
     assert!(!settings.tray_panel_always_on_top);
     assert_eq!(settings.overview_layout, "detailed");
@@ -56,6 +58,16 @@ fn groq_cookie_source_defaults_to_automatic_session_import() {
     assert_eq!(settings.cookie_source(ProviderId::Groq), "auto");
     settings.set_cookie_source(ProviderId::Groq, "manual");
     assert_eq!(settings.cookie_source(ProviderId::Groq), "manual");
+}
+
+#[test]
+fn langdock_cookie_source_defaults_to_automatic_session_import() {
+    // Upstream has no Langdock source picker (it reads one Edge profile), so
+    // Windows defaults to automatic browser import.
+    let mut settings = Settings::default();
+    assert_eq!(settings.cookie_source(ProviderId::Langdock), "auto");
+    settings.set_cookie_source(ProviderId::Langdock, "off");
+    assert_eq!(settings.cookie_source(ProviderId::Langdock), "off");
 }
 
 #[test]
@@ -1546,4 +1558,64 @@ fn show_as_used_keeps_a_saved_used_preference() {
     .unwrap();
 
     assert!(Settings::load_from_path(Some(&path)).show_as_used);
+}
+
+/// Migration #1: a file written before the session-quota key existed keeps the
+/// behaviour it had, when depleted/restored alerts followed `show_notifications`.
+#[test]
+fn session_quota_notifications_inherit_show_notifications_from_legacy_files() {
+    let off: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "show_notifications": false }"#)
+            .expect("deserialize legacy settings with notifications off");
+    assert!(!off.session_quota_notifications_enabled);
+
+    let on: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "show_notifications": true }"#)
+            .expect("deserialize legacy settings with notifications on");
+    assert!(on.session_quota_notifications_enabled);
+
+    // Once the key is stored it wins over `show_notifications` in both directions.
+    let explicit_on: Settings = serde_json::from_str(
+        r#"{ "enabled_providers": [], "show_notifications": false,
+             "session_quota_notifications_enabled": true }"#,
+    )
+    .expect("deserialize explicit session quota opt-in");
+    assert!(explicit_on.session_quota_notifications_enabled);
+    assert!(!explicit_on.show_notifications);
+
+    let explicit_off: Settings = serde_json::from_str(
+        r#"{ "enabled_providers": [], "show_notifications": true,
+             "session_quota_notifications_enabled": false }"#,
+    )
+    .expect("deserialize explicit session quota opt-out");
+    assert!(!explicit_off.session_quota_notifications_enabled);
+
+    let round_trip: Settings =
+        serde_json::from_str(&serde_json::to_string(&explicit_on).expect("serialize"))
+            .expect("deserialize round trip");
+    assert!(round_trip.session_quota_notifications_enabled);
+    assert!(!round_trip.show_notifications);
+}
+
+/// Migration #6: adaptive refresh is the default for new installs only.
+#[test]
+fn adaptive_refresh_defaults_on_for_new_installs_only() {
+    // No settings file: a new install.
+    assert!(Settings::load_from_path(None).adaptive_refresh);
+    let dir = tempfile::tempdir().expect("temp dir");
+    let missing = dir.path().join("settings.json");
+    assert!(Settings::load_from_path(Some(&missing)).adaptive_refresh);
+
+    // An existing file without the key keeps the fixed interval it ran with.
+    std::fs::write(&missing, "{}").expect("write legacy settings");
+    let legacy = Settings::load_from_path(Some(&missing));
+    assert!(!legacy.adaptive_refresh);
+    assert_eq!(legacy.refresh_interval_secs, 300);
+
+    let explicit: Settings = serde_json::from_str(r#"{ "adaptive_refresh": true }"#)
+        .expect("deserialize explicit adaptive refresh");
+    assert!(explicit.adaptive_refresh);
+    let explicit_off: Settings = serde_json::from_str(r#"{ "adaptive_refresh": false }"#)
+        .expect("deserialize explicit fixed refresh");
+    assert!(!explicit_off.adaptive_refresh);
 }

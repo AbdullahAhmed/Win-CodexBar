@@ -201,6 +201,11 @@ pub struct Settings {
     #[serde(default)]
     pub credential_expiry_notifications_enabled: bool,
 
+    /// Notify when a 5-hour session quota is depleted and when it becomes
+    /// available again. Legacy files without the key inherit `show_notifications`.
+    #[serde(default = "default_true")]
+    pub session_quota_notifications_enabled: bool,
+
     /// Show pace visualizations and forecast text in provider menu cards.
     #[serde(default = "default_true")]
     pub show_pace: bool,
@@ -443,8 +448,13 @@ fn default_tray_scale_percent() -> u16 {
     100
 }
 
+/// Smallest Panel scale; `apps/desktop-tauri/src/lib/trayScale.ts` mirrors it.
+pub const TRAY_SCALE_PERCENT_MIN: u16 = 100;
+/// Largest Panel scale; `apps/desktop-tauri/src/lib/trayScale.ts` mirrors it.
+pub const TRAY_SCALE_PERCENT_MAX: u16 = 200;
+
 pub fn clamp_tray_scale_percent(value: u16) -> u16 {
-    value.clamp(100, 200)
+    value.clamp(TRAY_SCALE_PERCENT_MIN, TRAY_SCALE_PERCENT_MAX)
 }
 
 fn default_float_bar_opacity() -> u8 {
@@ -585,7 +595,9 @@ impl Default for Settings {
             preferred_currency_code: "AUTO".to_string(),
             enabled_providers: enabled,
             refresh_interval_secs: 300, // 5 minutes
-            adaptive_refresh: false,
+            // New installs use adaptive refresh; legacy files without the key
+            // keep the fixed interval through the field default in `RawSettings`.
+            adaptive_refresh: true,
             refresh_all_providers_on_menu_open: false,
             low_power_mode_preference: LowPowerModePreference::Off,
             start_minimized: false,
@@ -611,6 +623,7 @@ impl Default for Settings {
             show_reset_when_exhausted: false,
             predictive_pace_warning_enabled: false,
             credential_expiry_notifications_enabled: false,
+            session_quota_notifications_enabled: true,
             show_pace: true,
             menu_bar_display_mode: "detailed".to_string(), // Detailed mode by default
             overview_layout: default_overview_layout(),
@@ -1028,9 +1041,11 @@ impl Settings {
             .get(&id)
             .and_then(|c| c.cookie_source.as_deref())
             .unwrap_or(match id {
-                ProviderId::Kimi | ProviderId::Hyper | ProviderId::Groq | ProviderId::LithosAI => {
-                    "auto"
-                }
+                ProviderId::Kimi
+                | ProviderId::Hyper
+                | ProviderId::Groq
+                | ProviderId::Langdock
+                | ProviderId::LithosAI => "auto",
                 _ => DEFAULT_COOKIE_SOURCE,
             })
     }

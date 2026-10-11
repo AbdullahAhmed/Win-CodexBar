@@ -310,6 +310,7 @@ describe("TrayPanel provider grid", () => {
         MenuSettings: "Settings...",
         PanelMenu: "Menu",
         TrayMenuSwitchAccount: "Switch Account...",
+        AddAccountEllipsis: "Add Account...",
         TrayMenuUsageDashboard: "Usage Dashboard",
         TrayMenuStatusPage: "Status Page",
         PanelAllProviders: "All providers",
@@ -541,7 +542,15 @@ describe("TrayPanel provider grid", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Switch Account..." }));
 
-    expect(tauriMocks.openSettingsWindow).toHaveBeenCalledWith("providers");
+    expect(tauriMocks.openSettingsWindow).toHaveBeenCalledWith("providers:claude");
+  });
+
+  it("offers Add Account... for a Codex card with no account", async () => {
+    renderTrayPanel([provider("codex", "Codex", 35)]);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add Account..." }));
+
+    expect(tauriMocks.openSettingsWindow).toHaveBeenCalledWith("providers:codex");
   });
 
   it("localizes static tray panel labels in Japanese", async () => {
@@ -598,7 +607,7 @@ describe("TrayPanel provider grid", () => {
     expect(await screen.findByText("CodexBar について (v0.70.0)")).toBeInTheDocument();
     expect(screen.getByText("終了")).toBeInTheDocument();
     expect(await screen.findByText("30日間のコスト")).toBeInTheDocument();
-    expect(container.querySelector(".menu-card__subtitle")?.textContent).toContain("日前");
+    expect(container.querySelector(".card-header__subtitle")?.textContent).toContain("日前");
     expect(screen.getByText("最新トークン")).toBeInTheDocument();
     expect(screen.getByText("トップモデル: gpt-5.5")).toBeInTheDocument();
     expect(screen.getByText("ローカルログから推定")).toBeInTheDocument();
@@ -724,7 +733,7 @@ describe("TrayPanel provider grid", () => {
       "Gemini",
     ]);
     expect(
-      Array.from(container.querySelectorAll(".menu-card__name")).map(
+      Array.from(container.querySelectorAll(".card-header__name")).map(
         (node) => node.textContent,
       ),
     ).toEqual(["Codex", "Claude", "Cursor", "Factory", "Gemini"]);
