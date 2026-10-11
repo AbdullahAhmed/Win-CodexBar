@@ -203,7 +203,8 @@ fn row(id: &str, title: &str, value: impl Into<String>) -> Option<ProviderDispla
     ProviderDisplayDetail::new(id, title, value).and_then(|row| row.with_section_title(SECTION))
 }
 
-/// The prepaid balance as a cost block, plus upstream's "Billing" rows.
+/// The prepaid balance as a cost block (omitted for a debt), plus upstream's
+/// "Billing" rows.
 /// Upstream has no quota bar; the Windows primary slot carries the balance
 /// as an informational value.
 pub(super) fn result(
@@ -257,8 +258,14 @@ pub(super) fn result(
         None => rows.push(row("spend", "Spend", "Unavailable")),
     }
 
-    let cost = CostSnapshot::new(0.0, "USD", "Prepaid credits").with_balance(balance);
-    ProviderFetchResult::new(usage, "web")
-        .with_cost(cost)
-        .with_display_details(rows.into_iter().flatten())
+    let result = ProviderFetchResult::new(usage, "web");
+    // The shared cost block floors balances at zero, which would show a debt
+    // as "$0.00". Upstream keeps negative balances visible, so a debt is left
+    // to the primary line and the Balance row.
+    let result = if billing.balance_nanos >= 0 {
+        result.with_cost(CostSnapshot::new(0.0, "USD", "Prepaid credits").with_balance(balance))
+    } else {
+        result
+    };
+    result.with_display_details(rows.into_iter().flatten())
 }

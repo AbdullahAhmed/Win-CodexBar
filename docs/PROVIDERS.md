@@ -121,12 +121,14 @@ app: `GET https://app.langdock.com/api/trpc/usageSettings.getPersonalUsage`
 - The cookie source in Settings → Providers → Langdock picks the session and
   defaults to Automatic. Automatic and Manual first use a header imported under
   Browser Cookies (from the browser you choose) or pasted there. Without one,
-  Automatic reads the `langdock.com` cookies from the detected browsers and
-  Manual fails closed. Off reads nothing. A header without `auth_token` never
-  sends a request.
+  Automatic uses the first detected browser whose `langdock.com` cookies hold
+  `auth_token` (browsers with only other cookies are skipped) and Manual fails
+  closed. Off reads nothing. A header without `auth_token` never sends a
+  request.
 - The card shows Session (5 hours) and Weekly percentages with their resets.
   A plan without session limits shows the weekly lane alone, labelled Weekly.
-  A workspace without included limits shows one "Included limits" detail row.
+  A workspace without included limits shows one "Included limits" row with
+  "No included usage limits available".
 - Upstream keeps usage above 100%; the Windows bar clamps it at 100%.
 - 401 and tRPC `UNAUTHORIZED` are reported as an expired session. Redirects
   are never followed and response bodies are never echoed in errors.
@@ -141,16 +143,20 @@ signed-in console at `https://console.lithosai.cloud` with both session cookies,
 - The cookie source in Settings → Providers → LithosAI picks the session and
   defaults to Automatic. Automatic and Manual first use a header imported under
   Browser Cookies (from the browser you choose) or pasted there. Without one,
-  Automatic reads the `console.lithosai.cloud` cookies from the detected
-  browsers and Manual fails closed. Off reads nothing.
+  Automatic tries each detected browser holding both `console.lithosai.cloud`
+  cookies, in order, and moves to the next after a 401; Manual fails closed
+  and a pasted header is never swapped for a browser session. Off reads nothing.
 - Requests, in order: `GET /api/me` (active organization, email), then
   `GET /api/billing` and `GET /api/billing/spend?start=YYYY-MM-01&end=YYYY-MM-DD`
   (UTC month to date), both with `X-Organization-Id`.
 - The card shows the prepaid USD balance (1 USD = 1,000,000,000 nanos) as a
   "Prepaid credits" cost block and a **Billing** section: Balance, Payment card,
-  Account status, Today (UTC) and This month (UTC). There is no quota bar.
+  Account status, Today (UTC) and This month (UTC). There is no quota bar. A
+  negative balance has no cost block and stays visible as, for example,
+  "Balance: -$1.00" in the primary line and the Balance row.
 - A spend report that fails or does not parse shows "Spend: Unavailable" and
-  keeps the balance; a 401 anywhere reports an expired session.
+  keeps the balance; a 401 anywhere rejects that session, and an expired
+  session is reported once no candidate is left.
 - Response bodies and cookies are never echoed in errors or logs.
 
 ### Muse (muse.ai) weekly usage
@@ -262,8 +268,8 @@ Synthetic (or `SYNTHETIC_API_KEY`); the CLI also accepts `synthetic.new`.
 - When the five-hour quota reports `tickPercent`, the lane resets at the next
   regen tick and its detail line reads, for example,
   "76% after next regen · Full in ~3 regens". The weekly lane does the same
-  when it carries `maxCredits` and `nextRegenCredits`, which also give a
-  weekly USD cost.
+  when it carries `maxCredits` and `nextRegenCredits`. Like the Mac card, no
+  weekly USD cost is shown (on the card or in CLI JSON).
 - The plan name (`plan`, `planName`, `tier`, ...) is shown as the plan.
 - 401 and 403 report "Invalid Synthetic API credentials."; response bodies are
   never echoed in errors.
