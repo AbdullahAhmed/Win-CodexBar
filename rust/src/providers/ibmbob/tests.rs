@@ -285,6 +285,29 @@ fn api_keys_are_trimmed_and_unquoted() {
 }
 
 #[test]
+fn a_missing_key_uses_the_ibm_bob_message() {
+    let missing = "Provider not installed: Missing IBM Bob API key. Add one in Settings or set BOBSHELL_API_KEY.";
+    let not_found = ProviderError::NotInstalled(
+        "API key not found. Set BOBSHELL_API_KEY in Preferences or environment.".into(),
+    );
+    assert_eq!(
+        api_key_from(Err(not_found)).unwrap_err().to_string(),
+        missing
+    );
+    assert_eq!(
+        api_key_from(Ok("''".into())).unwrap_err().to_string(),
+        missing
+    );
+    assert_eq!(api_key_from(Ok("  'k'  ".into())).unwrap(), "k");
+    assert_eq!(
+        api_key_from(Err(ProviderError::Other("boom".into())))
+            .unwrap_err()
+            .to_string(),
+        "boom"
+    );
+}
+
+#[test]
 fn regional_hosts_must_be_https_under_bob_ibm_com() {
     let host = |domain: &str| {
         regional_base_url(Some(domain))
