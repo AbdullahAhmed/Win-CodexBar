@@ -303,6 +303,10 @@ pub struct ProviderUsageSnapshot {
     pub secondary: Option<RateWindowSnapshot>,
     #[serde(default)]
     pub secondary_label: Option<String>,
+    /// Locale key that names the secondary lane instead of `secondary_label`
+    /// (provider-owned, see `UsageSnapshot::secondary_label_key`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_label_key: Option<String>,
     #[serde(default)]
     pub model_specific: Option<RateWindowSnapshot>,
     #[serde(default)]
@@ -553,6 +557,11 @@ impl ProviderUsageSnapshot {
                     .clone()
                     .unwrap_or_else(|| metadata.weekly_label.to_string())
             }),
+            secondary_label_key: usage
+                .secondary
+                .as_ref()
+                .and(usage.secondary_label_key)
+                .map(|key| key.name().to_string()),
             model_specific: usage.model_specific.as_ref().map(|w| {
                 lane(
                     w,
@@ -703,6 +712,7 @@ impl ProviderUsageSnapshot {
             primary_label: Some(metadata.session_label.to_string()),
             secondary: None,
             secondary_label: None,
+            secondary_label_key: None,
             model_specific: None,
             tertiary: None,
             tertiary_label: None,
@@ -1301,6 +1311,46 @@ mod tests {
             monthly_limit_block: None,
             description_is_detail: false,
         }
+    }
+
+    /// Notion names its billing lane with the "Monthly" app string
+    /// (upstream `NotionProviderDescriptor.swift:32`); a provider that only
+    /// sets the raw "Monthly" label sends no key.
+    #[test]
+    fn secondary_label_key_crosses_the_bridge_only_when_the_provider_sets_it() {
+        let now = chrono::Utc::now();
+        let monthly = || {
+            RateWindow::with_details(
+                25.0,
+                Some(43_200),
+                Some(now + chrono::Duration::days(9)),
+                None,
+            )
+        };
+        let bridge = |id: ProviderId, usage: codexbar::core::UsageSnapshot| {
+            let metadata = codexbar::core::instantiate_provider(id).metadata().clone();
+            let result = ProviderFetchResult::new(usage, "web");
+            serde_json::to_value(ProviderUsageSnapshot::from_fetch_result(
+                id, &metadata, &result, None, None,
+            ))
+            .unwrap()
+        };
+
+        let notion = bridge(
+            ProviderId::Notion,
+            codexbar::core::UsageSnapshot::new(monthly())
+                .with_secondary(monthly())
+                .with_secondary_label_key(codexbar::locale::LocaleKey::ProviderLabelMonthly),
+        );
+        assert_eq!(notion["secondaryLabelKey"], "ProviderLabelMonthly");
+        assert_eq!(notion["secondaryLabel"], "Monthly");
+
+        let augment = bridge(
+            ProviderId::Augment,
+            codexbar::core::UsageSnapshot::new(monthly()).with_secondary(monthly()),
+        );
+        assert!(augment.get("secondaryLabelKey").is_none());
+        assert_eq!(augment["secondaryLabel"], "Monthly");
     }
 
     #[test]

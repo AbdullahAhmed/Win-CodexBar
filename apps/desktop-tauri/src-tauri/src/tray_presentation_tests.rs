@@ -37,6 +37,7 @@ fn fake_snapshot_with(
         primary_label: None,
         secondary: secondary_percent.map(window),
         secondary_label: None,
+        secondary_label_key: None,
         model_specific: None,
         tertiary: tertiary_percent.map(window),
         tertiary_label: None,
