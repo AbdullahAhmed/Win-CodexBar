@@ -158,6 +158,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     menuBarShowsHighestUsage: false,
     menuBarShowsPercent: false,
     menuBarColorPace: false,
+    providersSortedAlphabetically: false,
     showAsUsed: true,
     showAllTokenAccountsInMenu: false,
     enableAnimations: true,

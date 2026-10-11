@@ -84,10 +84,10 @@ impl SurfaceMode {
                 visible: true,
                 decorations: true,
                 resizable: true,
-                width: 496.0,
-                height: 580.0,
-                min_width: None,
-                min_height: None,
+                width: SETTINGS_WINDOW_WIDTH,
+                height: SETTINGS_WINDOW_HEIGHT,
+                min_width: Some(SETTINGS_WINDOW_MIN_WIDTH),
+                min_height: Some(SETTINGS_WINDOW_MIN_HEIGHT),
                 always_on_top: false,
                 blur_dismiss: false,
                 skip_taskbar: false,
@@ -95,6 +95,15 @@ impl SurfaceMode {
         }
     }
 }
+
+/// Settings window size (logical px): sidebar plus detail column, as the
+/// macOS 0.70 Settings window. Shared by the main-window Settings surface and
+/// the detached Settings window; the frontend `applySettingsWindowSize`
+/// mirrors these numbers.
+pub const SETTINGS_WINDOW_WIDTH: f64 = 880.0;
+pub const SETTINGS_WINDOW_HEIGHT: f64 = 620.0;
+pub const SETTINGS_WINDOW_MIN_WIDTH: f64 = 800.0;
+pub const SETTINGS_WINDOW_MIN_HEIGHT: f64 = 540.0;
 
 /// Describes what the window should look like in a given surface mode.
 #[derive(Debug, Clone)]
@@ -328,8 +337,10 @@ mod tests {
     #[test]
     fn settings_properties() {
         let props = SurfaceMode::Settings.window_properties();
-        assert_eq!(props.width, 496.0);
-        assert_eq!(props.height, 580.0);
+        assert_eq!(props.width, 880.0);
+        assert_eq!(props.height, 620.0);
+        assert_eq!(props.min_width, Some(800.0));
+        assert_eq!(props.min_height, Some(540.0));
     }
 
     #[test]

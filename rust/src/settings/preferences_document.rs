@@ -74,6 +74,7 @@ const ALLOWED_PREFERENCES: &[(&str, Validator)] = &[
     ("menu_bar_shows_percent", typed::<bool>),
     ("tray_icon_mode", typed::<super::TrayIconMode>),
     ("switcher_shows_icons", typed::<bool>),
+    ("providers_sorted_alphabetically", typed::<bool>),
     ("overview_layout", |v| one_of(v, &["compact", "detailed"])),
     ("menu_bar_display_mode", |v| {
         one_of(v, &["minimal", "compact", "detailed"])
