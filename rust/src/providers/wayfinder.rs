@@ -127,16 +127,41 @@ pub fn average_decision_ms(metrics_text: &str) -> Option<f64> {
     (count > 0.0 && average.is_finite()).then_some(average)
 }
 
+/// The sample value is the first token after the optional `{...}` label block.
+/// Any trailing token is the optional timestamp and is ignored.
 fn metric_value(line: &str, name: &str) -> Option<f64> {
     let line = line.trim_end_matches('\r');
-    let rest = line.strip_prefix(name)?;
-    if !(rest.starts_with(' ') || rest.starts_with('{')) {
+    let mut rest = line.strip_prefix(name)?;
+    if let Some(labels) = rest.strip_prefix('{') {
+        rest = after_label_block(labels)?;
+    }
+    if !rest.starts_with(' ') {
         return None;
     }
-    rest.split(' ')
-        .rfind(|token| !token.is_empty())?
-        .parse()
-        .ok()
+    rest.split_whitespace().next()?.parse().ok()
+}
+
+/// Returns the text after the `}` closing a label block whose `{` is already
+/// consumed. Quoted label values may hold `}`, spaces and `\"` escapes.
+fn after_label_block(text: &str) -> Option<&str> {
+    let mut in_quotes = false;
+    let mut escaped = false;
+    for (index, ch) in text.char_indices() {
+        if in_quotes {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_quotes = false;
+            }
+        } else if ch == '"' {
+            in_quotes = true;
+        } else if ch == '}' {
+            return Some(&text[index + ch.len_utf8()..]);
+        }
+    }
+    None
 }
 
 pub fn parse_gateway_url(raw: &str) -> Result<Url, ProviderError> {
@@ -540,6 +565,28 @@ wayfinder_router_decision_latency_seconds_count 0\n"
             None
         );
         assert_eq!(average_decision_ms("up 1\n"), None);
+    }
+
+    #[test]
+    fn metric_value_ignores_timestamps_and_quoted_label_blocks() {
+        // Two-line sample with a trailing timestamp on each series: 0.0007 / 2 * 1000 = 0.35 ms.
+        let stamped = "wayfinder_router_decision_latency_seconds_sum 0.0007 1700000000000\n\
+wayfinder_router_decision_latency_seconds_count 2 1700000000000\n";
+        let average = average_decision_ms(stamped).unwrap();
+        assert!((average - 0.35).abs() < 1e-9, "{average}");
+
+        // A label value with a space, a `}` and an escaped quote does not end the block early.
+        assert_eq!(
+            metric_value(r#"x{route="fast } lane \"a\""} 0.0007 1700000000000"#, "x"),
+            Some(0.0007)
+        );
+        let labelled = "wayfinder_router_decision_latency_seconds_sum{route=\"fast } lane\"} 0.0007 1700000000000\n\
+wayfinder_router_decision_latency_seconds_count{route=\"fast } lane\"} 2 1700000000000\n";
+        let average = average_decision_ms(labelled).unwrap();
+        assert!((average - 0.35).abs() < 1e-9, "{average}");
+
+        // An unterminated label block yields no value.
+        assert_eq!(metric_value("x{route=\"a 3", "x"), None);
     }
 
     #[test]
