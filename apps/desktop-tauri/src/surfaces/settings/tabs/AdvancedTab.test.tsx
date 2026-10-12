@@ -29,10 +29,17 @@ const settings: SettingsSnapshot = {
   highUsageThreshold: 70,
   criticalUsageThreshold: 90,
   predictivePaceWarningEnabled: false,
+  credentialExpiryNotificationsEnabled: false,
   trayIconMode: "single",
   switcherShowsIcons: true,
   menuBarShowsHighestUsage: true,
   menuBarShowsPercent: true,
+  menuBarIconStyle: "percent",
+  mergedOverviewSelectedProviders: [],
+  quotaWarningMarkersVisible: true,
+  workdayTickStyle: "subtle",
+  menuBarColorPace: false,
+  providersSortedAlphabetically: false,
   showAsUsed: false,
   showAllTokenAccountsInMenu: true,
   enableAnimations: true,
@@ -53,6 +60,7 @@ const settings: SettingsSnapshot = {
   autoDownloadUpdates: false,
   installUpdatesOnQuit: false,
   globalShortcut: "",
+  switcherShortcuts: {},
   codexCustomSessionsDirs: [],
   updateChannel: "stable",
   uiLanguage: "english",
@@ -182,5 +190,64 @@ describe("AdvancedTab", () => {
       ),
     ).toHaveLength(0);
     expect(screen.getAllByText("HooksEnableLabel")).toHaveLength(1);
+  });
+
+  it("leaves Agent sessions to Settings > Menu", () => {
+    render(<AdvancedTab settings={settings} set={vi.fn()} saving={false} />);
+    expect(screen.queryByText("AgentSessionsTitle")).toBeNull();
+    expect(screen.queryByText("AgentSessionsStayAwakeLabel")).toBeNull();
+    expect(screen.queryByText("AgentSessionsSshHostsLabel")).toBeNull();
+  });
+});
+
+describe("AdvancedTab Mac grouped layout", () => {
+  it("orders the groups with Privacy first and no keyboard or portable preferences", () => {
+    const { container } = render(
+      <AdvancedTab settings={settings} set={vi.fn()} saving={false} />,
+    );
+    const titles = Array.from(
+      container.querySelectorAll(".settings-group__title"),
+      (node) => node.textContent,
+    );
+    expect(titles).toEqual([
+      "PrivacyTitle",
+      "CodexLocalLogsTitle",
+      "SectionLocalIntegrations",
+      "NetworkProxyTitle",
+      "HooksTitle",
+      "DiagnosticsSectionHeading",
+    ]);
+    expect(screen.queryByText("SectionKeyboard")).toBeNull();
+    expect(screen.queryByText("SectionPreferencesTransfer")).toBeNull();
+    expect(screen.queryByText("KEYCHAIN ACCESS")).toBeNull();
+  });
+
+  it("draws every toggle as a switch", () => {
+    render(<AdvancedTab settings={settings} set={vi.fn()} saving={false} />);
+    for (const toggle of screen.getAllByRole("checkbox")) {
+      expect(toggle).toHaveClass("toggle--switch");
+    }
+  });
+
+  it("shows the credential-access footer while Credential Manager access is off", () => {
+    const set = vi.fn();
+    const { rerender } = render(
+      <AdvancedTab settings={settings} set={set} saving={false} />,
+    );
+    // The Claude keychain-prompt option lives in Providers > Claude > Options (Mac parity).
+    expect(screen.queryByRole("checkbox", { name: "AvoidKeychainPromptsLabel" })).toBeNull();
+    expect(screen.queryByText("CredentialAccessFooter")).toBeNull();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "DisableAllKeychainLabel" }));
+    expect(set).toHaveBeenCalledWith({ disableKeychainAccess: true });
+
+    rerender(
+      <AdvancedTab
+        settings={{ ...settings, disableKeychainAccess: true }}
+        set={set}
+        saving={false}
+      />,
+    );
+    expect(screen.getByText("CredentialAccessFooter")).toBeInTheDocument();
   });
 });

@@ -10,6 +10,7 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
+import { useCurrency } from "../hooks/CurrencyProvider";
 import { useLocale } from "../hooks/useLocale";
 import { useProviders } from "../hooks/useProviders";
 import {
@@ -18,16 +19,47 @@ import {
   refreshProvidersIfStale,
 } from "../lib/tauri";
 import { ProviderIcon } from "../components/providers/ProviderIcon";
-import { getProviderIcon } from "../components/providers/providerIcons";
+import { brandColorOnDark, getProviderIcon } from "../components/providers/providerIcons";
+import { costPeriodShortLabel } from "../lib/costPeriod";
 import { describeProviderState } from "../lib/providerState";
+import { resetDescriptionFallback, windowDetailText } from "../lib/usageWindows";
+import { localizeProviderText } from "../lib/providerText";
+import { type MetricLane, quotaWarningWindowForLane } from "../lib/metricRowModel";
+import { type QuotaWarningSettings, resolveQuotaWarning } from "../lib/quotaWarnings";
 import type {
   BootstrapState,
   ProviderLocalUsageSummary,
   ProviderUsageSnapshot,
+  RateWindowSnapshot,
   SettingsSnapshot,
 } from "../types/bridge";
 import { FLOAT_BAR_CONFIG_CHANGED_EVENT, resizeFloatBar } from "./api";
 import "./FloatBar.css";
+
+function sameWindow(a: RateWindowSnapshot, b: RateWindowSnapshot): boolean {
+  return (
+    a.usedPercent === b.usedPercent &&
+    a.windowMinutes === b.windowMinutes &&
+    a.resetsAt === b.resetsAt &&
+    a.resetDescription === b.resetDescription &&
+    a.isExhausted === b.isExhausted &&
+    a.isInformational === b.isInformational
+  );
+}
+
+/**
+ * The card lane the selected metric came from, so the pill tone follows the
+ * same quota warning window as the card markers and the toasts (primary is
+ * Session, secondary and tertiary are Weekly). `null` for a window that is not
+ * one of the three lanes, such as an icon fallback extra window.
+ */
+function selectedMetricLane(provider: ProviderUsageSnapshot): MetricLane | null {
+  const selected = provider.selectedMetric;
+  if (sameWindow(selected, provider.primary)) return "primary";
+  if (provider.secondary && sameWindow(selected, provider.secondary)) return "secondary";
+  if (provider.tertiary && sameWindow(selected, provider.tertiary)) return "tertiary";
+  return null;
+}
 
 function ResetIcon({ size }: { size: number }) {
   return (
@@ -92,7 +124,10 @@ type FloatBarCostSummary = {
   providerId: string;
   displayName: string;
   todayCost: number | null;
-  thirtyDayCost: number | null;
+  /** Cost over the selected History window. */
+  periodCost: number | null;
+  /** Raw History window `periodCost` covers. */
+  period: string;
 };
 
 type FloatBarCostTarget = {
@@ -106,34 +141,30 @@ function providerCostKey(provider: ProviderUsageSnapshot): string {
 }
 
 function hasLocalCost(summary: ProviderLocalUsageSummary | null): summary is ProviderLocalUsageSummary {
-  return summary?.todayCost != null || summary?.thirtyDayCost != null;
-}
-
-function formatUsd(value: number | null): string | null {
-  if (value == null || !Number.isFinite(value)) return null;
-  return `$${value.toFixed(2)}`;
+  return summary?.todayCost != null || summary?.periodCost != null;
 }
 
 function CostPill({
   summary,
   scale,
   todayLabel,
-  thirtyDayLabel,
+  periodLabel,
   estimateLabel,
 }: {
   summary: FloatBarCostSummary;
   scale: number;
   todayLabel: string;
-  thirtyDayLabel: string;
+  periodLabel: string;
   estimateLabel: string;
 }) {
-  const today = formatUsd(summary.todayCost);
-  const thirtyDay = formatUsd(summary.thirtyDayCost);
+  const { format } = useCurrency();
+  const today = summary.todayCost == null ? null : format(summary.todayCost, "USD");
+  const periodCost = summary.periodCost == null ? null : format(summary.periodCost, "USD");
   const iconSize = Math.round(10 * scale);
   const brand = getProviderIcon(summary.providerId).brandColor;
   const title = [
     today ? `${todayLabel} ${today}` : null,
-    thirtyDay ? `${thirtyDayLabel} ${thirtyDay}` : null,
+    periodCost ? `${periodLabel} ${periodCost}` : null,
   ]
     .filter(Boolean)
     .join(" / ");
@@ -143,7 +174,7 @@ function CostPill({
       className="floatbar__cost-pill"
       title={`${summary.displayName}: ${title} (${estimateLabel})`}
       data-tauri-drag-region
-      style={{ "--brand": brand } as CSSProperties}
+      style={brandStyle(brand)}
     >
       <span className="floatbar__provider-icon" data-tauri-drag-region>
         <ProviderIcon providerId={summary.providerId} size={iconSize} />
@@ -159,13 +190,13 @@ function CostPill({
             </span>
           </span>
         )}
-        {thirtyDay && (
+        {periodCost && (
           <span className="floatbar__cost-item" data-tauri-drag-region>
             <span className="floatbar__cost-label" data-tauri-drag-region>
-              {thirtyDayLabel}
+              {periodLabel}
             </span>
             <span className="floatbar__cost-value" data-tauri-drag-region>
-              {thirtyDay}
+              {periodCost}
             </span>
           </span>
         )}
@@ -176,17 +207,27 @@ function CostPill({
     </div>
   );
 }
+/** Pill border variables: the brand, plus a lifted tint for near-black brands on the dark glass. */
+function brandStyle(brand: string): CSSProperties {
+  const onDark = brandColorOnDark(brand);
+  return { "--brand": brand, ...(onDark ? { "--brand-dark": onDark } : {}) } as CSSProperties;
+}
+
 /**
  * The capacity pill shown for a single provider.
  *
  * Color follows usage: green default, amber when remaining drops below the
  * high-usage threshold, red when remaining is below the critical threshold
  * or the provider is exhausted.
+ *
+ * An informational metric (no budget set, a balance line, no active session)
+ * has no quota percentage. Like the tray card and the tray tooltip, the pill
+ * shows its text instead, keeps the neutral tone, and never turns that text
+ * into reset wording.
  */
 function ProviderPill({
   provider,
-  highRemaining,
-  critRemaining,
+  thresholds,
   showAsUsed,
   scale,
   showResetInline,
@@ -196,8 +237,7 @@ function ProviderPill({
   stateLabel,
 }: {
   provider: ProviderUsageSnapshot;
-  highRemaining: number;
-  critRemaining: number;
+  thresholds: QuotaWarningSettings;
   showAsUsed: boolean;
   scale: number;
   showResetInline: boolean;
@@ -206,25 +246,54 @@ function ProviderPill({
   remainingSuffix: string;
   stateLabel: string;
 }) {
+  const { t } = useLocale();
   const rateWindow = provider.selectedMetric;
+  const informational = rateWindow.isInformational === true;
   const remaining = Math.max(0, Math.min(100, rateWindow.remainingPercent));
   const used = Math.max(0, Math.min(100, rateWindow.usedPercent));
   const displayPercent = showAsUsed ? used : remaining;
   const displaySuffix = showAsUsed ? usedSuffix : remainingSuffix;
   const state = describeProviderState(provider.errorState);
-  const exhausted = rateWindow.isExhausted || state.isProblem;
+  // Tone follows this provider's quota warning thresholds for the shown lane;
+  // a window outside the lanes keeps the global thresholds.
+  const lane = selectedMetricLane(provider);
+  const warningWindow = lane ? quotaWarningWindowForLane(lane) : null;
+  const warning = warningWindow
+    ? resolveQuotaWarning(thresholds, provider.providerId, warningWindow)
+    : {
+        enabled: true,
+        high: thresholds.highUsageThreshold,
+        critical: thresholds.criticalUsageThreshold,
+      };
+  // A window set to Off keeps only the exhausted tone.
+  const highRemaining = warning.enabled ? 100 - warning.high : -1;
+  const critRemaining = warning.enabled ? 100 - warning.critical : -1;
   let tone: "ok" | "warn" | "crit" = "ok";
-  if (exhausted || remaining <= critRemaining) tone = "crit";
-  else if (remaining <= highRemaining) tone = "warn";
+  if (state.isProblem) tone = "crit";
+  else if (!informational) {
+    if (rateWindow.isExhausted || remaining <= critRemaining) tone = "crit";
+    else if (remaining <= highRemaining) tone = "warn";
+  }
 
   const brand = getProviderIcon(provider.providerId).brandColor;
-  const label = state.isProblem ? stateLabel : `${Math.round(displayPercent)}%`;
+  const infoText = localizeProviderText(rateWindow.resetDescription?.trim(), t) || "—";
+  const label = state.isProblem
+    ? stateLabel
+    : informational
+      ? infoText
+      : `${Math.round(displayPercent)}%`;
+  // Only percentages size the warning placeholder; informational text would
+  // widen the pill after an error.
+  const lastPercentageLabel = useRef("0%");
+  if (!state.isProblem && !informational) lastPercentageLabel.current = label;
   const resetText = useFormattedResetTime(
     rateWindow.resetsAt,
-    rateWindow.resetDescription,
+    informational ? null : resetDescriptionFallback(rateWindow),
     resetRelative,
   );
+  const detailText = localizeProviderText(windowDetailText(rateWindow), t) || null;
   const resetSuffix = resetText ? `\n${resetText}` : "";
+  const detailSuffix = detailText ? `\n${detailText}` : "";
   const inlineReset = resetText
     ? inlineResetTime(resetText, rateWindow.resetsAt, resetRelative)
     : null;
@@ -237,17 +306,24 @@ function ProviderPill({
       title={
         state.isProblem
           ? `${provider.displayName}: ${stateLabel}`
-          : `${provider.displayName}: ${label} ${displaySuffix}${resetSuffix}`
+          : informational
+            ? `${provider.displayName}: ${infoText}${resetSuffix}`
+            : `${provider.displayName}: ${label} ${displaySuffix}${resetSuffix}${detailSuffix}`
       }
       data-tauri-drag-region
-      style={{ "--brand": brand } as CSSProperties}
+      style={brandStyle(brand)}
     >
       <span className="floatbar__provider-icon" data-tauri-drag-region>
         <ProviderIcon providerId={provider.providerId} size={iconSize} />
       </span>
       <span className="floatbar__text" data-tauri-drag-region>
-        <span className="floatbar__pct" data-tauri-drag-region>
-          {label}
+        <span className="floatbar__pct" aria-label={state.isProblem ? stateLabel : undefined} data-tauri-drag-region>
+          {state.isProblem ? (
+            <>
+              <span aria-hidden="true" style={{ visibility: "hidden" }}>{lastPercentageLabel.current}</span>
+              <span className="floatbar__warning" aria-hidden="true">!</span>
+            </>
+          ) : label}
         </span>
         {showResetInline && resetText && inlineReset && (
           <span
@@ -382,7 +458,8 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
           providerId: target.providerId,
           displayName: target.displayName,
           todayCost: localUsage.todayCost,
-          thirtyDayCost: localUsage.thirtyDayCost,
+          periodCost: localUsage.periodCost,
+          period: localUsage.reportingPeriod,
         } satisfies FloatBarCostSummary;
       }),
     )
@@ -403,13 +480,14 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     return () => {
       cancelled = true;
     };
-  }, [visibleCostTargets]);
+    // A History window or "Track costs" change re-reads the local usage summaries.
+  }, [visibleCostTargets, settings.costReportingPeriod, settings.costUsageEnabled]);
 
   const visibleCosts = visible
     .map((provider) => localCosts[providerCostKey(provider)])
     .filter((summary): summary is FloatBarCostSummary => Boolean(summary));
   const visibleCostValuesKey = visibleCosts
-    .map((summary) => `${summary.key}:${summary.todayCost ?? ""}:${summary.thirtyDayCost ?? ""}`)
+    .map((summary) => `${summary.key}:${summary.todayCost ?? ""}:${summary.period ?? ""}:${summary.periodCost ?? ""}`)
     .join("|");
   // Keep the native floatbar window fitted when late data/fonts/icons change layout.
   const lastResizeRef = useRef<{ w: number; h: number } | null>(null);
@@ -475,8 +553,6 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     [],
   );
 
-  const highRemaining = 100 - settings.highUsageThreshold;
-  const critRemaining = 100 - settings.criticalUsageThreshold;
   const opacityFraction = Math.max(0.3, Math.min(1, settings.floatBarOpacity / 100));
 
   return (
@@ -505,8 +581,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
             <ProviderPill
               key={providerCostKey(p)}
               provider={p}
-              highRemaining={highRemaining}
-              critRemaining={critRemaining}
+              thresholds={settings}
               showAsUsed={settings.showAsUsed}
               scale={scale}
               showResetInline={showResetInline}
@@ -522,7 +597,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
               summary={summary}
               scale={scale}
               todayLabel={t("PanelToday")}
-              thirtyDayLabel={t("FloatBarThirtyDayShort")}
+              periodLabel={costPeriodShortLabel(summary.period, t)}
               estimateLabel={t("OverviewSpendEstimate")}
             />
           ))}

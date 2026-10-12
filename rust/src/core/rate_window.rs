@@ -92,6 +92,13 @@ pub struct RateWindow {
     #[serde(default)]
     pub is_informational: bool,
 
+    /// Whether `reset_description` is a detail line (for example spend
+    /// amounts) rather than reset wording. Renderers show it as its own
+    /// secondary line and never as a reset time. Provider-owned; kept out of
+    /// serialized output so CLI JSON is unchanged.
+    #[serde(default, skip_serializing)]
+    pub description_is_detail: bool,
+
     /// Whether the provider explicitly supplied the usage percentage.
     /// Internal-only metadata prevents a missing value normalized to zero from
     /// becoming an exported quota measurement.
@@ -112,6 +119,7 @@ impl RateWindow {
             resets_at: None,
             reset_description: None,
             is_informational: false,
+            description_is_detail: false,
             usage_known: true,
         }
     }
@@ -152,8 +160,15 @@ impl RateWindow {
             resets_at,
             reset_description,
             is_informational: false,
+            description_is_detail: false,
             usage_known: true,
         }
+    }
+
+    /// Mark `reset_description` as a detail line instead of reset wording.
+    pub fn with_description_as_detail(mut self) -> Self {
+        self.description_is_detail = true;
+        self
     }
 
     pub(crate) fn with_usage_known(mut self, usage_known: bool) -> Self {
@@ -228,11 +243,9 @@ fn subtract_one_calendar_month(dt: DateTime<Utc>) -> Option<DateTime<Utc>> {
     let (py, pm) = if m == 1 { (y - 1, 12) } else { (y, m - 1) };
     let max_day = days_in_month(py, pm);
     let day = dt.day().min(max_day);
-    dt.date_naive()
-        .with_year(py)?
-        .with_month(pm)?
-        .with_day(day)
-        .map(|d| d.and_time(dt.time()).and_utc())
+    // Build the date in one step: chaining `with_month` on the 29th-31st fails
+    // when the previous month is shorter (Mar 31 -> Feb 31).
+    chrono::NaiveDate::from_ymd_opt(py, pm, day).map(|d| d.and_time(dt.time()).and_utc())
 }
 
 fn days_in_month(year: i32, month: u32) -> u32 {
@@ -359,6 +372,28 @@ mod tests {
             Some(31 * 24 * 60)
         );
         assert_eq!(RateWindow::monthly_window_minutes(None), None);
+    }
+
+    #[test]
+    fn calendar_month_window_clamps_the_day_into_a_shorter_month() {
+        // Mar 31 minus one month is Feb 28 (Foundation clamps the day): 31 days.
+        let resets = Utc.with_ymd_and_hms(2026, 3, 31, 0, 0, 0).unwrap();
+        assert_eq!(
+            RateWindow::calendar_month_window_minutes(resets),
+            Some(44_640)
+        );
+        // May 31 minus one month is Apr 30: 31 days.
+        let resets = Utc.with_ymd_and_hms(2026, 5, 31, 12, 0, 0).unwrap();
+        assert_eq!(
+            RateWindow::calendar_month_window_minutes(resets),
+            Some(44_640)
+        );
+        // Mar 30 2028 minus one month is Feb 29 (leap year): 30 days.
+        let resets = Utc.with_ymd_and_hms(2028, 3, 30, 0, 0, 0).unwrap();
+        assert_eq!(
+            RateWindow::calendar_month_window_minutes(resets),
+            Some(43_200)
+        );
     }
 
     #[test]

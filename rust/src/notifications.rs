@@ -14,6 +14,13 @@ use crate::settings::Settings;
 use crate::sound::{NotificationSoundEvent, play_alert};
 use chrono::{DateTime, Utc};
 
+mod credential;
+mod identity_gaps;
+
+pub use credential::CredentialAlertPolicy;
+use credential::CredentialEpisodes;
+pub use identity_gaps::WarningScope;
+
 /// Notification types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NotificationType {
@@ -78,15 +85,18 @@ struct PredictiveWarningKey {
 }
 
 impl NotificationType {
-    pub fn title(&self) -> &'static str {
-        match self {
-            NotificationType::HighUsage => "High Usage Warning",
-            NotificationType::CriticalUsage => "Critical Usage Alert",
-            NotificationType::Exhausted => "Usage Limit Reached",
-            NotificationType::StatusIssue => "Provider Status Issue",
-            NotificationType::SessionDepleted => "Session Depleted",
-            NotificationType::SessionRestored => "Session Restored",
-        }
+    pub fn title(&self, language: crate::settings::Language) -> String {
+        locale::get_text(
+            language,
+            match self {
+                NotificationType::HighUsage => LocaleKey::NotificationHighUsageTitle,
+                NotificationType::CriticalUsage => LocaleKey::NotificationCriticalUsageTitle,
+                NotificationType::Exhausted => LocaleKey::NotificationExhaustedTitle,
+                NotificationType::StatusIssue => LocaleKey::NotificationStatusIssueTitle,
+                NotificationType::SessionDepleted => LocaleKey::NotificationSessionDepletedTitle,
+                NotificationType::SessionRestored => LocaleKey::NotificationSessionRestoredTitle,
+            },
+        )
     }
 
     pub fn icon(&self) -> &'static str {
@@ -132,6 +142,12 @@ pub struct NotificationManager {
     previous_session_percent: std::collections::HashMap<SessionTransitionKey, f64>,
     predictive_warning_keys: std::collections::HashSet<PredictiveWarningKey>,
     deepseek_pricing_period: Option<String>,
+    identity_gaps: identity_gaps::IdentityGapState,
+    /// Open credential-expiry episodes (in memory; reset on restart).
+    credential_episodes: CredentialEpisodes,
+    /// Toasts that would have been shown; tests assert on this instead of popping real toasts.
+    #[cfg(test)]
+    toasts: std::cell::RefCell<Vec<String>>,
 }
 
 impl NotificationManager {
@@ -141,6 +157,10 @@ impl NotificationManager {
             previous_session_percent: std::collections::HashMap::new(),
             predictive_warning_keys: std::collections::HashSet::new(),
             deepseek_pricing_period: None,
+            identity_gaps: identity_gaps::IdentityGapState::default(),
+            credential_episodes: CredentialEpisodes::default(),
+            #[cfg(test)]
+            toasts: std::cell::RefCell::new(Vec::new()),
         }
     }
 
@@ -278,6 +298,12 @@ impl NotificationManager {
         used_percent: f64,
         settings: &Settings,
     ) {
+        if !settings.quota_warning_enabled(provider, window) {
+            // Quota warnings set to Off for this provider window: forget its
+            // sent state so turning them back on starts fresh (Mac parity).
+            self.clear_threshold_toasts(provider, account, window);
+            return;
+        }
         if !settings.show_notifications {
             return;
         }
@@ -293,9 +319,7 @@ impl NotificationManager {
             // Clear only this provider+account+window's threshold toasts so a cool
             // session on one account cannot re-arm another account's weekly (or
             // another window on the same account) on the next poll.
-            self.sent_notifications.retain(|(p, a, w, t)| {
-                *p != provider || a != account || w != window || !t.is_threshold_toast()
-            });
+            self.clear_threshold_toasts(provider, account, window);
             None
         };
 
@@ -311,6 +335,12 @@ impl NotificationManager {
                 self.sent_notifications.insert(key);
             }
         }
+    }
+
+    fn clear_threshold_toasts(&mut self, provider: ProviderId, account: &str, window: &str) {
+        self.sent_notifications.retain(|(p, a, w, t)| {
+            *p != provider || a != account || w != window || !t.is_threshold_toast()
+        });
     }
 
     /// Observe a session lane across all session consumers. Informational
@@ -374,7 +404,7 @@ impl NotificationManager {
         current_percent: f64,
         settings: &Settings,
     ) {
-        if !settings.show_notifications {
+        if !settings.session_quota_notifications_enabled {
             return;
         }
 
@@ -389,12 +419,13 @@ impl NotificationManager {
 
         // Check for depleted transition: was not depleted, now is
         if previous_percent < DEPLETED_THRESHOLD && current_percent >= DEPLETED_THRESHOLD {
-            let title = NotificationType::SessionDepleted.title();
-            let body = format!(
-                "{} session depleted. 0% left. Will notify when available again.",
-                provider.display_name()
+            let title = NotificationType::SessionDepleted.title(settings.ui_language);
+            let body = locale::format_locale(
+                settings.ui_language,
+                LocaleKey::NotificationSessionDepletedBody,
+                &[provider.display_name()],
             );
-            self.show_toast(title, &body);
+            self.show_toast(&title, &body);
             Self::play_notification_sound(NotificationSoundEvent::SessionDepleted, settings);
             self.sent_notifications.insert((
                 provider,
@@ -413,12 +444,13 @@ impl NotificationManager {
                 NotificationType::SessionDepleted,
             );
             if self.sent_notifications.contains(&depleted_key) {
-                let title = NotificationType::SessionRestored.title();
-                let body = format!(
-                    "{} session restored. Session quota is available again.",
-                    provider.display_name()
+                let title = NotificationType::SessionRestored.title(settings.ui_language);
+                let body = locale::format_locale(
+                    settings.ui_language,
+                    LocaleKey::NotificationSessionRestoredBody,
+                    &[provider.display_name()],
                 );
-                self.show_toast(title, &body);
+                self.show_toast(&title, &body);
                 Self::play_notification_sound(NotificationSoundEvent::SessionRestored, settings);
                 self.sent_notifications.remove(&depleted_key);
             }
@@ -438,19 +470,26 @@ impl NotificationManager {
         notif_type: NotificationType,
         settings: &Settings,
     ) {
-        let title = notif_type.title();
-        let body = Self::notification_body(provider, window, used_percent, notif_type);
-        self.show_toast(title, &body);
+        let title = notif_type.title(settings.ui_language);
+        let body = Self::notification_body(
+            provider,
+            window,
+            used_percent,
+            notif_type,
+            settings.ui_language,
+        );
+        self.show_toast(&title, &body);
         Self::play_notification_sound(Self::sound_event_for(notif_type), settings);
     }
 
-    fn window_label(window: &str) -> &str {
-        match window {
-            "session" => "session",
-            "weekly" => "weekly",
-            other if !other.is_empty() => other,
-            _ => "usage",
-        }
+    fn window_label(window: &str, language: crate::settings::Language) -> String {
+        let key = match window {
+            "session" => LocaleKey::NotificationWindowSession,
+            "weekly" => LocaleKey::NotificationWindowWeekly,
+            other if !other.is_empty() => return other.to_string(),
+            _ => LocaleKey::NotificationWindowUsage,
+        };
+        locale::get_text(language, key)
     }
 
     fn notification_body(
@@ -458,31 +497,30 @@ impl NotificationManager {
         window: &str,
         used_percent: f64,
         notif_type: NotificationType,
+        language: crate::settings::Language,
     ) -> String {
         let provider_name = provider.display_name();
-        let window_label = Self::window_label(window);
-        match notif_type {
-            NotificationType::HighUsage => {
-                format!(
-                    "{provider_name} {window_label} usage at {used_percent:.0}% - approaching limit"
-                )
-            }
+        let window_label = Self::window_label(window, language);
+        let percent = format!("{used_percent:.0}");
+        let usage_args = [provider_name, window_label.as_str(), percent.as_str()];
+        let provider_args = [provider_name];
+        let (key, args): (LocaleKey, &[&str]) = match notif_type {
+            NotificationType::HighUsage => (LocaleKey::NotificationHighUsageBody, &usage_args),
             NotificationType::CriticalUsage => {
-                format!(
-                    "{provider_name} {window_label} usage at {used_percent:.0}% - critically high!"
-                )
+                (LocaleKey::NotificationCriticalUsageBody, &usage_args)
             }
-            NotificationType::Exhausted => {
-                format!("{provider_name} {window_label} usage limit exhausted ({used_percent:.0}%)")
+            NotificationType::Exhausted => (LocaleKey::NotificationExhaustedBody, &usage_args),
+            NotificationType::StatusIssue => {
+                (LocaleKey::NotificationStatusIssueBody, &provider_args)
             }
-            NotificationType::StatusIssue => format!("{provider_name} is experiencing issues"),
             NotificationType::SessionDepleted => {
-                format!("{provider_name} session depleted. 0% left.")
+                (LocaleKey::NotificationSessionDepletedBody, &provider_args)
             }
             NotificationType::SessionRestored => {
-                format!("{provider_name} session restored. Quota available again.")
+                (LocaleKey::NotificationSessionRestoredBody, &provider_args)
             }
-        }
+        };
+        locale::format_locale(language, key, args)
     }
 
     fn sound_event_for(notif_type: NotificationType) -> NotificationSoundEvent {
@@ -508,14 +546,23 @@ impl NotificationManager {
         description: &str,
         settings: &Settings,
     ) {
-        let title = NotificationType::StatusIssue.title();
+        let title = NotificationType::StatusIssue.title(settings.ui_language);
         let body = format!("{}: {}", provider.display_name(), description);
-        self.show_toast(title, &body);
+        self.show_toast(&title, &body);
         Self::play_notification_sound(NotificationSoundEvent::StatusIssue, settings);
     }
 
-    #[cfg(target_os = "windows")]
-    fn show_toast(&self, title: &str, body: &str) {
+    /// Tests record the toast and report it as handed to the OS.
+    #[cfg(test)]
+    fn show_toast(&self, title: &str, body: &str) -> bool {
+        self.toasts.borrow_mut().push(format!("{title}: {body}"));
+        true
+    }
+
+    /// Returns whether the toast was handed to the OS (a spawn failure is the
+    /// only failure the fire-and-forget PowerShell dispatch can observe).
+    #[cfg(all(target_os = "windows", not(test)))]
+    fn show_toast(&self, title: &str, body: &str) -> bool {
         use std::os::windows::process::CommandExt;
         use std::process::Command;
         use std::sync::Once;
@@ -573,13 +620,19 @@ impl NotificationManager {
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn()
         {
-            Ok(_) => tracing::debug!("Toast notification dispatched: {}", title),
-            Err(e) => tracing::warn!("Failed to dispatch toast notification '{}': {}", title, e),
+            Ok(_) => {
+                tracing::debug!("Toast notification dispatched: {}", title);
+                true
+            }
+            Err(e) => {
+                tracing::warn!("Failed to dispatch toast notification '{}': {}", title, e);
+                false
+            }
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
-    fn show_toast(&self, title: &str, body: &str) {
+    #[cfg(all(not(target_os = "windows"), not(test)))]
+    fn show_toast(&self, title: &str, body: &str) -> bool {
         use std::process::Command;
 
         // Try notify-send first (works on most Linux distros including WSL with WSLg)
@@ -594,10 +647,11 @@ impl NotificationManager {
             && output.status.success()
         {
             tracing::debug!("Sent notification via notify-send: {}", title);
-            return;
+            return true;
         }
 
         tracing::info!("Notification: {} - {}", title, body);
+        false
     }
 }
 
@@ -696,6 +750,51 @@ mod tests {
                 sound_event
             );
         }
+    }
+
+    #[test]
+    fn usage_toasts_follow_ui_language() {
+        use crate::settings::Language;
+
+        assert_eq!(
+            NotificationType::HighUsage.title(Language::English),
+            "High Usage Warning"
+        );
+        assert_eq!(
+            NotificationManager::notification_body(
+                ProviderId::Claude,
+                "weekly",
+                86.0,
+                NotificationType::HighUsage,
+                Language::English,
+            ),
+            "Claude weekly usage at 86% - approaching limit"
+        );
+        assert_eq!(
+            NotificationType::HighUsage.title(Language::Russian),
+            "Высокое использование"
+        );
+        assert_eq!(
+            NotificationManager::notification_body(
+                ProviderId::Claude,
+                "weekly",
+                86.0,
+                NotificationType::HighUsage,
+                Language::Russian,
+            ),
+            "Claude (неделя): использовано 86% — лимит почти исчерпан"
+        );
+        // Unknown windows pass through untranslated instead of falling back.
+        assert_eq!(
+            NotificationManager::notification_body(
+                ProviderId::Claude,
+                "opus",
+                100.0,
+                NotificationType::Exhausted,
+                Language::English,
+            ),
+            "Claude opus usage limit exhausted (100%)"
+        );
     }
 
     fn pace(will_last_to_reset: bool, eta_seconds: Option<f64>) -> UsagePace {
@@ -879,6 +978,89 @@ mod tests {
             &risk,
         ));
         assert_eq!(manager.predictive_warning_keys.len(), 2);
+    }
+
+    #[test]
+    fn quota_warnings_off_suppresses_threshold_toasts_for_that_window_only() {
+        use crate::settings::{ProviderQuotaWarnings, QuotaWarningWindow};
+        let mut manager = NotificationManager::new();
+        let mut settings = Settings::default();
+        let account = "";
+        let key = |window: &str, kind| {
+            (
+                ProviderId::Claude,
+                account.to_string(),
+                window.to_string(),
+                kind,
+            )
+        };
+
+        manager.check_and_notify(ProviderId::Claude, account, "session", 80.0, &settings);
+        assert!(
+            manager
+                .sent_notifications
+                .contains(&key("session", NotificationType::HighUsage))
+        );
+
+        settings.set_quota_warnings(
+            ProviderId::Claude,
+            ProviderQuotaWarnings {
+                session: QuotaWarningWindow {
+                    enabled: Some(false),
+                    high: None,
+                    critical: None,
+                },
+                weekly: QuotaWarningWindow::default(),
+            },
+        );
+        manager.check_and_notify(ProviderId::Claude, account, "session", 95.0, &settings);
+        manager.check_and_notify(ProviderId::Claude, account, "weekly", 80.0, &settings);
+        assert!(
+            !manager
+                .sent_notifications
+                .iter()
+                .any(|(_, _, window, _)| window == "session"),
+            "Off clears and suppresses the session window"
+        );
+        assert!(
+            manager
+                .sent_notifications
+                .contains(&key("weekly", NotificationType::HighUsage)),
+            "the Global weekly window still warns"
+        );
+    }
+
+    #[test]
+    fn custom_quota_warning_threshold_decides_when_a_toast_fires() {
+        use crate::settings::{ProviderQuotaWarnings, QuotaWarningWindow};
+        let mut manager = NotificationManager::new();
+        let mut settings = Settings::default();
+        settings.set_quota_warnings(
+            ProviderId::Codex,
+            ProviderQuotaWarnings {
+                session: QuotaWarningWindow {
+                    enabled: None,
+                    high: Some(40.0),
+                    critical: Some(60.0),
+                },
+                weekly: QuotaWarningWindow::default(),
+            },
+        );
+        manager.check_and_notify(ProviderId::Codex, "", "session", 45.0, &settings);
+        assert!(manager.sent_notifications.contains(&(
+            ProviderId::Codex,
+            String::new(),
+            "session".to_string(),
+            NotificationType::HighUsage,
+        )));
+        // 45% is below the global 70% high threshold, so weekly stays quiet.
+        manager.check_and_notify(ProviderId::Codex, "", "weekly", 45.0, &settings);
+        assert!(
+            !manager
+                .sent_notifications
+                .iter()
+                .any(|(_, _, window, _)| window == "weekly")
+        );
     }
 
     #[test]
@@ -1144,5 +1326,37 @@ mod tests {
         // Account B can still fire depleted independently.
         manager.check_session_transition(ProviderId::Claude, "account-b", 100.0, &settings);
         assert!(manager.sent_notifications.contains(&depleted_b));
+    }
+
+    #[test]
+    fn session_transition_follows_its_own_setting_not_threshold_warnings() {
+        let depleted = (
+            ProviderId::Codex,
+            "account".to_string(),
+            "session".to_string(),
+            NotificationType::SessionDepleted,
+        );
+
+        // Threshold warnings off must not silence depleted/restored alerts.
+        let mut manager = NotificationManager::new();
+        let settings = Settings {
+            show_notifications: false,
+            session_quota_notifications_enabled: true,
+            ..Settings::default()
+        };
+        manager.check_session_transition(ProviderId::Codex, "account", 40.0, &settings);
+        manager.check_session_transition(ProviderId::Codex, "account", 100.0, &settings);
+        assert!(manager.sent_notifications.contains(&depleted));
+
+        // Turning the session-quota alerts off silences them even with warnings on.
+        let mut manager = NotificationManager::new();
+        let settings = Settings {
+            show_notifications: true,
+            session_quota_notifications_enabled: false,
+            ..Settings::default()
+        };
+        manager.check_session_transition(ProviderId::Codex, "account", 40.0, &settings);
+        manager.check_session_transition(ProviderId::Codex, "account", 100.0, &settings);
+        assert!(!manager.sent_notifications.contains(&depleted));
     }
 }

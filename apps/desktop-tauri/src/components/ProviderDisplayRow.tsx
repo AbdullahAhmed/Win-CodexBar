@@ -1,11 +1,43 @@
+import { useLocale } from "../hooks/useLocale";
+import { localizeProviderText } from "../lib/providerText";
+import { localizeProviderLabel } from "../lib/windowLabels";
 import type { ProviderDisplayDetail } from "../types/bridge";
+
+const MAX_ROWS_PER_SECTION = 24;
+
+export interface ProviderDisplayDetailGroup {
+  id: number;
+  title: string | null;
+  rows: ProviderDisplayDetail[];
+}
+
+/** Group consecutive provider details and cap each rendered section. */
+export function groupProviderDisplayDetails(
+  details: ProviderDisplayDetail[],
+): ProviderDisplayDetailGroup[] {
+  const groups: ProviderDisplayDetailGroup[] = [];
+  for (const detail of details) {
+    const title = detail.sectionTitle ?? null;
+    const current = groups[groups.length - 1];
+    if (
+      current &&
+      current.title === title &&
+      current.rows.length < MAX_ROWS_PER_SECTION
+    ) {
+      current.rows.push(detail);
+    } else {
+      groups.push({ id: groups.length, title, rows: [detail] });
+    }
+  }
+  return groups;
+}
 
 /**
  * One transient provider detail line: "{title}: {value} [secondary]"
  * plus an optional clamped progress bar.
  *
- * Shared by the tray menu card (`MenuCardDetails`) and the settings provider
- * detail (`UsageSection`); each surface passes its own layout classes.
+ * Used by the settings provider detail (`UsageSection`); the tray card renders
+ * the same data as key-value rows in `card/DetailSections`.
  */
 export function ProviderDisplayRow({
   detail,
@@ -20,6 +52,8 @@ export function ProviderDisplayRow({
   trackClassName: string;
   fillClassName: string;
 }) {
+  const { t } = useLocale();
+  const title = localizeProviderLabel(detail.title, t);
   const progress = detail.progress;
   const progressPercent =
     progress &&
@@ -32,13 +66,25 @@ export function ProviderDisplayRow({
   return (
     <div>
       <div className={lineClassName}>
-        <span>{detail.title}: {detail.value}</span>
+        <span>{title}: {localizeProviderText(detail.value, t)}</span>
         {detail.secondaryValue && secondaryClassName && (
-          <span className={secondaryClassName}>{detail.secondaryValue}</span>
+          <>
+            {" "}
+            <span className={secondaryClassName}>
+              {localizeProviderText(detail.secondaryValue, t)}
+            </span>
+          </>
         )}
       </div>
       {progressPercent != null && (
-        <div className={trackClassName} aria-label={`${detail.title} progress`}>
+        <div
+          className={trackClassName}
+          role="progressbar"
+          aria-label={title}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progressPercent}
+        >
           <div className={fillClassName} style={{ width: `${progressPercent}%` }} />
         </div>
       )}

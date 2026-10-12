@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use crate::commands::ProviderUsageSnapshot;
 use crate::proof_harness::ProofConfig;
+use crate::shell::activation::Activation;
 use crate::surface::{SurfaceMode, SurfaceStateMachine, SurfaceTransition};
 use crate::surface_target::SurfaceTarget;
 
@@ -119,8 +120,15 @@ pub struct AppState {
     pub surface_machine: SurfaceStateMachine,
     pub current_target: SurfaceTarget,
     pub tray_anchor: Option<TrayAnchor>,
+    /// Cursor location captured for a desktop launch; cleared by tray/other opens.
+    pub flyout_cursor_anchor: Option<(f64, f64)>,
     pub provider_cache: Vec<ProviderUsageSnapshot>,
+    pub claude_account_usage: HashMap<String, crate::commands::ClaudeAccountUsageState>,
+    pub codex_account_needs_authentication: HashMap<uuid::Uuid, bool>,
     pub transient_provider_failure_counts: HashMap<ProviderId, u8>,
+    /// Live session behind each provider's cached good snapshot, for
+    /// owner-checked last-good retention. In memory only.
+    pub last_good_owners: HashMap<ProviderId, codexbar::core::LastGoodOwner>,
     pub provider_cache_updated_at: Option<std::time::Instant>,
     /// Per-provider freshness for scoped background refreshes. The aggregate
     /// timestamp cannot tell a dedicated auto-resume watcher whether its own
@@ -143,6 +151,8 @@ pub struct AppState {
     pub installer_path: Option<PathBuf>,
     /// Proof-harness configuration (set when `CODEXBAR_PROOF_MODE` is active).
     pub proof_config: Option<ProofConfig>,
+    /// True only after a validated proof seed was installed at startup.
+    pub provider_cache_seeded: bool,
     /// Persistent notification manager — tracks which alerts have fired to prevent spam.
     pub notification_manager: codexbar::notifications::NotificationManager,
     /// Instant when the tray panel was last shown — used to suppress
@@ -154,9 +164,10 @@ pub struct AppState {
     /// One-shot grace for a blur event caused while revealing the tray panel
     /// during explicit startup.
     pub startup_tray_blur_grace_until: Option<std::time::Instant>,
-    /// One-shot permission for frontend layout code to reveal a newly opened flyout.
-    pub flyout_reveal_pending: bool,
-    /// Active while a user gesture (resize drag, HTML5 drag-reorder) is
+    /// One-shot permission for frontend layout code to reveal a newly opened
+    /// flyout, carrying whether the revealed window may take focus.
+    pub flyout_reveal_pending: Option<Activation>,
+    /// Active while a user gesture (the provider tab HTML5 drag-reorder) is
     /// running a Win32 modal loop that transiently steals focus from the
     /// WebView2 child. `(began, until)` — `until` is the hard expiry;
     /// `began` lets a genuine refocus clear the guard early once the
@@ -191,8 +202,12 @@ impl AppState {
             surface_machine: SurfaceStateMachine::new(),
             current_target: SurfaceTarget::Summary,
             tray_anchor: None,
+            flyout_cursor_anchor: None,
             provider_cache: Vec::new(),
+            claude_account_usage: HashMap::new(),
+            codex_account_needs_authentication: HashMap::new(),
             transient_provider_failure_counts: HashMap::new(),
+            last_good_owners: HashMap::new(),
             provider_cache_updated_at: None,
             provider_cache_updated_at_by_provider: HashMap::new(),
             provider_refresh_started_at: None,
@@ -204,11 +219,12 @@ impl AppState {
             last_update_check_ms: None,
             installer_path: None,
             proof_config: None,
+            provider_cache_seeded: false,
             notification_manager: codexbar::notifications::NotificationManager::new(),
             last_shown_at: None,
             last_blur_dismissed_at: None,
             startup_tray_blur_grace_until: None,
-            flyout_reveal_pending: false,
+            flyout_reveal_pending: None,
             gesture_blur_guard: None,
             auto_resume: crate::auto_resume::AutoResumeState::default(),
         }
@@ -247,21 +263,19 @@ impl AppState {
             .is_some_and(|until| now <= until)
     }
 
-    pub fn arm_flyout_reveal(&mut self) {
-        self.flyout_reveal_pending = true;
+    pub fn arm_flyout_reveal(&mut self, activation: Activation) {
+        self.flyout_reveal_pending = Some(activation);
     }
 
     pub fn clear_flyout_reveal(&mut self) {
-        self.flyout_reveal_pending = false;
+        self.flyout_reveal_pending = None;
     }
 
-    pub fn take_pending_flyout_reveal(&mut self) -> bool {
-        std::mem::take(&mut self.flyout_reveal_pending)
+    /// Consume the pending reveal, returning how the flyout may be activated.
+    pub fn take_pending_flyout_reveal(&mut self) -> Option<Activation> {
+        self.flyout_reveal_pending.take()
     }
 
-    /// Arm the gesture blur guard for 15s. Called when the frontend reports
-    /// a resize-grip press or a drag-reorder mousedown is about to start a
-    /// Win32/OLE modal loop that will transiently blur the window.
     pub fn begin_gesture_blur_guard(&mut self, now: std::time::Instant) {
         self.gesture_blur_guard = Some((now, now + std::time::Duration::from_secs(15)));
     }
@@ -336,6 +350,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::AppState;
+    use crate::shell::activation::Activation;
     use crate::surface::SurfaceMode;
     use crate::surface_target::SurfaceTarget;
 
@@ -460,27 +475,39 @@ mod tests {
     fn hidden_flyout_cannot_be_revealed_by_stale_layout_work() {
         let mut state = AppState::new();
 
-        assert!(!state.take_pending_flyout_reveal());
+        assert_eq!(state.take_pending_flyout_reveal(), None);
     }
 
     #[test]
     fn pending_flyout_reveal_is_consumed_once() {
         let mut state = AppState::new();
 
-        state.arm_flyout_reveal();
+        state.arm_flyout_reveal(Activation::UserAction);
 
-        assert!(state.take_pending_flyout_reveal());
-        assert!(!state.take_pending_flyout_reveal());
+        assert_eq!(
+            state.take_pending_flyout_reveal(),
+            Some(Activation::UserAction)
+        );
+        assert_eq!(state.take_pending_flyout_reveal(), None);
+    }
+
+    #[test]
+    fn pending_flyout_reveal_keeps_the_requested_activation() {
+        let mut state = AppState::new();
+
+        state.arm_flyout_reveal(Activation::Never);
+
+        assert_eq!(state.take_pending_flyout_reveal(), Some(Activation::Never));
     }
 
     #[test]
     fn pending_flyout_reveal_can_be_cleared_without_revealing() {
         let mut state = AppState::new();
 
-        state.arm_flyout_reveal();
+        state.arm_flyout_reveal(Activation::IfAllowed);
         state.clear_flyout_reveal();
 
-        assert!(!state.take_pending_flyout_reveal());
+        assert_eq!(state.take_pending_flyout_reveal(), None);
     }
 
     #[test]

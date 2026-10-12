@@ -1,28 +1,48 @@
 import { useEffect, useState } from "react";
+import type { LocaleKey } from "../i18n/keys";
+import { localizeDates, localizeResetCountdown } from "../lib/providerText";
 import { useLocale } from "./useLocale";
 
 export type ResetTimeFormatMode = "reset" | "expires";
 
-/** Normalize backend reset descriptions without changing their suffix. */
-export function normalizeResetDescription(description: string | null): string | null {
+type Translate = (key: LocaleKey) => string;
+
+function fill(template: string, ...values: Array<string | number>): string {
+  return values.reduce<string>((text, value) => text.replace("{}", String(value)), template);
+}
+
+/**
+ * Normalize a backend reset description into the UI language. Providers send
+ * English wording; the countdown and the "Resets" prefix are localized, and any
+ * remaining provider text (dates, zones) is kept as its suffix.
+ */
+export function normalizeResetDescription(
+  description: string | null,
+  t: Translate,
+): string | null {
   const trimmed = description?.trim() ?? "";
   if (!trimmed) return null;
 
   const lowercased = trimmed.toLowerCase();
   if (lowercased === "reset" || lowercased === "resets") {
-    return "Resets";
+    return t("DetailCostResets");
   }
   for (const prefix of ["resets in ", "reset in "]) {
     if (lowercased.startsWith(prefix)) {
-      return `Resets in ${trimmed.slice(prefix.length)}`;
+      return localizeResetCountdown(trimmed.slice(prefix.length).trim(), t);
     }
   }
+  let body = trimmed;
   for (const prefix of ["resets ", "reset "]) {
     if (lowercased.startsWith(prefix)) {
-      return `Resets ${trimmed.slice(prefix.length)}`;
+      body = trimmed.slice(prefix.length).trim();
+      break;
     }
   }
-  return `Resets ${trimmed}`;
+  if (body.toLowerCase().startsWith("at ")) {
+    return fill(t("ResetsAtTime"), localizeDates(body.slice(3).trim(), t));
+  }
+  return fill(t("ResetsAtLabel"), localizeDates(body, t));
 }
 
 const absoluteResetFormatter = new Intl.DateTimeFormat(undefined, {
@@ -60,7 +80,7 @@ export function useFormattedResetTime(
   }, [resetsAt, relative]);
 
   const normalizedFallback =
-    mode === "reset" ? normalizeResetDescription(fallback) : fallback?.trim() || null;
+    mode === "reset" ? normalizeResetDescription(fallback, t) : fallback?.trim() || null;
 
   if (!resetsAt) {
     return normalizedFallback;

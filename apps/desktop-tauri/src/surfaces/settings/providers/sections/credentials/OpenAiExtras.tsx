@@ -11,17 +11,11 @@ interface Props {
 }
 
 /**
- * OpenAI/Codex-specific detail help.
- *
- * Port of the help strings below the `ProviderId::Codex` toggles in
- * `rust/src/native_ui/preferences.rs::render_provider_detail_panel` (~6625).
- * The toggles themselves (`codex_historical_tracking`,
- * `codex_openai_web_extras`) are not yet persisted through
- * `update_settings` in the Tauri bridge, so this component shows the
- * upstream hint copy only. The toggles will be surfaced once they join
- * the SettingsUpdate bridge (tracked alongside Phase 6e token-accounts).
+ * Workspace, organization or base-URL field for API providers that need one
+ * next to their key (OpenAI API project ID, LiteLLM base URL, and so on).
+ * Renders nothing for other providers.
  */
-export function OpenAiExtras({ providerId = "codex", t }: Props) {
+export function OpenAiExtras({ providerId = "openaiapi", t }: Props) {
   const [projectId, setProjectId] = useState("");
   const [savedProjectId, setSavedProjectId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -94,28 +88,21 @@ export function OpenAiExtras({ providerId = "codex", t }: Props) {
     );
   }
 
-  return (
-    <section className="provider-detail-section">
-      <h4>{t("CredentialsSectionTitle")}</h4>
-      <div className="provider-detail-helper">
-        {t("ProviderCodexHistoryHelp")}
-      </div>
-      <div className="provider-detail-helper">
-        {t("CredsOpenAiHistoryHelp")}
-      </div>
-    </section>
-  );
+  return null;
 }
 
 const WORKSPACE_EXTRA_IDS: Record<string, true> = {
   openaiapi: true,
   litellm: true,
+  llmman: true,
   devin: true,
   opencodego: true,
   zed: true,
   sub2api: true,
+  llmproxy: true,
   xai: true,
   fireworks: true,
+  gitkraken: true,
 };
 
 function extraConfig(providerId: string, t: Props["t"]) {
@@ -133,6 +120,13 @@ function extraConfig(providerId: string, t: Props["t"]) {
         label: t("LiteLlmBaseUrlLabel"),
         placeholder: t("LiteLlmBaseUrlPlaceholder"),
         help: t("LiteLlmBaseUrlHelp"),
+      };
+    case "llmman":
+      return {
+        title: t("LLMManApiTitle"),
+        label: t("LLMManBaseUrlLabel"),
+        placeholder: t("LLMManBaseUrlPlaceholder"),
+        help: t("LLMManBaseUrlHelp"),
       };
     case "devin":
       return {
@@ -162,6 +156,13 @@ function extraConfig(providerId: string, t: Props["t"]) {
         placeholder: t("Sub2ApiBaseUrlPlaceholder"),
         help: t("Sub2ApiBaseUrlHelp"),
       };
+    case "llmproxy":
+      return {
+        title: t("LlmProxyTitle"),
+        label: t("LlmProxyBaseUrlLabel"),
+        placeholder: t("LlmProxyBaseUrlPlaceholder"),
+        help: t("LlmProxyBaseUrlHelp"),
+      };
     case "xai":
       return {
         title: "xAI team",
@@ -175,6 +176,13 @@ function extraConfig(providerId: string, t: Props["t"]) {
         label: "Account slug",
         placeholder: "your-account-slug",
         help: "From app.fireworks.ai/accounts/<slug>. Or set FIREWORKS_ACCOUNT_SLUG. Pair with a Fireworks API key to read 30-day rated billing spend.",
+      };
+    case "gitkraken":
+      return {
+        title: "GitKraken organization",
+        label: "Organization ID (optional)",
+        placeholder: "organization-id",
+        help: "Adds the organization ID to shared-pool usage requests. Or set GITKRAKEN_ORG_ID.",
       };
     default:
       return null;

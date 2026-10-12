@@ -11,9 +11,6 @@
 #ifndef OutputBaseFilename
   #define OutputBaseFilename "CodexBar-" + AppVersion + "-Setup"
 #endif
-#ifndef VCRedistPath
-  #define VCRedistPath "..\\target\\installer-deps\\vc_redist.x64.exe"
-#endif
 #ifndef WebView2BootstrapperPath
   #define WebView2BootstrapperPath "..\\target\\installer-deps\\MicrosoftEdgeWebview2Setup.exe"
 #endif
@@ -52,7 +49,6 @@ Source: "{#TargetBinDir}\codexbar.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#TargetBinDir}\codexbar-cli.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#TargetBinDir}\codexbar-desktop.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\icons\icon.ico"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#VCRedistPath}"; Flags: dontcopy
 Source: "{#WebView2BootstrapperPath}"; Flags: dontcopy
 
 [Icons]
@@ -69,7 +65,6 @@ Filename: "{app}\codexbar.exe"; Parameters: "menubar"; Flags: nowait postinstall
 
 [Code]
 var
-  NeedsVCRedistRestart: Boolean;
   NeedsWebView2Restart: Boolean;
 
 function WebView2InstalledInView(RootKey: Integer): Boolean;
@@ -130,77 +125,19 @@ begin
   end;
 end;
 
-function VCRedistInstalledInView(RootKey: Integer): Boolean;
-var
-  Installed: Cardinal;
-begin
-  Result :=
-    RegQueryDWordValue(
-      RootKey,
-      'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64',
-      'Installed',
-      Installed
-    ) and
-    (Installed = 1);
-end;
-
-function VCRedistNeedsInstall(): Boolean;
-begin
-  Result :=
-    not VCRedistInstalledInView(HKLM64) and
-    not VCRedistInstalledInView(HKLM32);
-end;
-
-procedure EnsureVCRedistInstalled();
-var
-  ResultCode: Integer;
-begin
-  if not VCRedistNeedsInstall() then
-    exit;
-
-  ExtractTemporaryFile('vc_redist.x64.exe');
-
-  WizardForm.StatusLabel.Caption := 'Installing Microsoft Visual C++ Runtime...';
-  WizardForm.ProgressGauge.Style := npbstMarquee;
-  try
-    if not Exec(
-      ExpandConstant('{tmp}\vc_redist.x64.exe'),
-      '/install /quiet /norestart',
-      '',
-      SW_HIDE,
-      ewWaitUntilTerminated,
-      ResultCode
-    ) then
-      RaiseException('Failed to start the Microsoft Visual C++ Runtime installer.');
-
-    if (ResultCode <> 0) and (ResultCode <> 1638) and (ResultCode <> 3010) then
-      RaiseException(
-        'Microsoft Visual C++ Runtime installation failed with exit code ' +
-        IntToStr(ResultCode) +
-        '.'
-      );
-
-    if ResultCode = 3010 then
-      NeedsVCRedistRestart := True;
-  finally
-    WizardForm.ProgressGauge.Style := npbstNormal;
-  end;
-end;
-
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then begin
     EnsureWebView2Installed();
-    EnsureVCRedistInstalled();
   end;
 end;
 
 function NeedRestart(): Boolean;
 begin
-  Result := NeedsVCRedistRestart or NeedsWebView2Restart;
+  Result := NeedsWebView2Restart;
 end;
 
 function CanLaunchCodexBar(): Boolean;
 begin
-  Result := not NeedsVCRedistRestart and not NeedsWebView2Restart;
+  Result := not NeedsWebView2Restart;
 end;

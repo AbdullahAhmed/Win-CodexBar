@@ -12,6 +12,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'release-pipeline-common.ps1')
 
 function Resolve-RequiredPath {
     param(
@@ -78,6 +79,15 @@ if ($cliSubsystem -ne 3) {
     throw "codexbar-cli.exe must be a Windows console-subsystem CLI binary; got subsystem $cliSubsystem."
 }
 
+# Release builds link the C runtime statically (+crt-static), so both
+# binaries start on a PC without the Visual C++ Redistributable.
+foreach ($binary in @(@{ Path = $desktop; Name = "codexbar.exe" }, @{ Path = $cli; Name = "codexbar-cli.exe" })) {
+    $dynamicCrt = @(Get-DynamicCrtImports (Get-PeImportedDllNames $binary.Path))
+    if ($dynamicCrt.Count -gt 0) {
+        throw "$($binary.Name) links the C runtime dynamically ($($dynamicCrt -join ', ')); release builds must use +crt-static."
+    }
+}
+
 if ($CheckCliStdout) {
     $stdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) "codexbar-cli-stdout-$PID.txt"
     try {
@@ -94,4 +104,4 @@ if ($CheckCliStdout) {
     }
 }
 
-Write-Host "Windows executable layout verified: desktop GUI binary + separate console CLI."
+Write-Host "Windows executable layout verified: desktop GUI binary + separate console CLI, both with a static C runtime."

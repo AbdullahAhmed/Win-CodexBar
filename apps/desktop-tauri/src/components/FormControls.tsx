@@ -1,4 +1,16 @@
 import type React from "react";
+import { createContext, useContext, useId } from "react";
+
+// A Field's label and description ids, so the control inside it gets an
+// accessible name without every call site passing `ariaLabel`.
+const FieldContext = createContext<{ labelId: string; descId?: string } | null>(null);
+
+/** aria props naming a control after its enclosing Field; an explicit ariaLabel wins. */
+export function useFieldAria(ariaLabel?: string) {
+  const field = useContext(FieldContext);
+  if (ariaLabel || !field) return { "aria-label": ariaLabel };
+  return { "aria-labelledby": field.labelId, "aria-describedby": field.descId };
+}
 
 // ── tiny reusable controls ──────────────────────────────────────────
 
@@ -8,19 +20,23 @@ export function Toggle({
   label,
   ariaLabel,
   disabled,
+  variant = "checkbox",
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   label?: string;
   ariaLabel?: string;
   disabled?: boolean;
+  /** "switch" draws the macOS-style switch used by the grouped settings panes. */
+  variant?: "checkbox" | "switch";
 }) {
+  const fieldAria = useFieldAria(ariaLabel);
   const input = (
     <input
       type="checkbox"
-      className="toggle"
+      className={variant === "switch" ? "toggle toggle--switch" : "toggle"}
       checked={checked}
-      aria-label={ariaLabel}
+      {...(label ? { "aria-label": ariaLabel } : fieldAria)}
       disabled={disabled}
       onChange={(e) => onChange(e.target.checked)}
     />
@@ -43,6 +59,7 @@ export function Select({
   disabled,
   ariaLabel,
   minWidth,
+  variant = "box",
 }: {
   value: string;
   options: { value: string; label: string }[];
@@ -50,14 +67,17 @@ export function Select({
   disabled?: boolean;
   ariaLabel?: string;
   minWidth?: number;
+  /** "menu" draws a borderless "Value ⌄" pop-up button like the macOS panes. */
+  variant?: "box" | "menu";
 }) {
+  const fieldAria = useFieldAria(ariaLabel);
   return (
     <select
-      className="select"
+      className={variant === "menu" ? "select select--menu" : "select"}
       style={{ minWidth }}
       value={value}
       disabled={disabled}
-      aria-label={ariaLabel}
+      {...fieldAria}
       onChange={(e) => onChange(e.target.value)}
     >
       {options.map((o) => (
@@ -86,6 +106,7 @@ export function NumberInput({
   disabled?: boolean;
   ariaLabel?: string;
 }) {
+  const fieldAria = useFieldAria(ariaLabel);
   return (
     <input
       type="number"
@@ -95,7 +116,7 @@ export function NumberInput({
       max={max}
       step={step}
       disabled={disabled}
-      aria-label={ariaLabel}
+      {...fieldAria}
       onChange={(e) => {
         const raw = e.target.value;
         if (raw === "") return;
@@ -119,16 +140,55 @@ export function Field({
   children: React.ReactNode;
   leading?: boolean;
 }) {
+  const id = useId();
+  const ids = { labelId: `${id}-label`, descId: description ? `${id}-desc` : undefined };
+  const control = (
+    <div className="settings-field__control">
+      <FieldContext.Provider value={ids}>{children}</FieldContext.Provider>
+    </div>
+  );
   return (
     <div className={`settings-field${leading ? " settings-field--leading" : ""}`}>
-      {leading && <div className="settings-field__control">{children}</div>}
+      {leading && control}
       <div className="settings-field__text">
-        <span className="settings-field__label">{label}</span>
+        <span id={ids.labelId} className="settings-field__label">{label}</span>
         {description && (
-          <span className="settings-field__desc">{description}</span>
+          <span id={ids.descId} className="settings-field__desc">{description}</span>
         )}
       </div>
-      {!leading && <div className="settings-field__control">{children}</div>}
+      {!leading && control}
     </div>
+  );
+}
+
+// ── grouped section (macOS grouped Form look) ───────────────────────
+
+/** A bold section title, a rounded box of rows with dividers, and an optional footer. */
+export function SettingsGroup({
+  title,
+  footer,
+  children,
+  className,
+}: {
+  title?: string;
+  footer?: React.ReactNode;
+  children: React.ReactNode;
+  /** Extra classes on the `section` (e.g. a dimmed or provider-detail variant). */
+  className?: string;
+}) {
+  const id = useId();
+  return (
+    <section
+      className={className ? `settings-group ${className}` : "settings-group"}
+      aria-labelledby={title ? `${id}-title` : undefined}
+    >
+      {title && (
+        <h3 id={`${id}-title`} className="settings-group__title">
+          {title}
+        </h3>
+      )}
+      <div className="settings-group__box">{children}</div>
+      {footer && <div className="settings-group__footer">{footer}</div>}
+    </section>
   );
 }

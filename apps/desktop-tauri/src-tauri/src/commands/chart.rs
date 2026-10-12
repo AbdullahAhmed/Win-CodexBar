@@ -9,8 +9,9 @@ use crate::commands::bridge::RateWindowSnapshot;
 use crate::state::AppState;
 use chrono::{DateTime, Utc};
 use codexbar::core::{OpenAIDashboardCacheStore, RateWindow};
+use codexbar::cost_reporting_period::{CostReportingPeriod, CostTimeZone};
 use codexbar::cost_scanner::{
-    CostScanner, CostSummary, get_daily_cost_history, get_daily_token_history,
+    CostScanner, CostSummary, TodayUsage, get_daily_cost_history, get_daily_token_history,
 };
 use codexbar::locale::{self, LocaleKey};
 use codexbar::providers::muse::local_usage as muse_local_usage;
@@ -30,6 +31,10 @@ const LOCAL_USAGE_TTL: Duration = Duration::from_secs(30);
 pub struct DailyCostPoint {
     pub date: String,
     pub value: Option<f64>,
+    /// Claude requests that only produced a preliminary proxy usage row that
+    /// day (upstream 0.60.5 #3688). Omitted when zero or not applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incomplete_request_count: Option<u32>,
 }
 
 /// A single (date, tokens) point for the Tokens chart mode (upstream 0.50.0
@@ -63,12 +68,26 @@ pub struct DailyUsageBreakdown {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderLocalUsageSummary {
     pub today_cost: Option<f64>,
+    /// Always the trailing 30 days (the published PowerToys pipe reads it).
     pub thirty_day_cost: Option<f64>,
     pub thirty_day_tokens: Option<u64>,
+    /// Cost over the selected History window (`reporting_period`).
+    #[serde(default)]
+    pub period_cost: Option<f64>,
+    /// Tokens over the selected History window.
+    #[serde(default)]
+    pub period_tokens: Option<u64>,
+    /// Raw reporting period the `period_*` fields cover; empty when unknown.
+    #[serde(default)]
+    pub reporting_period: String,
     pub latest_tokens: Option<u64>,
     pub top_model: Option<String>,
     pub estimate_note: String,
     pub token_cost_updated_at_ms: i64,
+    /// Incomplete Claude requests excluded from the selected-period totals
+    /// (`period_cost` / `period_tokens`). Omitted when zero or not applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incomplete_request_count: Option<u32>,
 }
 
 /// One display-only quota-window history row.  Completeness is tracked per
@@ -164,93 +183,156 @@ pub(crate) fn build_provider_chart_data(
     build_provider_chart_data_with_cancel(provider_id, account_email, None, None)
 }
 
+/// Builds the chart snapshot on the right side of the local scans. Claude's
+/// cost, token and local-usage series come from its snapshot, so it is built
+/// first and handed to `local_scan`. Every other snapshot is built after: the
+/// Codex quota-window history reads the cost cache that the scan writes, and
+/// building it first left a cold start with no current-window totals.
+fn snapshot_around_local_scan<S, L>(
+    snapshot_feeds_scan: bool,
+    build_snapshot: impl FnOnce() -> Option<S>,
+    local_scan: impl FnOnce(Option<&S>) -> L,
+) -> (Option<S>, L) {
+    if snapshot_feeds_scan {
+        let snapshot = build_snapshot();
+        let local = local_scan(snapshot.as_ref());
+        (snapshot, local)
+    } else {
+        let local = local_scan(None);
+        (build_snapshot(), local)
+    }
+}
+
 fn build_provider_chart_data_with_cancel(
     provider_id: String,
     account_email: Option<String>,
     cancel: Option<Arc<AtomicBool>>,
     weekly_window: Option<RateWindowSnapshot>,
 ) -> ProviderChartData {
-    let live_window = weekly_window.as_ref().map(rate_window_from_snapshot);
-    let provider_snapshot = codexbar::providers::chart::build_chart_snapshot(
-        &provider_id,
-        account_email.as_deref(),
-        live_window.as_ref(),
-        cancel.as_deref(),
-    );
-    let (cost_history, tokens_history, tokens_incomplete, local_usage) = if let Some(snapshot) =
-        provider_snapshot
-            .as_ref()
-            .filter(|_| provider_id == "claude")
-    {
-        let cost_history = snapshot
-            .daily_cost
-            .iter()
-            .cloned()
-            .map(|(date, value)| DailyCostPoint { date, value })
-            .collect();
-        let tokens_history = snapshot
-            .daily_tokens
-            .iter()
-            .cloned()
-            .map(|(date, tokens)| DailyTokenPoint { date, tokens })
-            .collect();
-        let local_usage = snapshot
-            .local_summary
-            .as_ref()
-            .and_then(|summary| local_usage_summary_from_cost_summary(&provider_id, summary));
-        store_local_usage_summary(&provider_id, local_usage.clone());
-        (
-            cost_history,
-            tokens_history,
-            snapshot.tokens_incomplete,
-            local_usage,
-        )
-    } else if provider_id == "muse" {
-        if cancel
-            .as_ref()
-            .is_some_and(|flag| flag.load(Ordering::Relaxed))
-        {
-            (Vec::new(), Vec::new(), true, None)
-        } else {
-            let report = muse_local_usage::scan(30, cancel.as_deref());
-            let tokens_history = report
-                .daily
-                .iter()
-                .map(|day| DailyTokenPoint {
-                    date: day.day.clone(),
-                    tokens: day.total_tokens,
-                })
-                .collect();
-            let local_usage = muse_local_usage_summary(&report, locale::current_language());
-            (
-                Vec::new(),
-                tokens_history,
-                !report.is_complete(),
-                local_usage,
-            )
-        }
-    } else {
-        let raw_cost = get_daily_cost_history(&provider_id, 30);
-        let cost_history: Vec<DailyCostPoint> = raw_cost
-            .into_iter()
-            .map(|(date, value)| DailyCostPoint { date, value })
-            .collect();
-
-        let (raw_tokens, tokens_incomplete) = get_daily_token_history(&provider_id, 30);
-        let tokens_history: Vec<DailyTokenPoint> = raw_tokens
-            .into_iter()
-            .map(|(date, tokens)| DailyTokenPoint { date, tokens })
-            .collect();
-        let local_usage = if cancel
-            .as_deref()
-            .is_some_and(|flag| flag.load(Ordering::Relaxed))
-        {
-            None
-        } else {
-            load_local_usage_summary_cached(&provider_id, cancel.as_deref())
+    if !cost_tracking_enabled() {
+        // Track costs off: no local log scan, so no cost, token, local-usage or
+        // quota-window history (all read local logs). OpenAI dashboard data is
+        // fetched from the web and stays.
+        let (credits_history, usage_breakdown) =
+            load_openai_dashboard_chart_data(&provider_id, account_email.as_deref());
+        return ProviderChartData {
+            credits_history,
+            usage_breakdown,
+            ..ProviderChartData::empty(provider_id)
         };
-        (cost_history, tokens_history, tokens_incomplete, local_usage)
+    }
+    let live_window = weekly_window.as_ref().map(rate_window_from_snapshot);
+    let build_snapshot = || {
+        codexbar::providers::chart::build_chart_snapshot(
+            &provider_id,
+            account_email.as_deref(),
+            live_window.as_ref(),
+            cancel.as_deref(),
+        )
     };
+    let (provider_snapshot, (cost_history, tokens_history, tokens_incomplete, local_usage)) =
+        snapshot_around_local_scan(provider_id == "claude", build_snapshot, |claude_snapshot| {
+            if let Some(snapshot) = claude_snapshot {
+                let cost_history = snapshot
+                    .daily_cost
+                    .iter()
+                    .cloned()
+                    .map(|(date, value)| {
+                        let incomplete_request_count = snapshot
+                            .daily_incomplete
+                            .iter()
+                            .find(|(day, _)| *day == date)
+                            .map(|(_, count)| *count);
+                        DailyCostPoint {
+                            date,
+                            value,
+                            incomplete_request_count,
+                        }
+                    })
+                    .collect();
+                let tokens_history = snapshot
+                    .daily_tokens
+                    .iter()
+                    .cloned()
+                    .map(|(date, tokens)| DailyTokenPoint { date, tokens })
+                    .collect();
+                let period = current_reporting_period();
+                let local_usage = snapshot.local_summary.as_ref().and_then(|summary| {
+                    let period_summary =
+                        period_summary_for(&provider_id, period, summary, cancel.as_deref());
+                    local_usage_summary_from_cost_summary(
+                        &provider_id,
+                        summary,
+                        period,
+                        period_summary.as_ref(),
+                        snapshot.today.as_ref(),
+                    )
+                });
+                store_local_usage_summary(&provider_id, local_usage.clone());
+                (
+                    cost_history,
+                    tokens_history,
+                    snapshot.tokens_incomplete,
+                    local_usage,
+                )
+            } else if provider_id == "muse" {
+                if cancel
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(Ordering::Relaxed))
+                {
+                    (Vec::new(), Vec::new(), true, None)
+                } else {
+                    let report = muse_local_usage::scan(30, cancel.as_deref());
+                    let tokens_history = report
+                        .daily
+                        .iter()
+                        .map(|day| DailyTokenPoint {
+                            date: day.day.clone(),
+                            tokens: day.total_tokens,
+                        })
+                        .collect();
+                    let period = current_reporting_period();
+                    let period_report = muse_period_report(period, &report, cancel.as_deref());
+                    let local_usage = muse_local_usage_summary(
+                        &report,
+                        &period_report,
+                        period,
+                        locale::current_language(),
+                    );
+                    (
+                        Vec::new(),
+                        tokens_history,
+                        !report.is_complete(),
+                        local_usage,
+                    )
+                }
+            } else {
+                let raw_cost = get_daily_cost_history(&provider_id, 30);
+                let cost_history: Vec<DailyCostPoint> = raw_cost
+                    .into_iter()
+                    .map(|(date, value)| DailyCostPoint {
+                        date,
+                        value,
+                        incomplete_request_count: None,
+                    })
+                    .collect();
+
+                let (raw_tokens, tokens_incomplete) = get_daily_token_history(&provider_id, 30);
+                let tokens_history: Vec<DailyTokenPoint> = raw_tokens
+                    .into_iter()
+                    .map(|(date, tokens)| DailyTokenPoint { date, tokens })
+                    .collect();
+                let local_usage = if cancel
+                    .as_deref()
+                    .is_some_and(|flag| flag.load(Ordering::Relaxed))
+                {
+                    None
+                } else {
+                    load_local_usage_summary_cached(&provider_id, cancel.as_deref())
+                };
+                (cost_history, tokens_history, tokens_incomplete, local_usage)
+            }
+        });
 
     let (credits_history, usage_breakdown) =
         load_openai_dashboard_chart_data(&provider_id, account_email.as_deref());
@@ -331,20 +413,56 @@ fn map_quota_window_history(
     }
 }
 
+/// "Track costs" (Usage & Spend). Off means no local cost-log scan at all.
+fn cost_tracking_enabled() -> bool {
+    codexbar::settings::Settings::load().cost_usage_enabled
+}
+
+/// The History window the desktop is configured to report.
+fn current_reporting_period() -> CostReportingPeriod {
+    codexbar::settings::Settings::load().cost_reporting_period
+}
+
+/// The period summary for `provider_id`, reusing the 30-day scan when the
+/// selected window is exactly the trailing 30 days.
+fn period_summary_for(
+    provider_id: &str,
+    period: CostReportingPeriod,
+    thirty_day: &CostSummary,
+    cancel: Option<&AtomicBool>,
+) -> Option<CostSummary> {
+    if period == CostReportingPeriod::Rolling(30) {
+        return Some(thirty_day.clone());
+    }
+    scan_local_cost(provider_id, period, cancel)
+}
+
 fn local_usage_summary_from_cost_summary(
     provider_id: &str,
     summary: &CostSummary,
+    period: CostReportingPeriod,
+    period_summary: Option<&CostSummary>,
+    today: Option<&TodayUsage>,
 ) -> Option<ProviderLocalUsageSummary> {
-    let total_tokens = total_tokens(summary);
-    let has_usage = summary.sessions_count > 0 || summary.total_cost_usd > 0.0 || total_tokens > 0;
+    let thirty_tokens = total_tokens(provider_id, summary);
+    let has_usage = summary.sessions_count > 0
+        || summary.total_cost_usd > 0.0
+        || thirty_tokens > 0
+        || summary.incomplete_request_count > 0;
     has_usage.then(|| ProviderLocalUsageSummary {
-        today_cost: None,
+        today_cost: today.and_then(|t| t.cost_usd).and_then(non_zero_f64),
         thirty_day_cost: non_zero_f64(summary.total_cost_usd),
-        thirty_day_tokens: non_zero_u64(total_tokens),
-        latest_tokens: None,
-        top_model: top_model(summary),
+        thirty_day_tokens: non_zero_u64(thirty_tokens),
+        period_cost: period_summary.and_then(|s| non_zero_f64(s.total_cost_usd)),
+        period_tokens: period_summary.and_then(|s| non_zero_u64(total_tokens(provider_id, s))),
+        reporting_period: period.raw(),
+        latest_tokens: today.and_then(|t| non_zero_u64(t.tokens)),
+        top_model: top_model(provider_id, summary),
         estimate_note: localized_estimate_note(provider_id, locale::current_language()),
         token_cost_updated_at_ms: current_unix_ms(),
+        // The note sits under the selected-period totals, so count that window.
+        incomplete_request_count: period_summary
+            .and_then(|s| non_zero_u32(s.incomplete_request_count)),
     })
 }
 
@@ -388,32 +506,45 @@ fn load_local_usage_summary_with_unknown_models(
     provider_id: &str,
     cancel: Option<&AtomicBool>,
 ) -> (Option<ProviderLocalUsageSummary>, HashSet<String>) {
+    if !cost_tracking_enabled() {
+        return (None, HashSet::new());
+    }
+    let period = current_reporting_period();
     if provider_id == "muse" {
         let summary = if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
             None
         } else {
             let report = muse_local_usage::scan(30, cancel);
-            muse_local_usage_summary(&report, locale::current_language())
+            let period_report = muse_period_report(period, &report, cancel);
+            muse_local_usage_summary(&report, &period_report, period, locale::current_language())
         };
         return (summary, HashSet::new());
     }
-    let Some(thirty_day) = scan_local_cost(provider_id, 30, cancel) else {
+    let Some(thirty_day) = scan_local_cost(provider_id, CostReportingPeriod::Rolling(30), cancel)
+    else {
         return (None, HashSet::new());
     };
     if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
         return (None, HashSet::new());
     }
-    let today = scan_local_cost(provider_id, 1, cancel).unwrap_or_default();
-    let unknown_models = thirty_day
+    let today =
+        scan_local_cost(provider_id, CostReportingPeriod::Rolling(1), cancel).unwrap_or_default();
+    let period_summary = period_summary_for(provider_id, period, &thirty_day, cancel);
+    let mut unknown_models: HashSet<String> = thirty_day
         .unknown_models
         .union(&today.unknown_models)
         .cloned()
         .collect();
+    if let Some(period_summary) = period_summary.as_ref() {
+        unknown_models.extend(period_summary.unknown_models.iter().cloned());
+    }
 
-    let thirty_day_tokens = total_tokens(&thirty_day);
-    let latest_tokens = total_tokens(&today);
-    let has_usage =
-        thirty_day.sessions_count > 0 || thirty_day.total_cost_usd > 0.0 || thirty_day_tokens > 0;
+    let thirty_day_tokens = total_tokens(provider_id, &thirty_day);
+    let latest_tokens = total_tokens(provider_id, &today);
+    let has_usage = thirty_day.sessions_count > 0
+        || thirty_day.total_cost_usd > 0.0
+        || thirty_day_tokens > 0
+        || thirty_day.incomplete_request_count > 0;
     if !has_usage {
         return (None, unknown_models);
     }
@@ -424,17 +555,42 @@ fn load_local_usage_summary_with_unknown_models(
             today_cost: non_zero_f64(today.total_cost_usd),
             thirty_day_cost: non_zero_f64(thirty_day.total_cost_usd),
             thirty_day_tokens: non_zero_u64(thirty_day_tokens),
+            period_cost: period_summary
+                .as_ref()
+                .and_then(|s| non_zero_f64(s.total_cost_usd)),
+            period_tokens: period_summary
+                .as_ref()
+                .and_then(|s| non_zero_u64(total_tokens(provider_id, s))),
+            reporting_period: period.raw(),
             latest_tokens: non_zero_u64(latest_tokens),
-            top_model: top_model(&thirty_day),
+            top_model: top_model(provider_id, &thirty_day),
             estimate_note: localized_estimate_note(provider_id, lang),
             token_cost_updated_at_ms: current_unix_ms(),
+            incomplete_request_count: period_summary
+                .as_ref()
+                .and_then(|s| non_zero_u32(s.incomplete_request_count)),
         }),
         unknown_models,
     )
 }
 
+/// The Muse report for the selected period, reusing the 30-day scan when the
+/// selection is exactly the trailing 30 days.
+fn muse_period_report(
+    period: CostReportingPeriod,
+    thirty_day: &muse_local_usage::Report,
+    cancel: Option<&AtomicBool>,
+) -> muse_local_usage::Report {
+    if period == CostReportingPeriod::Rolling(30) {
+        return thirty_day.clone();
+    }
+    muse_local_usage::scan(period.scan_days(Utc::now()), cancel)
+}
+
 fn muse_local_usage_summary(
     report: &muse_local_usage::Report,
+    period_report: &muse_local_usage::Report,
+    period: CostReportingPeriod,
     lang: codexbar::settings::Language,
 ) -> Option<ProviderLocalUsageSummary> {
     if !report.is_available() || !report.is_complete() {
@@ -445,10 +601,17 @@ fn muse_local_usage_summary(
         today_cost: None,
         thirty_day_cost: None,
         thirty_day_tokens: Some(total_tokens),
+        period_cost: None,
+        period_tokens: period_report
+            .is_complete()
+            .then_some(period_report.total_tokens)
+            .flatten(),
+        reporting_period: period.raw(),
         latest_tokens: report.today_tokens,
         top_model: report.top_model.clone(),
         estimate_note: locale::get_text(lang, LocaleKey::PanelEstimatedFromLocalLogsMuse),
         token_cost_updated_at_ms: current_unix_ms(),
+        incomplete_request_count: None,
     })
 }
 
@@ -460,7 +623,22 @@ pub(crate) fn load_provider_local_usage_summary(
 
 struct CachedLocalUsage {
     loaded_at: Instant,
+    /// `CostReportingPeriod::identity` the entry was built for; a period or
+    /// month change makes the entry stale before its TTL.
+    period_identity: String,
     summary: Option<ProviderLocalUsageSummary>,
+}
+
+fn local_usage_period_identity() -> String {
+    current_reporting_period().identity(Utc::now(), CostTimeZone::Local)
+}
+
+/// Cache a completed scan under the reporting window it actually used. The
+/// summary timestamp preserves the month for month-to-date identities.
+fn local_usage_summary_period_identity(summary: &ProviderLocalUsageSummary) -> Option<String> {
+    let period = CostReportingPeriod::parse(&summary.reporting_period)?;
+    let scanned_at = DateTime::<Utc>::from_timestamp_millis(summary.token_cost_updated_at_ms)?;
+    Some(period.identity(scanned_at, CostTimeZone::Local))
 }
 
 fn local_usage_cache() -> &'static Mutex<HashMap<String, CachedLocalUsage>> {
@@ -530,7 +708,7 @@ pub(crate) async fn refresh_provider_local_usage_cache(provider_ids: Vec<String>
             .await
             .unwrap_or(summary);
         }
-        store_local_usage_summary(&provider_id, summary);
+        store_local_usage_summary_if_tracking(&provider_id, summary);
     }
 }
 
@@ -546,9 +724,16 @@ fn load_local_usage_summary_cached(
     provider_id: &str,
     cancel: Option<&AtomicBool>,
 ) -> Option<ProviderLocalUsageSummary> {
+    // Checked before the cache so an entry from before "Track costs" was
+    // turned off is never served.
+    if !cost_tracking_enabled() {
+        return None;
+    }
     let cache = local_usage_cache();
+    let period_identity = local_usage_period_identity();
     if let Ok(guard) = cache.lock()
         && let Some(entry) = guard.get(provider_id)
+        && entry.period_identity == period_identity
         && token_cost_cache_is_fresh(Some(entry.loaded_at), Instant::now(), LOCAL_USAGE_TTL)
     {
         return entry.summary.clone();
@@ -563,16 +748,48 @@ fn load_local_usage_summary_cached(
         return None;
     }
 
-    store_local_usage_summary(provider_id, summary.clone());
+    store_local_usage_summary_if_tracking(provider_id, summary.clone());
     summary
 }
 
+/// A scan can outlive a "Track costs" off switch, which clears the cache; drop
+/// its result rather than refill the cache that the PowerToys pipe reads.
+fn store_local_usage_summary_if_tracking(
+    provider_id: &str,
+    summary: Option<ProviderLocalUsageSummary>,
+) {
+    let tracking = summary.is_none() || cost_tracking_enabled();
+    store_scanned_local_usage_summary(provider_id, summary, tracking);
+}
+
+fn store_scanned_local_usage_summary(
+    provider_id: &str,
+    summary: Option<ProviderLocalUsageSummary>,
+    cost_tracking_enabled: bool,
+) {
+    if summary.is_some() && !cost_tracking_enabled {
+        return;
+    }
+    store_local_usage_summary(provider_id, summary);
+}
+
 fn store_local_usage_summary(provider_id: &str, summary: Option<ProviderLocalUsageSummary>) {
+    let period_identity = match summary.as_ref() {
+        Some(summary) => {
+            let Some(period_identity) = local_usage_summary_period_identity(summary) else {
+                tracing::warn!("Skipping local usage cache entry with invalid period metadata");
+                return;
+            };
+            period_identity
+        }
+        None => local_usage_period_identity(),
+    };
     if let Ok(mut guard) = local_usage_cache().lock() {
         guard.insert(
             provider_id.to_string(),
             CachedLocalUsage {
                 loaded_at: Instant::now(),
+                period_identity,
                 summary,
             },
         );
@@ -585,11 +802,13 @@ fn record_local_usage_fetch_failure(provider_id: &str, failure: CostFetchFailure
     } else {
         Instant::now()
     };
+    let period_identity = local_usage_period_identity();
     if let Ok(mut guard) = local_usage_cache().lock() {
         guard.insert(
             provider_id.to_string(),
             CachedLocalUsage {
                 loaded_at,
+                period_identity,
                 summary: None,
             },
         );
@@ -637,10 +856,10 @@ fn localized_estimate_note(provider_id: &str, lang: codexbar::settings::Language
 
 fn scan_local_cost(
     provider_id: &str,
-    days: u32,
+    period: CostReportingPeriod,
     cancel: Option<&AtomicBool>,
 ) -> Option<CostSummary> {
-    let scanner = CostScanner::new(days);
+    let scanner = CostScanner::for_period(period);
     match provider_id {
         "codex" => Some(scanner.scan_codex_with_cancel(cancel)),
         "claude" => Some(scanner.scan_claude_with_cancel(cancel)),
@@ -650,8 +869,8 @@ fn scan_local_cost(
     }
 }
 
-fn total_tokens(summary: &CostSummary) -> u64 {
-    summary.input_tokens + summary.output_tokens
+fn total_tokens(provider_id: &str, summary: &CostSummary) -> u64 {
+    summary.total_tokens_for_provider(provider_id)
 }
 
 fn non_zero_f64(value: f64) -> Option<f64> {
@@ -662,11 +881,15 @@ fn non_zero_u64(value: u64) -> Option<u64> {
     (value > 0).then_some(value)
 }
 
-fn top_model(summary: &CostSummary) -> Option<String> {
+fn non_zero_u32(value: u32) -> Option<u32> {
+    (value > 0).then_some(value)
+}
+
+fn top_model(provider_id: &str, summary: &CostSummary) -> Option<String> {
     summary
         .by_model_tokens
         .iter()
-        .max_by_key(|(_, counts)| counts.total())
+        .max_by_key(|(_, counts)| counts.total_for_provider(provider_id))
         .map(|(model, _)| model.clone())
         .or_else(|| {
             summary
@@ -712,6 +935,7 @@ fn load_openai_dashboard_chart_data(
         .map(|d| DailyCostPoint {
             date: d.day.clone(),
             value: Some(d.total_credits_used),
+            incomplete_request_count: None,
         })
         .collect();
 
@@ -744,120 +968,62 @@ pub(crate) fn load_openai_dashboard_chart_data_for_test(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        CostFetchFailure, ProviderLocalUsageSummary, cost_fetch_failure_allows_early_retry,
-        localized_estimate_note, muse_local_usage_summary, token_cost_cache_is_fresh,
-    };
-    use crate::commands::is_provider_cache_fresh;
-    use codexbar::providers::muse::local_usage::{DailyUsage, Report};
-    use codexbar::settings::Language;
-    use codexbar::spend_contract::LocalHistoryCoverage;
-    use std::time::{Duration, Instant};
+mod tests;
+
+#[cfg(test)]
+mod snapshot_order_tests {
+    use super::snapshot_around_local_scan;
+    use std::cell::RefCell;
 
     #[test]
-    fn token_cost_age_does_not_use_provider_quota_age() {
-        let now = Instant::now();
-        let token_loaded = now - Duration::from_secs(31);
-        let provider_updated = now;
-        assert!(!token_cost_cache_is_fresh(
-            Some(token_loaded),
-            now,
-            Duration::from_secs(30)
-        ));
-        assert!(is_provider_cache_fresh(
-            Some(provider_updated),
-            Duration::from_secs(30)
-        ));
+    fn codex_snapshot_reads_the_cost_cache_the_scan_just_wrote() {
+        let cost_cache: RefCell<Option<&str>> = RefCell::new(None);
+        let calls = RefCell::new(Vec::new());
+        let (snapshot, local) = snapshot_around_local_scan(
+            false,
+            || {
+                calls.borrow_mut().push("snapshot");
+                Some(format!(
+                    "current window {}",
+                    cost_cache.borrow().unwrap_or("—")
+                ))
+            },
+            |seen: Option<&String>| {
+                calls.borrow_mut().push("scan");
+                assert_eq!(seen, None);
+                *cost_cache.borrow_mut() = Some("$2.65 · 1.8M");
+                "30d $24.12"
+            },
+        );
+        assert_eq!(*calls.borrow(), vec!["scan", "snapshot"]);
+        assert_eq!(snapshot.as_deref(), Some("current window $2.65 · 1.8M"));
+        assert_eq!(local, "30d $24.12");
     }
 
     #[test]
-    fn fast_cost_failures_allow_the_next_pass_to_retry() {
-        assert!(cost_fetch_failure_allows_early_retry(
-            CostFetchFailure::Failed
-        ));
-        assert!(!cost_fetch_failure_allows_early_retry(
-            CostFetchFailure::TimedOut
-        ));
+    fn claude_snapshot_is_built_first_and_feeds_the_scan() {
+        let calls = RefCell::new(Vec::new());
+        let (snapshot, local) = snapshot_around_local_scan(
+            true,
+            || {
+                calls.borrow_mut().push("snapshot");
+                Some(1.99_f64)
+            },
+            |seen: Option<&f64>| {
+                calls.borrow_mut().push("scan");
+                seen.copied()
+            },
+        );
+        assert_eq!(*calls.borrow(), vec!["snapshot", "scan"]);
+        assert_eq!(snapshot, Some(1.99));
+        assert_eq!(local, Some(1.99));
     }
 
     #[test]
-    fn local_usage_summary_serializes_token_cost_timestamp() {
-        let summary = ProviderLocalUsageSummary {
-            today_cost: Some(1.0),
-            thirty_day_cost: Some(2.0),
-            thirty_day_tokens: Some(300),
-            latest_tokens: Some(40),
-            top_model: Some("gpt-5".to_string()),
-            estimate_note: "estimated".to_string(),
-            token_cost_updated_at_ms: 1234,
-        };
-
-        let json = serde_json::to_value(summary).expect("serialize summary");
-        assert_eq!(
-            json.get("tokenCostUpdatedAtMs").and_then(|v| v.as_i64()),
-            Some(1234)
-        );
-    }
-
-    #[test]
-    fn muse_local_usage_summary_exposes_complete_tokens_without_cost() {
-        let report = Report {
-            daily: vec![DailyUsage {
-                day: "2026-09-20".to_string(),
-                input_tokens: 10,
-                output_tokens: 2,
-                cache_read_tokens: 0,
-                cache_write_tokens: 0,
-                reasoning_tokens: 0,
-                total_tokens: 12,
-                request_count: 1,
-                models: vec![("muse-spark-1.3".to_string(), 12)],
-            }],
-            total_tokens: Some(12),
-            today_tokens: Some(12),
-            session_count: 1,
-            top_model: Some("muse-spark-1.3".to_string()),
-            coverage: LocalHistoryCoverage::Complete,
-        };
-        let summary = muse_local_usage_summary(&report, codexbar::settings::Language::default())
-            .expect("complete history is visible");
-        assert_eq!(summary.today_cost, None);
-        assert_eq!(summary.thirty_day_cost, None);
-        assert_eq!(summary.thirty_day_tokens, Some(12));
-        assert_eq!(summary.latest_tokens, Some(12));
-        assert_eq!(summary.top_model.as_deref(), Some("muse-spark-1.3"));
-
-        let partial = Report {
-            coverage: LocalHistoryCoverage::Partial,
-            ..report
-        };
-        assert!(
-            muse_local_usage_summary(&partial, codexbar::settings::Language::default()).is_none()
-        );
-    }
-
-    #[test]
-    fn japanese_estimate_note_is_localized() {
-        assert_eq!(
-            localized_estimate_note("codex", Language::Japanese),
-            "ローカルログから推定したもので、請求書と異なる場合があります"
-        );
-        assert_eq!(
-            localized_estimate_note("claude", Language::Japanese),
-            "ClaudeのローカルログからAPIレートで推定したもので、トークン総数が請求書と異なる場合があります"
-        );
-    }
-
-    #[test]
-    fn english_estimate_note_is_localized() {
-        assert_eq!(
-            localized_estimate_note("codex", Language::English),
-            "Estimated from local logs; may differ from your bill"
-        );
-        assert_eq!(
-            localized_estimate_note("claude", Language::English),
-            "Estimated from local Claude logs at API rates; token totals may differ from your bill"
-        );
+    fn a_provider_without_a_snapshot_still_gets_its_scan() {
+        let (snapshot, local) =
+            snapshot_around_local_scan(false, || None::<u8>, |_seen: Option<&u8>| 30_usize);
+        assert_eq!(snapshot, None);
+        assert_eq!(local, 30);
     }
 }

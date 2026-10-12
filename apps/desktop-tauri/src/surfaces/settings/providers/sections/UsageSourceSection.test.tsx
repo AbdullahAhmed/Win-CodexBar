@@ -7,6 +7,7 @@ const tauriMocks = vi.hoisted(() => ({
 
 vi.mock("../../../../lib/tauri", () => tauriMocks);
 
+import { loadStyles, ruleBlock } from "../../../../test/styles";
 import { UsageSourceSection } from "./UsageSourceSection";
 import { shouldShowCookieSource, usageSourcePolicy } from "./usageSourcePolicy";
 
@@ -32,6 +33,12 @@ describe("usage source policy", () => {
       "oauth",
       "web",
     ]);
+    expect(usageSourcePolicy("zed")?.options.map((option) => option.value)).toEqual([
+      "auto",
+      "oauth",
+      "web",
+    ]);
+    expect(usageSourcePolicy("zed")?.options[0].description).toContain("editor credential");
     expect(usageSourcePolicy("antigravity")?.options[0].description).toContain(
       "skips agy reports without account identity",
     );
@@ -72,5 +79,11 @@ describe("UsageSourceSection", () => {
       <UsageSourceSection providerId="codex" currentValue="auto" t={(key) => key} onChanged={vi.fn()} />,
     );
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("wraps the segmented options inside the narrow detail pane", () => {
+    const rule = ruleBlock(loadStyles(), ".provider-detail-segmented");
+    expect(rule).toMatch(/flex-wrap:\s*wrap;/);
+    expect(rule).toMatch(/max-width:\s*100%;/);
   });
 });

@@ -41,6 +41,7 @@ export function CodexAccountsSection({ t, hidePersonalInfo = false }: Props) {
   >({});
   const [displayNames, setDisplayNames] = useState<Record<string, string>>({});
   const [accountOrdinals, setAccountOrdinals] = useState<Record<string, number>>({});
+  const [accountNeedsAuthentication, setAccountNeedsAuthentication] = useState<Record<string, boolean>>({});
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +58,7 @@ export function CodexAccountsSection({ t, hidePersonalInfo = false }: Props) {
       setDisplayNames(next.displayNames ?? {});
       setAccountOrdinals(next.accountOrdinals);
       setSnapshots(next.snapshots);
+      setAccountNeedsAuthentication(next.needsAuthentication ?? {});
       setLoaded(true);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -124,12 +126,12 @@ export function CodexAccountsSection({ t, hidePersonalInfo = false }: Props) {
     }
   };
 
-  const handleReauthenticate = async () => {
+  const handleReauthenticate = async (id: string) => {
     setBusy(true);
     setError(null);
     setSwitchResult(null);
     try {
-      await codexAccountReauthenticate();
+      await codexAccountReauthenticate(id);
       await load();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -254,16 +256,14 @@ export function CodexAccountsSection({ t, hidePersonalInfo = false }: Props) {
                       </span>
                     </div>
                     <div className="credential-card__actions">
-                      {account.source === "ambient" && (
-                        <button
-                          type="button"
-                          className="credential-btn credential-btn--secondary"
-                          disabled={busy}
-                          onClick={() => void handleReauthenticate()}
-                        >
-                          {t("CodexAccountsReauthenticateButton")}
-                        </button>
-                      )}
+                      {accountNeedsAuthentication[account.id] && <button
+                        type="button"
+                        className="credential-btn credential-btn--secondary"
+                        disabled={busy}
+                        onClick={() => void handleReauthenticate(account.id)}
+                      >
+                        {t("CodexAccountsReauthenticateButton")}
+                      </button>}
                       <button
                         type="button"
                         className="credential-btn credential-btn--secondary"
@@ -317,13 +317,21 @@ function CodexUsagePill({
   snapshot: CodexAccountUsageSnapshot;
   t: (key: LocaleKey) => string;
 }) {
-  const window = snapshot.primaryWindow;
-  const percent = window ? Math.round(window.usedPercent) : null;
   const plan = snapshot.plan ?? "";
   const blocked = snapshot.allowed === false || snapshot.limitReached === true;
-  const label = [plan, percent !== null ? `${percent}%` : null]
-    .filter(Boolean)
-    .join(" · ");
+  const windows = [snapshot.primaryWindow, snapshot.secondaryWindow]
+    .filter((window): window is NonNullable<typeof window> => window != null)
+    .map((window) => {
+      const pct = `${Math.round(window.usedPercent)}%`;
+      if (window.limitWindowSeconds % 86_400 === 0) {
+        return `${window.limitWindowSeconds / 86_400}d ${pct}`;
+      }
+      if (window.limitWindowSeconds % 3_600 === 0) {
+        return `${window.limitWindowSeconds / 3_600}h ${pct}`;
+      }
+      return pct;
+    });
+  const label = [plan, ...windows].filter(Boolean).join(" · ");
   return (
     <span className={blocked ? "codex-usage codex-usage--blocked" : "codex-usage"}>
       {label || t("CodexAccountsUsageUnavailable")}

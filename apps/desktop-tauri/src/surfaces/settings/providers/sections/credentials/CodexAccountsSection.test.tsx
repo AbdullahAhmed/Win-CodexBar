@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -25,6 +24,7 @@ const eventMocks = vi.hoisted(() => ({
 vi.mock("../../../../../lib/tauri", () => tauriMocks);
 vi.mock("@tauri-apps/api/event", () => eventMocks);
 
+import { loadStyles, ruleBlock } from "../../../../../test/styles";
 import { CodexAccountsSection } from "./CodexAccountsSection";
 
 const t = (key: string) => key;
@@ -81,10 +81,10 @@ describe("CodexAccountsSection", () => {
     expect(screen.getByText("user-2@example.com")).toBeDefined();
     expect(screen.getByText("CodexAccountsSourceManaged")).toBeDefined();
     expect(screen.getByText("CodexAccountsSourceAmbient")).toBeDefined();
-    expect(screen.getAllByText("CodexAccountsReauthenticateButton")).toHaveLength(1);
+    expect(screen.queryByText("CodexAccountsReauthenticateButton")).toBeNull();
   });
 
-  it("redacts the ambient row while preserving the managed row when privacy is on", async () => {
+  it("redacts every row (ambient + managed) when privacy is on", async () => {
     const ambient = account("ambient", {
       source: "ambient",
       nickname: "Private System Name",
@@ -106,8 +106,12 @@ describe("CodexAccountsSection", () => {
 
     render(<CodexAccountsSection t={t} hidePersonalInfo />);
     await screen.findByText("Account 1");
-    expect(screen.queryByText(/system@example\.com|Private System Name/)).toBeNull();
-    expect(screen.getByText("work@example.com — Work")).toBeDefined();
+    // Upstream 0.60.5 #3702 (141ecf642): every account is redacted, not only
+    // ambient ones — managed accounts get the generic label too.
+    expect(screen.getByText("Account 2")).toBeDefined();
+    expect(
+      screen.queryByText(/system@example\.com|work@example\.com|Private System Name|Work/),
+    ).toBeNull();
     expect(screen.getByText("CodexAccountsSourceAmbient")).toBeDefined();
     expect(screen.getByText("CodexAccountsSourceManaged")).toBeDefined();
   });
@@ -149,14 +153,36 @@ describe("CodexAccountsSection", () => {
     );
     render(<CodexAccountsSection t={t} />);
     await waitFor(() => {
-      expect(screen.getByText("free · 38%")).toBeDefined();
+      expect(screen.getByText("free · 1h 38%")).toBeDefined();
     });
   });
 
-  it("offers ambient reauthentication and reloads the account state", async () => {
-    const ambient = account("ambient", { source: "ambient" });
+  it("shows both five-hour and weekly limits in the settings pill", async () => {
+    const usage = snapshot(14, "plus");
+    usage.primaryWindow!.limitWindowSeconds = 18_000;
+    usage.secondaryWindow = { usedPercent: 93, resetAt: null, limitWindowSeconds: 604_800 };
+    tauriMocks.getCodexAccountsState.mockResolvedValue({
+      accounts: [account("1")], accountOrdinals: { "1": 1 }, snapshots: { "1": usage },
+    });
+    render(<CodexAccountsSection t={t} />);
+    expect(await screen.findByText("plus · 5h 14% · 7d 93%")).toBeInTheDocument();
+  });
+
+  it("shows weekly-only limits in the settings pill", async () => {
+    const usage = snapshot(42, "pro");
+    usage.secondaryWindow = { ...usage.primaryWindow!, limitWindowSeconds: 604_800 };
+    usage.primaryWindow = null;
+    tauriMocks.getCodexAccountsState.mockResolvedValue({
+      accounts: [account("1")], accountOrdinals: { "1": 1 }, snapshots: { "1": usage },
+    });
+    render(<CodexAccountsSection t={t} />);
+    expect(await screen.findByText("pro · 7d 42%")).toBeInTheDocument();
+  });
+
+  it.each(["ambient", "managedByApp"] as const)("offers %s reauthentication and reloads the account state", async (source) => {
+    const ambient = account("ambient", { source });
     tauriMocks.getCodexAccountsState
-      .mockResolvedValueOnce({ accounts: [ambient], accountOrdinals: { ambient: 1 }, snapshots: {} } as CodexAccountsStateBridge)
+      .mockResolvedValueOnce({ accounts: [ambient], accountOrdinals: { ambient: 1 }, snapshots: {}, needsAuthentication: { ambient: true } } as CodexAccountsStateBridge)
       .mockResolvedValueOnce({ accounts: [ambient], accountOrdinals: { ambient: 1 }, snapshots: { ambient: snapshot(12) } } as CodexAccountsStateBridge);
     tauriMocks.codexAccountReauthenticate.mockResolvedValue(ambient);
 
@@ -168,8 +194,9 @@ describe("CodexAccountsSection", () => {
     });
 
     expect(tauriMocks.codexAccountReauthenticate).toHaveBeenCalledTimes(1);
+    expect(tauriMocks.codexAccountReauthenticate).toHaveBeenCalledWith("ambient");
     await waitFor(() => {
-      expect(screen.getByText("free · 12%")).toBeDefined();
+      expect(screen.getByText("free · 1h 12%")).toBeDefined();
     });
   });
 
@@ -243,22 +270,8 @@ describe("CodexAccountsSection", () => {
 // `css: false`, so styles.css is never applied and computed styles are
 // empty). Assert the stylesheet rules directly instead: these are the exact
 // properties that keep a long account email from painting over the actions
-// row at the fixed 720px settings window. import.meta.dirname (not .url)
-// survives vitest's jsdom transform as the real on-disk directory.
-if (!import.meta.dirname) {
-  throw new Error("import.meta.dirname unavailable to vitest runner");
-}
-const stylesSource = readFileSync(
-  `${import.meta.dirname}/../../../../../styles.css`,
-  "utf8",
-);
-
-function ruleBlock(source: string, selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = source.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
-  expect(match).not.toBeNull();
-  return match![1];
-}
+// row at the fixed 720px settings window.
+const stylesSource = loadStyles();
 
 describe("CodexAccountsSection containment styles", () => {
   it("ellipsizes the info column and pins the actions row inside the card", () => {

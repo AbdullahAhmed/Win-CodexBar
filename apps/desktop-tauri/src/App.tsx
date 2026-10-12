@@ -6,7 +6,6 @@ import {
   downloadUpdate,
   getBootstrapState,
   getSettingsSnapshot,
-  setSurfaceMode,
 } from "./lib/tauri";
 import { useSurfaceSnapshot } from "./hooks/useSurfaceSnapshot";
 import { useTheme } from "./hooks/useTheme";
@@ -17,9 +16,9 @@ import { LocaleProvider } from "./i18n/LocaleProvider";
 import type { BootstrapState, ThemePreference } from "./types/bridge";
 import type { SurfaceSnapshot } from "./hooks/useSurfaceSnapshot";
 import { useDeepSeekPricingStatus } from "./hooks/useDeepSeekPricingStatus";
+import { CurrencyProvider } from "./hooks/CurrencyProvider";
 
 const Settings = lazy(() => import("./surfaces/Settings"));
-const PopOutPanel = lazy(() => import("./surfaces/PopOutPanel"));
 const FloatBar = lazy(() => import("./floatbar/FloatBar"));
 const UsageCoin = lazy(() => import("./usageCoin/UsageCoin"));
 
@@ -51,7 +50,9 @@ function initialSettingsTab(): string {
 export default function App() {
   return (
     <LocaleProvider>
-      <AppInner />
+      <CurrencyProvider>
+        <AppInner />
+      </CurrencyProvider>
     </LocaleProvider>
   );
 }
@@ -101,13 +102,10 @@ function AppInner() {
         .catch(() => {});
     }, 2_000);
 
-    // Listen for user-registered global shortcut events from the
-    // `register_global_shortcut` command. The persistent shortcut (bound via
-    // shortcut_bridge::plugin) already opens the PopOut dashboard natively;
-    // this listener is the fallback for ad-hoc capture-mode registrations.
-    const unlistenPromise = listen<string>("global-shortcut-triggered", () => {
-      void setSurfaceMode("popOut", { kind: "dashboard" }).catch(() => {});
-    });
+    // Global shortcuts (the persisted one and ad-hoc capture registrations)
+    // are handled natively: shortcut_bridge::plugin's handler toggles the
+    // tray-panel flyout for every registered shortcut, so no frontend
+    // listener opens a second window here.
 
     const unlistenSettingsChangePromise = isSettingsWindow()
       ? listen<string>("settings-change-tab", () => {
@@ -138,7 +136,6 @@ function AppInner() {
 
     return () => {
       cancelled = true;
-      void unlistenPromise.then((unlisten) => unlisten()).catch(() => {});
       void unlistenSettingsChangePromise
         .then((unlisten) => unlisten?.())
         .catch(() => {});
@@ -192,6 +189,7 @@ function AppInner() {
   }
 
   // Detached flyout ("Pop Out Dashboard") window — render TrayPanel directly.
+  // This is the only dashboard layout; the legacy PopOut layout is retired.
   // TrayPanel is statically imported (not lazy), so no Suspense boundary is
   // needed here, unlike the other detached-window branches above.
   if (isFlyoutWindow()) {
@@ -211,19 +209,6 @@ function SurfaceRouter({
   switch (surface.mode) {
     case "hidden":
       return null;
-    case "trayPanel":
-      return <TrayPanel state={state} />;
-    case "popOut": {
-      const providerId =
-        surface.target.kind === "provider"
-          ? surface.target.providerId
-          : undefined;
-      return (
-        <Suspense fallback={<SurfaceFallback />}>
-          <PopOutPanel state={state} providerId={providerId} />
-        </Suspense>
-      );
-    }
     case "settings":
       return (
         <Suspense fallback={<SurfaceFallback />}>
@@ -244,13 +229,14 @@ function SettingsLayout({ state }: { state: BootstrapState }) {
 }
 
 function DetachedSettingsApp({ state }: { state: BootstrapState }) {
-  const [tab, setTab] = useState(initialSettingsTab);
+  const [request, setRequest] = useState(() => ({ tab: initialSettingsTab(), id: 0 }));
 
   useEffect(() => {
     // Listen for tab-change events from Rust (when the window is re-focused
-    // with a different tab request).
+    // with a different tab request). Each event gets a new id so repeating
+    // the same `providers:<id>` deep link selects that provider again.
     const unlisten = listen<string>("settings-change-tab", (event) => {
-      setTab(event.payload);
+      setRequest((current) => ({ tab: event.payload, id: current.id + 1 }));
     });
     return () => {
       unlisten.then((fn) => fn());
@@ -260,7 +246,7 @@ function DetachedSettingsApp({ state }: { state: BootstrapState }) {
   return (
     <Suspense fallback={<SurfaceFallback />}>
       <main className="settings-surface settings-surface--full">
-        <Settings state={state} initialTab={tab} />
+        <Settings state={state} initialTab={request.tab} tabRequestId={request.id} />
       </main>
     </Suspense>
   );

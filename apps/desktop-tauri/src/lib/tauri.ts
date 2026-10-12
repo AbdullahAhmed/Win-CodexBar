@@ -45,12 +45,14 @@ import type {
   CodexAccountsStateBridge,
   CodexSwitchResult,
   DeepSeekPricingStatus,
+  CurrencyRatesSnapshot,
 } from "../types/bridge";
 
-export const claudeAccountsList = () => invoke<ClaudeAccount[]>("claude_accounts_list");
+export const claudeAccountsList = () => invoke<ClaudeAccount[]>("get_claude_accounts_state");
 export const claudeReconciliationState = () =>
   invoke<ClaudeReconciliationSnapshot | null>("claude_reconciliation_state");
 export const claudeAccountAdd = () => invoke<void>("claude_account_add");
+export const claudeAccountReauthenticate = (id: string) => invoke<void>("claude_account_add", { id });
 export const claudeAccountCancelLogin = () => invoke<void>("claude_account_cancel_login");
 export const claudeAccountSaveCurrent = () => invoke<void>("claude_account_save_current");
 export const claudeAccountRemove = (id: string) => invoke<void>("claude_account_remove", { id });
@@ -58,6 +60,7 @@ export const claudeAccountSwitch = (id: string) =>
   invoke<ClaudeReconciliationSnapshot>("claude_account_switch", { id });
 export const grokAccountsList = () => invoke<GrokAccount[]>("grok_accounts_list");
 export const grokAccountAdd = () => invoke<void>("grok_account_add");
+export const grokAccountReauthenticate = (id: string) => invoke<void>("grok_account_reauthenticate", { id });
 export const grokAccountCancelLogin = () => invoke<void>("grok_account_cancel_login");
 export const grokAccountSaveCurrent = () => invoke<void>("grok_account_save_current");
 export const grokAccountRemove = (id: string) => invoke<void>("grok_account_remove", { id });
@@ -85,6 +88,14 @@ export function reorderProviders(ids: string[]): Promise<ProviderSummary[]> {
 
 export function getSettingsSnapshot(): Promise<SettingsSnapshot> {
   return invoke<SettingsSnapshot>("get_settings_snapshot");
+}
+
+export function getCurrencyRates(preferredCurrencyCode: string): Promise<CurrencyRatesSnapshot> {
+  return invoke<CurrencyRatesSnapshot>("get_currency_rates", { preferredCurrencyCode });
+}
+
+export function getStayAwakeStatus(): Promise<boolean> {
+  return invoke<boolean>("get_stay_awake_status");
 }
 
 export function updateSettings(
@@ -284,9 +295,10 @@ export function getProviderLocalUsageSummary(
   return invoke<ProviderLocalUsageSummary | null>("get_provider_local_usage_summary", { providerId });
 }
 
-export function getUsageSpendSummary(options?: { historyDays?: number; forceRefresh?: boolean }): Promise<UsageSpendSummary> {
+/** `period` is a raw reporting period; omitted means the saved `costReportingPeriod`. */
+export function getUsageSpendSummary(options?: { period?: string; forceRefresh?: boolean }): Promise<UsageSpendSummary> {
   return invoke<UsageSpendSummary>("get_usage_spend_summary", {
-    historyDays: options?.historyDays ?? null,
+    period: options?.period ?? null,
     forceRefresh: options?.forceRefresh ?? null,
   });
 }
@@ -295,13 +307,23 @@ export function writeUsageSpendExport(path: string, payload: string): Promise<vo
   return invoke<void>("write_usage_spend_export", { path, payload });
 }
 
+/** Write portable preferences to `path`; resolves with how many were exported. */
+export function exportPreferences(path: string): Promise<number> {
+  return invoke<number>("export_preferences", { path });
+}
+
+/** Apply the preferences file at `path`; the shell validates before saving anything. */
+export function importPreferences(path: string): Promise<SettingsSnapshot> {
+  return invoke<SettingsSnapshot>("import_preferences", { path });
+}
+
 export function getSpendContract(
   providerId: string,
-  options?: { historyDays?: number; includeOpenCodex?: boolean },
+  options?: { period?: string; includeOpenCodex?: boolean },
 ): Promise<SpendContract> {
   return invoke<SpendContract>("get_spend_contract", {
     providerId,
-    historyDays: options?.historyDays ?? null,
+    period: options?.period ?? null,
     includeOpenCodex: options?.includeOpenCodex ?? null,
   });
 }
@@ -414,6 +436,13 @@ export function setProviderUsageSource(providerId: string, source: string): Prom
   return invoke<void>("set_provider_usage_source", { providerId, source });
 }
 
+export function setProviderOptionalDetails(
+  providerId: string,
+  enabled: boolean,
+): Promise<void> {
+  return invoke<void>("set_provider_optional_details", { providerId, enabled });
+}
+
 export function setProviderAutoResumeAfterQuotaReset(
   providerId: string,
   enabled: boolean,
@@ -448,6 +477,10 @@ export function setProviderGatewayUrl(
   gatewayUrl: string,
 ): Promise<void> {
   return invoke<void>("set_provider_gateway_url", { providerId, gatewayUrl });
+}
+
+export function getProviderGatewayUrl(providerId: string): Promise<string> {
+  return invoke<string>("get_provider_gateway_url", { providerId });
 }
 
 export function getProviderAzureApiVersion(providerId: string): Promise<string | null> {
@@ -517,14 +550,8 @@ export function revealTrayPanelWindow(): Promise<void> {
   return invoke<void>("reveal_tray_panel_window");
 }
 
-/** Persist the user's manually-chosen flyout (Pop Out Dashboard) size. */
-export function setFlyoutSize(width: number, height: number): Promise<void> {
-  return invoke<void>("set_flyout_size", { width, height });
-}
-
-/** The remembered flyout size ([w, h]) if the user has resized it, else null. */
-export function flyoutStoredSize(): Promise<[number, number] | null> {
-  return invoke<[number, number] | null>("flyout_stored_size");
+export function getSystemAccentColor(): Promise<string | null> {
+  return invoke<string | null>("get_system_accent_color");
 }
 
 export function quitApp(): Promise<void> {
@@ -541,8 +568,8 @@ export function codexAccountAdd(): Promise<CodexAccount> {
   return invoke<CodexAccount>("codex_account_add");
 }
 
-export function codexAccountReauthenticate(): Promise<CodexAccount> {
-  return invoke<CodexAccount>("codex_account_reauthenticate");
+export function codexAccountReauthenticate(id?: string): Promise<CodexAccount> {
+  return invoke<CodexAccount>("codex_account_reauthenticate", id ? { id } : undefined);
 }
 
 export function codexAccountRemove(id: string): Promise<void> {

@@ -1,7 +1,7 @@
 use super::*;
 use chrono::TimeZone;
 
-fn billing_response_with_percent(percent: f32) -> Vec<u8> {
+pub(super) fn billing_response_with_percent(percent: f32) -> Vec<u8> {
     let mut payload = vec![0x0a, 0x05, 0x0d];
     payload.extend(percent.to_le_bytes());
 
@@ -57,7 +57,16 @@ async fn oauth_billing_auth_failure_falls_back_to_configured_local_token() {
         .with_body(billing_response_with_percent(42.0))
         .create_async()
         .await;
-    let provider = GrokProvider::new().with_billing_endpoint_for_tests(endpoint);
+    // The credits proxy is unavailable, so both tokens use the gRPC-web path.
+    let proxy = server
+        .mock("GET", "/credits")
+        .with_status(500)
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let provider = GrokProvider::new()
+        .with_billing_endpoint_for_tests(endpoint)
+        .with_credits_proxy_endpoint_for_tests(format!("{}/credits", server.url()));
     let credentials = GrokCredentials::from_bearer("expired-token");
     let context = FetchContext {
         include_credits: false,
@@ -70,6 +79,7 @@ async fn oauth_billing_auth_failure_falls_back_to_configured_local_token() {
         .await
         .unwrap();
 
+    proxy.assert_async().await;
     rejected.assert_async().await;
     fallback.assert_async().await;
     assert_eq!(result.source_label, "grok-oauth");
@@ -156,6 +166,7 @@ fn auto_tries_switched_login_before_cookies() {
             GrokAutoStep::AmbientOAuth,
             GrokAutoStep::AmbientCli,
             GrokAutoStep::ApiKey,
+            GrokAutoStep::ManualCookie,
         ]
     );
 }
@@ -165,6 +176,18 @@ fn cookie_refresh_uses_cache_when_present() {
     assert_eq!(
         cookie_refresh_action(true, None),
         CookieRefreshAction::UseCached
+    );
+}
+
+#[test]
+fn auto_uses_explicit_cookie_without_importing_browser_cookies() {
+    assert_eq!(
+        grok_auto_steps(false, true, false),
+        vec![
+            GrokAutoStep::AmbientOAuth,
+            GrokAutoStep::AmbientCli,
+            GrokAutoStep::ManualCookie,
+        ]
     );
 }
 
@@ -220,6 +243,7 @@ fn cookie_billing_stays_siloed_from_auth_file_identity() {
         used_percent_is_implicit_zero: false,
         resets_at: None,
         window_minutes: None,
+        product_usage: Vec::new(),
     });
     assert_eq!(result.source_label, "grok-browser");
     assert!(result.usage.account_email.is_none());
@@ -237,6 +261,7 @@ fn billing_snapshot_uses_full_weekly_cycle_for_pace() {
             used_percent_is_implicit_zero: false,
             resets_at: Some(resets),
             window_minutes: Some(crate::core::WEEKLY_WINDOW_MINUTES),
+            product_usage: Vec::new(),
         },
         "web",
         None,
@@ -252,6 +277,7 @@ fn billing_snapshot_uses_full_weekly_cycle_for_pace() {
         &result.usage.primary,
         Some(now),
         crate::core::WEEKLY_WINDOW_MINUTES,
+        None,
     );
     assert!(pace.is_some(), "weekly window + reset must yield pace");
 }
@@ -268,6 +294,7 @@ fn monthly_cycle_stays_monthly_with_six_days_remaining() {
             used_percent_is_implicit_zero: false,
             resets_at: Some(resets),
             window_minutes: Some(monthly_minutes),
+            product_usage: Vec::new(),
         },
         "cli",
         None,
@@ -288,6 +315,7 @@ fn reset_distance_alone_does_not_invent_a_cadence() {
             used_percent_is_implicit_zero: false,
             resets_at: Some(resets),
             window_minutes: None,
+            product_usage: Vec::new(),
         },
         "web",
         None,
@@ -308,6 +336,7 @@ fn period_only_billing_is_informational_not_zero_usage() {
             used_percent_is_implicit_zero: false,
             resets_at: Some(resets),
             window_minutes: None,
+            product_usage: Vec::new(),
         },
         "cli",
         Some("user@example.com".into()),
@@ -336,6 +365,7 @@ fn unpublished_zero_does_not_reach_the_usage_surface() {
             used_percent_is_implicit_zero: false,
             resets_at: Some(Utc.timestamp_opt(1_789_000_000, 0).single().unwrap()),
             window_minutes: None,
+            product_usage: Vec::new(),
         },
         "grok-web",
         None,
@@ -355,6 +385,7 @@ fn account_usage_marks_informational_windows_unavailable() {
             used_percent_is_implicit_zero: false,
             resets_at: None,
             window_minutes: Some(crate::core::WEEKLY_WINDOW_MINUTES),
+            product_usage: Vec::new(),
         },
         "grok-cli",
         None,

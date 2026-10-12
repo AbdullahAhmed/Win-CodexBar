@@ -60,22 +60,171 @@ pub fn normalize_usage_threshold_overrides(
         .collect()
 }
 
-impl Settings {
-    pub fn usage_thresholds(&self, provider: ProviderId, window: &str) -> UsageThresholds {
-        let provider_key = provider.cli_name();
-        let window_key = format!("{provider_key}:{window}");
-        let provider_override = self.provider_usage_thresholds.get(provider_key);
-        let window_override = self.provider_usage_thresholds.get(&window_key);
-        UsageThresholds {
-            high: window_override
-                .and_then(|value| value.high)
-                .or_else(|| provider_override.and_then(|value| value.high))
-                .unwrap_or(self.high_usage_threshold),
-            critical: window_override
-                .and_then(|value| value.critical)
-                .or_else(|| provider_override.and_then(|value| value.critical))
-                .unwrap_or(self.critical_usage_threshold),
+/// The two quota windows that carry per-provider warning settings.
+pub const QUOTA_WARNING_WINDOWS: [&str; 2] = ["session", "weekly"];
+
+/// One window's per-provider quota warning settings (Mac
+/// `QuotaWarningWindowConfig`). Values are *used* percentages.
+///
+/// - Global: every field is absent; the global thresholds apply.
+/// - Custom: `high` and/or `critical` is set; a missing value inherits global.
+/// - Off: `enabled == Some(false)`; saved values are kept for a later Custom.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct QuotaWarningWindow {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub high: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub critical: Option<f64>,
+}
+
+impl QuotaWarningWindow {
+    /// True when the window follows the global settings (nothing stored).
+    pub fn is_global(&self) -> bool {
+        self.enabled.is_none() && self.high.is_none() && self.critical.is_none()
+    }
+
+    /// Clamp stored values to 0..=100 and drop non-finite numbers.
+    pub fn normalized(self) -> Self {
+        let clamp = |value: Option<f64>| {
+            value
+                .filter(|number| number.is_finite())
+                .map(|number| number.clamp(0.0, 100.0))
+        };
+        Self {
+            enabled: self.enabled,
+            high: clamp(self.high),
+            critical: clamp(self.critical),
         }
+    }
+}
+
+/// Per-provider quota warning settings for the session and weekly windows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProviderQuotaWarnings {
+    #[serde(skip_serializing_if = "QuotaWarningWindow::is_global")]
+    pub session: QuotaWarningWindow,
+    #[serde(skip_serializing_if = "QuotaWarningWindow::is_global")]
+    pub weekly: QuotaWarningWindow,
+}
+
+impl ProviderQuotaWarnings {
+    pub fn is_empty(&self) -> bool {
+        self.session.is_global() && self.weekly.is_global()
+    }
+
+    pub fn window(&self, window: &str) -> Option<&QuotaWarningWindow> {
+        match window {
+            "session" => Some(&self.session),
+            "weekly" => Some(&self.weekly),
+            _ => None,
+        }
+    }
+
+    pub fn window_mut(&mut self, window: &str) -> Option<&mut QuotaWarningWindow> {
+        match window {
+            "session" => Some(&mut self.session),
+            "weekly" => Some(&mut self.weekly),
+            _ => None,
+        }
+    }
+
+    pub fn normalized(self) -> Self {
+        Self {
+            session: self.session.normalized(),
+            weekly: self.weekly.normalized(),
+        }
+    }
+}
+
+/// Migration #5: fold legacy `provider_usage_thresholds` entries
+/// (`<provider>` and `<provider>:<window>`) into
+/// `provider_configs.<provider>.quota_warnings`.
+///
+/// Per field, the window key wins over the provider key; a value neither key
+/// sets stays absent and keeps inheriting the global threshold. A window that
+/// already has new-format settings is left untouched.
+pub(super) fn migrate_legacy_usage_thresholds(
+    provider_configs: &mut HashMap<ProviderId, ProviderConfig>,
+    legacy: HashMap<String, UsageThresholdOverride>,
+) {
+    let known = crate::core::cli_name_map();
+    let legacy = normalize_usage_threshold_overrides(legacy);
+    let mut providers: Vec<(&str, ProviderId)> = legacy
+        .keys()
+        .filter_map(|key| {
+            let provider = key.split_once(':').map_or(key.as_str(), |(p, _)| p);
+            known.get(provider).map(|id| (provider, *id))
+        })
+        .collect();
+    providers.sort_unstable_by_key(|(provider, _)| *provider);
+    providers.dedup();
+    for (provider_key, provider_id) in providers {
+        let provider_override = legacy.get(provider_key);
+        for window in QUOTA_WARNING_WINDOWS {
+            let window_override = legacy.get(&format!("{provider_key}:{window}"));
+            let high = window_override
+                .and_then(|value| value.high)
+                .or_else(|| provider_override.and_then(|value| value.high));
+            let critical = window_override
+                .and_then(|value| value.critical)
+                .or_else(|| provider_override.and_then(|value| value.critical));
+            if high.is_none() && critical.is_none() {
+                continue;
+            }
+            let config = provider_configs.entry(provider_id).or_default();
+            let Some(target) = config.quota_warnings.window_mut(window) else {
+                continue;
+            };
+            if target.is_global() {
+                target.high = high;
+                target.critical = critical;
+            }
+        }
+    }
+}
+
+impl Settings {
+    fn quota_warning_window(&self, provider: ProviderId, window: &str) -> QuotaWarningWindow {
+        self.provider_configs
+            .get(&provider)
+            .and_then(|config| config.quota_warnings.window(window))
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Effective warning thresholds (*used* %) for one provider window:
+    /// the provider's Custom value, else the global threshold.
+    pub fn usage_thresholds(&self, provider: ProviderId, window: &str) -> UsageThresholds {
+        let custom = self.quota_warning_window(provider, window);
+        UsageThresholds {
+            high: custom.high.unwrap_or(self.high_usage_threshold),
+            critical: custom.critical.unwrap_or(self.critical_usage_threshold),
+        }
+    }
+
+    /// False when the provider window's quota warnings are set to Off. Off
+    /// suppresses threshold notifications and bar markers. Threshold hooks
+    /// still fire at the window's thresholds, as on macOS, where quota hooks
+    /// are independent of the notification preferences.
+    pub fn quota_warning_enabled(&self, provider: ProviderId, window: &str) -> bool {
+        self.quota_warning_window(provider, window)
+            .enabled
+            .unwrap_or(true)
+    }
+
+    pub fn quota_warnings(&self, provider: ProviderId) -> ProviderQuotaWarnings {
+        self.provider_configs
+            .get(&provider)
+            .map(|config| config.quota_warnings)
+            .unwrap_or_default()
+    }
+
+    pub fn set_quota_warnings(&mut self, provider: ProviderId, value: ProviderQuotaWarnings) {
+        self.provider_config_mut(provider).quota_warnings = value.normalized();
     }
 }
 
@@ -96,10 +245,14 @@ pub enum Language {
     Korean,
     /// Spanish (Mexican)
     Spanish,
+    /// Portuguese (Brazil)
+    PortugueseBrazil,
     /// Russian
     Russian,
     /// Turkish
     Turkish,
+    /// Ukrainian
+    Ukrainian,
 }
 
 impl Language {
@@ -112,8 +265,10 @@ impl Language {
             Language::Japanese => "日本語",
             Language::Korean => "한국어",
             Language::Spanish => "Español",
+            Language::PortugueseBrazil => "Português (Brasil)",
             Language::Russian => "Русский",
             Language::Turkish => "Türkçe",
+            Language::Ukrainian => "Українська",
         }
     }
 
@@ -126,8 +281,10 @@ impl Language {
             Language::Japanese,
             Language::Korean,
             Language::Spanish,
+            Language::PortugueseBrazil,
             Language::Russian,
             Language::Turkish,
+            Language::Ukrainian,
         ]
     }
 
@@ -141,8 +298,10 @@ impl Language {
             Language::Japanese => "japanese",
             Language::Korean => "korean",
             Language::Spanish => "spanish",
+            Language::PortugueseBrazil => "portuguesebrazil",
             Language::Russian => "russian",
             Language::Turkish => "turkish",
+            Language::Ukrainian => "ukrainian",
         }
     }
 
@@ -156,8 +315,17 @@ impl Language {
             Language::Japanese => &["ja", "ja-jp", "日本語"],
             Language::Korean => &["ko", "ko-kr", "한국어"],
             Language::Spanish => &["es", "es-mx", "español"],
+            Language::PortugueseBrazil => &[
+                "pt",
+                "pt-br",
+                "portuguese",
+                "português",
+                "portugues",
+                "português (brasil)",
+            ],
             Language::Russian => &["ru", "ru-ru", "русский"],
             Language::Turkish => &["tr", "tr-tr", "türkçe", "turkce"],
+            Language::Ukrainian => &["uk", "uk-ua", "українська"],
         }
     }
 
@@ -247,6 +415,8 @@ pub enum TrayIconMode {
     Single,
     /// One tray icon per enabled provider
     PerProvider,
+    /// One tray icon with the selected metrics for two providers stacked vertically
+    Stacked,
 }
 
 impl TrayIconMode {
@@ -255,6 +425,7 @@ impl TrayIconMode {
         match self {
             TrayIconMode::Single => "Single Icon",
             TrayIconMode::PerProvider => "Per Provider",
+            TrayIconMode::Stacked => "Stacked Providers",
         }
     }
 
@@ -263,6 +434,7 @@ impl TrayIconMode {
         match self {
             TrayIconMode::Single => "Show one tray icon for all providers",
             TrayIconMode::PerProvider => "Show a separate tray icon for each enabled provider",
+            TrayIconMode::Stacked => "Show two providers as stacked usage meters",
         }
     }
 }
@@ -280,8 +452,8 @@ pub enum MetricPreference {
     Credits,
     #[serde(rename = "extraUsage", alias = "extrausage")]
     ExtraUsage,
-    /// Current-month plan spend for PAYG providers (e.g. Mistral) that have
-    /// cost data but no rate-limit window (#2821, #2947).
+    /// The provider's monthly plan allowance window, such as Mistral's Vibe
+    /// plan (upstream 0.70.0 #4072).
     MonthlyPlan,
     Average,
 }
@@ -312,7 +484,7 @@ impl MetricPreference {
             MetricPreference::Tertiary => "Tertiary",
             MetricPreference::Credits => "Credits",
             MetricPreference::ExtraUsage => "Extra usage",
-            MetricPreference::MonthlyPlan => "Monthly plan spend",
+            MetricPreference::MonthlyPlan => "Monthly plan",
             MetricPreference::Average => "Average",
         }
     }
@@ -327,7 +499,7 @@ impl MetricPreference {
             MetricPreference::Tertiary => "Tertiary usage limit",
             MetricPreference::Credits => "Credit balance",
             MetricPreference::ExtraUsage => "On-demand or extra usage budget",
-            MetricPreference::MonthlyPlan => "Current-month plan spend (PAYG)",
+            MetricPreference::MonthlyPlan => "Monthly plan allowance",
             MetricPreference::Average => "Average across metrics",
         }
     }
@@ -395,6 +567,17 @@ pub struct ProviderConfig {
     /// Codex-only: enable historical usage tracking in UI.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub historical_tracking: bool,
+    /// Codex-only: keep a local session cost ledger (Mac Options parity;
+    /// persisted only, no Windows consumer yet).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub local_session_cost_ledger_enabled: bool,
+    /// Codex-only: OpenAI web battery saver, shown while web extras is on
+    /// (Mac Options parity; persisted only, no Windows consumer yet).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub openai_web_battery_saver_enabled: bool,
+    /// Per-window quota warning settings (Global, Custom or Off).
+    #[serde(default, skip_serializing_if = "ProviderQuotaWarnings::is_empty")]
+    pub quota_warnings: ProviderQuotaWarnings,
     /// Claude-only: avoid keychain prompts when reading credentials.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub avoid_keychain_prompts: bool,
@@ -410,6 +593,11 @@ pub struct ProviderConfig {
     /// Disabled by default; the desktop shell never injects a prompt.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auto_resume_after_quota_reset: bool,
+    /// LiteLLM/Claude-only: fetch one optional extra breakdown (LiteLLM model
+    /// activity, Claude workspace spend). Disabled by default; each provider
+    /// has exactly one such breakdown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional_details_enabled: bool,
     /// Per-provider accent color override (hex, e.g. "#FF5733"). `None`
     /// means the shipped brand color is used (#2972).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -418,4 +606,75 @@ pub struct ProviderConfig {
     /// publish this denominator; it is only used when a valid value is set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seat_credit_entitlement: Option<f64>,
+}
+
+/// How the single tray icon is drawn (Mac "Menu bar style").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MenuBarIconStyle {
+    /// Two-row usage meter.
+    #[default]
+    Bars,
+    /// Provider icon plus the percent text.
+    Percent,
+}
+
+impl MenuBarIconStyle {
+    /// Lenient parse; unknown values return `None` so callers pick a fallback.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "bars" => Some(Self::Bars),
+            "percent" => Some(Self::Percent),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bars => "bars",
+            Self::Percent => "percent",
+        }
+    }
+}
+
+/// How workday boundaries appear on weekly usage bars.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkdayTickStyle {
+    Hidden,
+    #[default]
+    Subtle,
+    HighContrast,
+}
+
+impl WorkdayTickStyle {
+    /// Lenient parse; accepts `high_contrast` and `highContrast`.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "hidden" => Some(Self::Hidden),
+            "subtle" => Some(Self::Subtle),
+            "high_contrast" | "highcontrast" => Some(Self::HighContrast),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hidden => "hidden",
+            Self::Subtle => "subtle",
+            Self::HighContrast => "high_contrast",
+        }
+    }
+}
+
+/// Most providers the merged Overview can show (Mac `overviewProviderLimit`).
+pub const MERGED_OVERVIEW_PROVIDER_LIMIT: usize = 6;
+
+/// Highest accepted `weekly_progress_work_days` value.
+pub const WEEKLY_PROGRESS_WORK_DAYS_MAX: u8 = 7;
+
+/// Normalise a work-week length: `Some(2..=7)` passes, anything else is
+/// `None` (Automatic, wall-clock pacing).
+pub fn normalize_weekly_progress_work_days(value: Option<u8>) -> Option<u8> {
+    value.filter(|days| (2..=WEEKLY_PROGRESS_WORK_DAYS_MAX).contains(days))
 }

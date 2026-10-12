@@ -2,8 +2,9 @@
 
 use super::*;
 use crate::core::{
-    CostSnapshot, ProviderAccountData, ProviderDisplayDetail, ProviderInventoryItem, RateWindow,
-    TokenAccount, TokenAccountSupport, UsageSnapshot,
+    CostSnapshot, FetchContext, NamedRateWindow, ProviderAccountData, ProviderDisplayDetail,
+    ProviderId, ProviderInventoryItem, RateWindow, SourceMode, TokenAccount, TokenAccountKind,
+    TokenAccountSupport, UsageSnapshot,
 };
 use crate::providers::claude::claude_swap::ClaudeSwapAccount;
 use crate::status::{ProviderStatus as StatusInfo, StatusLevel};
@@ -145,7 +146,104 @@ fn all_accounts_conflicts_with_explicit_account() {
         account: Some("work".to_string()),
         ..Default::default()
     };
-    assert!(UsageCommand::from_args(args).is_err());
+    assert!(UsageCommand::from_args_with(args, || panic!("settings must not be read")).is_err());
+}
+
+fn no_settings_read() -> Vec<ProviderId> {
+    panic!("an explicit --provider must not read the enabled providers")
+}
+
+#[test]
+fn enabled_default_mirrors_upstream_provider_selection() {
+    use ProviderId::{Claude, Codex, Cursor, Gemini};
+
+    assert_eq!(
+        ProviderSelection::for_enabled(Vec::new()),
+        ProviderSelection::Custom(Vec::new())
+    );
+    assert_eq!(
+        ProviderSelection::for_enabled(vec![Cursor]),
+        ProviderSelection::Single(Cursor)
+    );
+    // Exactly the primary pair is `Both`, in either display order.
+    for pair in [vec![Codex, Claude], vec![Claude, Codex]] {
+        let selection = ProviderSelection::for_enabled(pair);
+        assert_eq!(selection, ProviderSelection::Both);
+        assert_eq!(selection.as_list(), vec![Codex, Claude]);
+    }
+    // Any other set keeps the enabled display order.
+    assert_eq!(
+        ProviderSelection::for_enabled(vec![Gemini, Codex]).as_list(),
+        vec![Gemini, Codex]
+    );
+    assert_eq!(
+        ProviderSelection::for_enabled(vec![Claude, Cursor, Codex]).as_list(),
+        vec![Claude, Cursor, Codex]
+    );
+}
+
+#[test]
+fn explicit_provider_never_reads_enabled_providers() {
+    assert_eq!(
+        ProviderSelection::from_arg_or_enabled(Some("codex"), no_settings_read).unwrap(),
+        ProviderSelection::Single(ProviderId::Codex)
+    );
+    assert_eq!(
+        ProviderSelection::from_arg_or_enabled(Some("ALL"), no_settings_read).unwrap(),
+        ProviderSelection::All
+    );
+    assert_eq!(
+        ProviderSelection::from_arg_or_enabled(Some("both"), no_settings_read).unwrap(),
+        ProviderSelection::Both
+    );
+    assert!(
+        ProviderSelection::from_arg_or_enabled(Some("not-a-provider"), no_settings_read).is_err()
+    );
+    // `cost` keeps its own default.
+    assert_eq!(
+        ProviderSelection::from_arg(None).unwrap(),
+        ProviderSelection::Single(ProviderId::Claude)
+    );
+}
+
+#[test]
+fn plain_usage_queries_the_enabled_providers() {
+    let command = UsageCommand::from_args_with(UsageArgs::default(), || {
+        vec![ProviderId::Claude, ProviderId::Cursor]
+    })
+    .unwrap();
+    assert_eq!(
+        command.providers,
+        vec![ProviderId::Claude, ProviderId::Cursor]
+    );
+
+    let command = UsageCommand::from_args_with(UsageArgs::default(), Vec::new).unwrap();
+    assert!(command.providers.is_empty());
+
+    let explicit = UsageArgs {
+        provider: Some("codex".to_string()),
+        ..Default::default()
+    };
+    let command = UsageCommand::from_args_with(explicit, no_settings_read).unwrap();
+    assert_eq!(command.providers, vec![ProviderId::Codex]);
+}
+
+#[test]
+fn account_requires_one_provider_including_the_enabled_default() {
+    let with_account = || UsageArgs {
+        account: Some("work".to_string()),
+        ..Default::default()
+    };
+    let error = UsageCommand::from_args_with(with_account(), || {
+        vec![ProviderId::Codex, ProviderId::Claude]
+    })
+    .err()
+    .expect("several enabled providers cannot take --account");
+    assert!(error.to_string().contains("single --provider"), "{error}");
+
+    let command = UsageCommand::from_args_with(with_account(), || vec![ProviderId::Codex]).unwrap();
+    assert_eq!(command.providers, vec![ProviderId::Codex]);
+    assert_eq!(command.account.as_deref(), Some("work"));
 }
 
 #[test]
@@ -176,10 +274,87 @@ fn openrouter_account_ref_resolves_labeled_key() {
 }
 
 #[test]
+fn kimi_account_projection_forces_isolated_web_and_preserves_region() {
+    let account = TokenAccount::new("work", "selected-kimi-auth");
+    let mut ctx = FetchContext {
+        source_mode: SourceMode::OAuth,
+        api_region: Some("international".into()),
+        api_key: Some("ambient-api-key".into()),
+        ..FetchContext::default()
+    };
+
+    super::fetch_helpers::project_token_account(ProviderId::Kimi, &account, &mut ctx);
+
+    assert_eq!(ctx.source_mode, SourceMode::Web);
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("kimi-auth=selected-kimi-auth")
+    );
+    assert_eq!(ctx.api_key, None);
+    assert_eq!(ctx.api_region.as_deref(), Some("international"));
+    assert!(ctx.token_account_isolated);
+}
+
+#[test]
+fn doubao_account_projection_uses_only_the_selected_ark_key() {
+    let account = TokenAccount::new("work", "selected-ark-key");
+    let mut ctx = FetchContext {
+        source_mode: SourceMode::Cli,
+        api_key: Some("ambient-key".into()),
+        ..FetchContext::default()
+    };
+
+    super::fetch_helpers::project_token_account(ProviderId::Doubao, &account, &mut ctx);
+
+    assert_eq!(ctx.source_mode, SourceMode::OAuth);
+    assert_eq!(ctx.api_key.as_deref(), Some("selected-ark-key"));
+    assert_eq!(ctx.token_account_kind, Some(TokenAccountKind::ApiKey));
+    assert!(ctx.token_account_isolated);
+}
+
+#[test]
+fn opencodego_account_projection_distinguishes_api_and_cookie_routes() {
+    let mut api_ctx = FetchContext::default();
+    super::fetch_helpers::project_token_account(
+        ProviderId::OpenCodeGo,
+        &TokenAccount::new("api", "selected-opencode-key"),
+        &mut api_ctx,
+    );
+    assert_eq!(api_ctx.source_mode, SourceMode::Auto);
+    assert_eq!(api_ctx.api_key.as_deref(), Some("selected-opencode-key"));
+    assert_eq!(api_ctx.token_account_kind, Some(TokenAccountKind::ApiKey));
+    assert!(!api_ctx.auto_prefer_web);
+
+    let mut cookie_ctx = FetchContext::default();
+    super::fetch_helpers::project_token_account(
+        ProviderId::OpenCodeGo,
+        &TokenAccount::new("web", "Cookie: session=selected-session"),
+        &mut cookie_ctx,
+    );
+    assert_eq!(cookie_ctx.source_mode, SourceMode::Web);
+    assert_eq!(
+        cookie_ctx.manual_cookie_header.as_deref(),
+        Some("Cookie: session=selected-session")
+    );
+    assert_eq!(
+        cookie_ctx.token_account_kind,
+        Some(TokenAccountKind::Cookie)
+    );
+
+    cookie_ctx.source_mode = SourceMode::Cli;
+    super::fetch_helpers::project_token_account(
+        ProviderId::OpenCodeGo,
+        &TokenAccount::new("api", "another-key"),
+        &mut cookie_ctx,
+    );
+    assert_eq!(cookie_ctx.source_mode, SourceMode::Cli);
+}
+
+#[test]
 fn text_rendering_shows_sub_one_percent_usage() {
     let result = fetch_result(UsageSnapshot::new(RateWindow::new(0.4)));
 
-    let output = render_text_with_status(ProviderId::Codex, &result, None, false);
+    let output = render_text_with_status(ProviderId::Codex, &result, None, false, None);
 
     assert!(output.contains("<1% used"));
 }
@@ -207,7 +382,7 @@ fn secondary_label_override_is_shared_by_full_and_brief_renderers() {
             .with_secondary(RateWindow::new(20.0))
             .with_secondary_label("Weekly"),
     );
-    let full = render_text_with_status(ProviderId::Antigravity, &result, None, false);
+    let full = render_text_with_status(ProviderId::Antigravity, &result, None, false, None);
     let brief = render_brief_text(ProviderId::Antigravity, &result);
     assert!(full.contains("Weekly:"));
     assert!(brief.contains("Weekly 20%"));
@@ -217,7 +392,7 @@ fn primary_label_override_is_shared_by_full_and_brief_renderers() {
     let result =
         fetch_result(UsageSnapshot::new(RateWindow::new(42.0)).with_primary_label("Monthly"));
 
-    let full = render_text_with_status(ProviderId::Grok, &result, None, false);
+    let full = render_text_with_status(ProviderId::Grok, &result, None, false, None);
     let brief = render_brief_text(ProviderId::Grok, &result);
 
     assert!(full.contains("Monthly:"));
@@ -243,12 +418,12 @@ fn openrouter_history_preserves_period_and_known_zero_in_text() {
     let result = fetch_result(UsageSnapshot::new(RateWindow::new(0.0)))
         .with_cost(CostSnapshot::new(0.0, "USD", "Last 30 days (UTC)").always_visible());
 
-    let output = render_text_with_status(ProviderId::OpenRouter, &result, None, false);
+    let output = render_text_with_status(ProviderId::OpenRouter, &result, None, false, None);
 
     assert!(output.contains("Last 30 days (UTC): $0.00"));
     assert!(!output.contains("Cost:    $0.00"));
 
-    let json = render_json_result(ProviderId::OpenRouter, result, None);
+    let json = render_json_result(ProviderId::OpenRouter, result, None, None);
     assert!(json.get("usage").is_some());
     assert!(json.get("cost").is_some());
     assert!(json.get("history").is_none());
@@ -259,7 +434,7 @@ fn ordinary_costs_keep_the_existing_cost_line() {
     let result = fetch_result(UsageSnapshot::new(RateWindow::new(0.0)))
         .with_cost(CostSnapshot::new(2.5, "EUR", "This month (API key)"));
 
-    let output = render_text_with_status(ProviderId::OpenRouter, &result, None, false);
+    let output = render_text_with_status(ProviderId::OpenRouter, &result, None, false, None);
 
     assert!(output.contains("Cost:    €2.50 (This month (API key))"));
     assert!(!output.contains("Last 30 days"));
@@ -276,7 +451,7 @@ fn inventory_is_rendered_in_full_text_but_not_brief_text() {
         },
     );
 
-    let full = render_text_with_status(ProviderId::Grok, &result, None, false);
+    let full = render_text_with_status(ProviderId::Grok, &result, None, false, None);
     let brief = render_brief_text(ProviderId::Grok, &result);
 
     assert!(full.contains("Limit Reset Credits: 2 available"));
@@ -292,12 +467,36 @@ fn display_details_are_rendered_in_full_text_and_json() {
             .and_then(|row| row.with_progress(12.0, 100.0)),
     );
 
-    let full = render_text_with_status(ProviderId::Grok, &result, None, false);
-    let json = render_json_result(ProviderId::Grok, result, None);
+    let full = render_text_with_status(ProviderId::Grok, &result, None, false, None);
+    let json = render_json_result(ProviderId::Grok, result, None, None);
 
     assert!(full.contains("Used this cycle: 12 (Monthly refill: 100) [12.00/100.00]"));
     assert_eq!(json["details"][0]["title"], "Used this cycle");
     assert_eq!(json["details"][0]["progress"]["total"], 100.0);
+}
+
+#[test]
+fn sectioned_display_details_print_one_heading_per_group() {
+    let row = |id: &str, title: &str, section: Option<&str>| {
+        let row = ProviderDisplayDetail::new(id, title, "1");
+        match section {
+            Some(section) => row.and_then(|row| row.with_section_title(section)),
+            None => row,
+        }
+    };
+    let result = fetch_result(UsageSnapshot::new(RateWindow::new(10.0)))
+        .with_display_detail(row("plain", "Plain", None))
+        .with_display_detail(row("a", "Alpha", Some("Model activity")))
+        .with_display_detail(row("b", "Beta", Some("Model activity")));
+
+    let text = render_text_with_status(ProviderId::LiteLLM, &result, None, false, None);
+    let json = render_json_result(ProviderId::LiteLLM, result, None, None);
+
+    assert_eq!(text.matches("Model activity:").count(), 1);
+    assert!(text.find("Plain: 1").unwrap() < text.find("Model activity:").unwrap());
+    assert!(text.find("Model activity:").unwrap() < text.find("Alpha: 1").unwrap());
+    assert_eq!(json["details"][0]["sectionTitle"], serde_json::Value::Null);
+    assert_eq!(json["details"][2]["sectionTitle"], "Model activity");
 }
 
 #[test]
@@ -311,7 +510,7 @@ fn json_inventory_is_additive_and_contains_no_redemption_token() {
         },
     );
 
-    let json = render_json_result(ProviderId::Grok, result, None);
+    let json = render_json_result(ProviderId::Grok, result, None, None);
     assert_eq!(json["inventory"][0]["availableCount"], 1);
     assert!(
         serde_json::to_string(&json)
@@ -323,4 +522,325 @@ fn json_inventory_is_additive_and_contains_no_redemption_token() {
             .unwrap()
             .contains("coupon-token-secret")
     );
+}
+
+fn history_output(cost: CostSnapshot) -> String {
+    let result = fetch_result(UsageSnapshot::new(RateWindow::new(0.0))).with_cost(cost);
+    render_text_with_status(ProviderId::OpenRouter, &result, None, false, None)
+}
+
+#[test]
+fn history_line_shows_provenance_and_token_total() {
+    use crate::spend_contract::CostProvenance;
+
+    let cases = [
+        (CostProvenance::VendorMetered, "$1.25 (reported)"),
+        (CostProvenance::ListPriceEstimate, "$1.25 (estimated)"),
+        (CostProvenance::Mixed, "$1.25 (includes estimates)"),
+        (CostProvenance::Unknown, "$1.25"),
+    ];
+    for (provenance, spend) in cases {
+        let output = history_output(
+            CostSnapshot::new(1.25, "USD", "Last 30 days (UTC)")
+                .with_history_tokens(15)
+                .with_provenance(provenance)
+                .always_visible(),
+        );
+        let expected = format!("  Last 30 days (UTC): {spend} · 15 tokens");
+        assert_eq!(output.matches(&expected).count(), 1, "{output}");
+    }
+}
+
+#[test]
+fn history_line_preserves_known_zero_singular_token_and_currency() {
+    use crate::spend_contract::CostProvenance;
+
+    let zero = history_output(
+        CostSnapshot::new(0.0, "USD", "Last 30 days (UTC)")
+            .with_history_tokens(0)
+            .with_provenance(CostProvenance::VendorMetered)
+            .always_visible(),
+    );
+    assert!(zero.contains("Last 30 days (UTC): $0.00 (reported) · 0 tokens"));
+
+    let one = history_output(
+        CostSnapshot::new(0.0, "USD", "Last 1 day")
+            .with_history_tokens(1)
+            .always_visible(),
+    );
+    assert!(one.ends_with("Last 1 day: $0.00 · 1 token"), "{one}");
+
+    let euro = history_output(CostSnapshot::new(2.5, "EUR", "Billing period").always_visible());
+    assert!(euro.contains("Billing period: €2.50"));
+    assert!(!euro.contains("token"));
+}
+
+#[test]
+fn history_line_compacts_large_token_totals() {
+    let cases = [
+        (999, "999 tokens"),
+        (1_000, "1K tokens"),
+        (1_250, "1.2K tokens"),
+        (15_400, "15K tokens"),
+        (999_499, "999K tokens"),
+        (999_500, "1M tokens"),
+        (2_500_000, "2.5M tokens"),
+        (999_500_000, "1B tokens"),
+    ];
+    for (tokens, expected) in cases {
+        let output = history_output(
+            CostSnapshot::new(1.0, "USD", "Last 30 days (UTC)")
+                .with_history_tokens(tokens)
+                .always_visible(),
+        );
+        assert!(
+            output.contains(&format!("$1.00 · {expected}")),
+            "{tokens}: {output}"
+        );
+    }
+}
+
+#[test]
+fn history_fields_do_not_change_the_cost_json_contract() {
+    use crate::spend_contract::CostProvenance;
+
+    let result = fetch_result(UsageSnapshot::new(RateWindow::new(0.0))).with_cost(
+        CostSnapshot::new(1.25, "USD", "Last 30 days (UTC)")
+            .with_history_tokens(15)
+            .with_provenance(CostProvenance::VendorMetered)
+            .always_visible(),
+    );
+    let json = render_json_result(ProviderId::OpenRouter, result, None, None);
+    let cost = json.get("cost").and_then(|cost| cost.as_object()).unwrap();
+    assert!(!cost.contains_key("historyTokens") && !cost.contains_key("history_tokens"));
+    assert!(!cost.contains_key("provenance"));
+}
+
+fn detail_window(used: f64, detail: &str, resets_at: Option<chrono::DateTime<Utc>>) -> RateWindow {
+    RateWindow::with_details(used, None, resets_at, Some(detail.to_string()))
+        .with_description_as_detail()
+}
+
+fn detail_backed_result(resets_at: Option<chrono::DateTime<Utc>>) -> ProviderFetchResult {
+    let mut usage = UsageSnapshot::new(detail_window(
+        75.0,
+        "19.17 EUR / 25.50 EUR · 6.33 EUR remaining",
+        resets_at,
+    ))
+    .with_primary_label("Included API");
+    usage.extra_rate_windows.push(NamedRateWindow::new(
+        "mistral-monthly-plan",
+        "Monthly Plan",
+        detail_window(
+            13.0,
+            "34.07 EUR / 255.00 EUR · 220.93 EUR remaining",
+            resets_at,
+        ),
+    ));
+    fetch_result(usage)
+}
+
+#[test]
+fn detail_backed_windows_print_reset_then_amounts_lines() {
+    let resets_at = Utc::now() + chrono::Duration::minutes(61);
+    let output = render_text(
+        ProviderId::Mistral,
+        &detail_backed_result(Some(resets_at)),
+        false,
+    );
+    let lines: Vec<&str> = output.lines().collect();
+
+    let primary = lines
+        .iter()
+        .position(|line| line.starts_with("  Included API:"))
+        .expect("primary line");
+    assert!(lines[primary].ends_with("75% used"));
+    assert!(lines[primary + 1].starts_with("    resets in "));
+    assert_eq!(
+        lines[primary + 2],
+        "    19.17 EUR / 25.50 EUR · 6.33 EUR remaining"
+    );
+    let plan = lines
+        .iter()
+        .position(|line| line.starts_with("  Monthly Plan:"))
+        .expect("plan line");
+    assert!(lines[plan].ends_with("13% used"));
+    assert!(lines[plan + 1].starts_with("    resets in "));
+    assert_eq!(
+        lines[plan + 2],
+        "    34.07 EUR / 255.00 EUR · 220.93 EUR remaining"
+    );
+    assert!(!output.contains("(resets in"));
+}
+
+#[test]
+fn detail_backed_windows_omit_reset_line_without_reset_date() {
+    let output = render_text(ProviderId::Mistral, &detail_backed_result(None), false);
+    let lines: Vec<&str> = output.lines().collect();
+
+    assert!(!output.contains("resets in"));
+    let plan = lines
+        .iter()
+        .position(|line| line.starts_with("  Monthly Plan:"))
+        .expect("plan line");
+    assert_eq!(
+        lines[plan + 1],
+        "    34.07 EUR / 255.00 EUR · 220.93 EUR remaining"
+    );
+}
+
+#[test]
+fn detail_backed_flag_stays_out_of_json_output() {
+    let json = render_json_result(ProviderId::Mistral, detail_backed_result(None), None, None);
+    let windows = json["usage"]["extra_rate_windows"]
+        .as_array()
+        .expect("extra windows");
+    assert_eq!(windows[0]["id"], "mistral-monthly-plan");
+    assert_eq!(
+        windows[0]["window"]["reset_description"],
+        "34.07 EUR / 255.00 EUR · 220.93 EUR remaining"
+    );
+    assert!(windows[0]["window"].get("descriptionIsDetail").is_none());
+    assert!(windows[0]["window"].get("description_is_detail").is_none());
+}
+
+#[test]
+fn cli_lane_pace_scores_copilot_against_the_february_cycle() {
+    use chrono::TimeZone;
+    // Copilot window with no length, reset Mar 1, now Feb 15: half of the
+    // 28-day cycle has elapsed.
+    let now = Utc.with_ymd_and_hms(2026, 2, 15, 0, 0, 0).unwrap();
+    let reset = Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap();
+    let window = RateWindow::with_details(60.0, None, Some(reset), None);
+
+    let pace = render::lane_pace_at(ProviderId::Copilot, &window, now, None, || None)
+        .expect("copilot reset-window pace");
+    assert_eq!(pace.expected_used_percent, 50.0);
+    assert_eq!(pace.delta_percent, 10.0);
+    assert_eq!(pace.eta_seconds, Some(806_400.0));
+
+    // Providers without the capability use the lane's own rule.
+    let mut fallback_used = false;
+    let codex = render::lane_pace_at(ProviderId::Codex, &window, now, None, || {
+        fallback_used = true;
+        None
+    });
+    assert!(codex.is_none());
+    assert!(fallback_used);
+}
+
+#[test]
+fn cli_lane_pace_keeps_reset_window_pace_for_a_resolved_31_day_cycle() {
+    use chrono::TimeZone;
+    // StepFun already expands the 30-day sentinel to the real cycle: 31
+    // days ending Mar 31. Mar 15 12:00 is 15.5 days in.
+    let now = Utc.with_ymd_and_hms(2026, 3, 15, 12, 0, 0).unwrap();
+    let reset = Utc.with_ymd_and_hms(2026, 3, 31, 0, 0, 0).unwrap();
+    let window = RateWindow::with_details(70.0, Some(44_640), Some(reset), None);
+
+    let pace = render::lane_pace_at(ProviderId::StepFun, &window, now, None, || {
+        panic!("a calendar-month window must use the reset-window rule")
+    })
+    .expect("stepfun reset-window pace");
+    assert_eq!(pace.expected_used_percent, 50.0);
+    assert_eq!(pace.delta_percent, 20.0);
+}
+
+#[test]
+fn cli_reset_window_pace_needs_three_percent_expected() {
+    use chrono::TimeZone;
+    // Upstream `CLIRenderer.paceMinimumExpectedPercent` (3). Copilot's cycle
+    // ending Mar 31 is 31 days long; 12 hours in, 0.5 / 31 = 1.61% is
+    // expected, so the CLI shows no pace and does not fall back.
+    let reset = Utc.with_ymd_and_hms(2026, 3, 31, 0, 0, 0).unwrap();
+    let window = RateWindow::with_details(5.0, None, Some(reset), None);
+    let early = Utc.with_ymd_and_hms(2026, 2, 28, 12, 0, 0).unwrap();
+    let pace = render::lane_pace_at(ProviderId::Copilot, &window, early, None, || {
+        panic!("reset-window lanes never fall back")
+    });
+    assert!(pace.is_none());
+    // One day in (3.23%), the pace shows.
+    let day_one = Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap();
+    let pace = render::lane_pace_at(ProviderId::Copilot, &window, day_one, None, || None)
+        .expect("pace after 3% expected");
+    assert_eq!(pace.expected_used_percent, 100.0 / 31.0);
+}
+
+#[test]
+fn copilot_monthly_windows_get_reset_window_pace_in_json_and_text() {
+    use chrono::Duration;
+    // Copilot windows have a reset date and no length: the CLI scores them
+    // against the calendar month ending at the reset, as the Mac does.
+    let reset = Utc::now() + Duration::days(10);
+    let cycle_minutes = f64::from(RateWindow::calendar_month_window_minutes(reset).unwrap());
+    let expected = 100.0 * (cycle_minutes - 10.0 * 1440.0) / cycle_minutes;
+    let usage = UsageSnapshot::new(RateWindow::with_details(5.0, None, Some(reset), None))
+        .with_secondary(RateWindow::with_details(5.0, None, Some(reset), None));
+
+    let json = render_json_result(ProviderId::Copilot, fetch_result(usage.clone()), None, None);
+    let primary = json["pace"]["primary"]["expectedUsedPercent"]
+        .as_f64()
+        .expect("copilot primary pace");
+    assert!((primary - expected).abs() < 0.01, "{primary} vs {expected}");
+    let secondary = json["pace"]["secondary"]["expectedUsedPercent"]
+        .as_f64()
+        .expect("copilot secondary pace");
+    // Without the capability the secondary would use a 7-day fallback and a
+    // 10-day reset would give no pace at all.
+    assert!(
+        (secondary - expected).abs() < 0.01,
+        "{secondary} vs {expected}"
+    );
+
+    let text = render_text_with_status(
+        ProviderId::Copilot,
+        &fetch_result(usage.clone()),
+        None,
+        false,
+        None,
+    );
+    assert_eq!(text.matches("  Pace:").count(), 2, "{text}");
+
+    // Codex has no reset-window capability: a length-less primary has no pace.
+    let codex = render_json_result(ProviderId::Codex, fetch_result(usage), None, None);
+    assert!(codex["pace"].is_null() || codex["pace"]["primary"].is_null());
+}
+
+#[test]
+fn json_pace_follows_weekly_work_days() {
+    use chrono::{Datelike, Duration, Local, TimeZone};
+    // Weekly window ending at the next local Monday 00:00, so it covers the
+    // current Mon..Sun and Mon-Fri workday pace is ahead of linear pace at any
+    // instant inside it.
+    let today = Local::now().date_naive();
+    let next_monday = today + Duration::days(7 - i64::from(today.weekday().num_days_from_monday()));
+    let reset = Local
+        .from_local_datetime(&next_monday.and_hms_opt(0, 0, 0).unwrap())
+        .single()
+        .unwrap()
+        .with_timezone(&Utc);
+    if reset - Utc::now() >= Duration::days(7) {
+        return; // Monday 00:00 exactly or a DST-shortened week: nothing to compare.
+    }
+    let usage = UsageSnapshot::new(RateWindow::new(10.0)).with_secondary(RateWindow::with_details(
+        10.0,
+        Some(10080),
+        Some(reset),
+        None,
+    ));
+    let expected = |work_days: Option<u8>| {
+        render_json_result(
+            ProviderId::Codex,
+            fetch_result(usage.clone()),
+            None,
+            work_days,
+        )["pace"]["secondary"]["expectedUsedPercent"]
+            .as_f64()
+            .unwrap()
+    };
+
+    let linear = expected(None);
+    // Each render reads the clock again, so compare within a small tolerance.
+    assert!((expected(Some(7)) - linear).abs() < 0.01);
+    assert!(expected(Some(5)) > linear);
 }

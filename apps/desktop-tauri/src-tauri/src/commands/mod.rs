@@ -24,6 +24,7 @@ use crate::surface::SurfaceMode;
 use crate::surface_target::SurfaceTarget;
 
 mod chart;
+mod currency;
 mod spend_contract;
 mod tokens;
 mod updater;
@@ -34,13 +35,16 @@ mod bridge;
 mod browser_import;
 mod claude_accounts;
 pub(crate) mod claude_reconciliation;
+mod claude_usage;
 mod codex_accounts;
 mod codex_workspaces;
+mod credential_alerts;
 mod credential_detection;
 mod credentials;
 mod diagnostics;
 mod grok_accounts;
 mod locale_cmd;
+mod preferences_transfer;
 mod provider_detail;
 mod provider_refresh;
 mod provider_settings;
@@ -56,6 +60,7 @@ pub use agent_sessions::*;
 pub(crate) use bridge::*;
 pub use browser_import::*;
 pub use claude_accounts::*;
+pub use claude_usage::*;
 pub use codex_accounts::*;
 pub use codex_workspaces::*;
 pub use credential_detection::*;
@@ -63,6 +68,7 @@ pub use credentials::*;
 pub use diagnostics::*;
 pub use grok_accounts::*;
 pub use locale_cmd::*;
+pub use preferences_transfer::*;
 pub use provider_detail::*;
 #[cfg(test)]
 pub(crate) use provider_refresh::is_provider_cache_fresh;
@@ -76,9 +82,17 @@ pub use system::*;
 pub(crate) use usage_items::*;
 
 #[cfg(test)]
+mod last_good_owner_tests;
+#[cfg(test)]
+mod session_cookie_scope_tests;
+#[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod token_account_source_tests;
+
 pub use chart::*;
+pub use currency::*;
 pub use spend_contract::*;
 pub use tokens::*;
 pub use updater::*;
@@ -102,6 +116,29 @@ fn parse_provider_arg(provider_id: &str) -> Result<ProviderId, String> {
 
 fn canonical_provider_arg(provider_id: &str) -> Result<String, String> {
     Ok(parse_provider_arg(provider_id)?.cli_name().to_string())
+}
+
+fn provider_dashboard_url(id: ProviderId, settings: &Settings) -> Option<String> {
+    match id {
+        ProviderId::MiniMax => Some(
+            codexbar::providers::MiniMaxProvider::dashboard_url_for_region(Some(
+                settings.api_region(id),
+            )),
+        ),
+        ProviderId::Kimi => Some(
+            codexbar::providers::KimiRegion::from_settings(Some(settings.api_region(id)))
+                .console_url()
+                .to_string(),
+        ),
+        // The llmman dashboard is the configured daemon itself.
+        ProviderId::LLMMan => Some(codexbar::providers::llmman::dashboard_url(Some(
+            settings.workspace_id(id),
+        ))),
+        _ => instantiate_provider(id)
+            .metadata()
+            .dashboard_url
+            .map(str::to_string),
+    }
 }
 
 fn validate_single_line_secret(value: &str, field: &str, max_len: usize) -> Result<(), String> {

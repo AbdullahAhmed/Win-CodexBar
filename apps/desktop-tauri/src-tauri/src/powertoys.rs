@@ -33,8 +33,11 @@ pub struct PowerToysProviderSnapshot {
     secondary_label: Option<String>,
     secondary: Option<RateWindowSnapshot>,
     today_cost: Option<f64>,
+    /// Published pipe contract: always the trailing 30 days, independent of
+    /// the History window setting (`cost_reporting_period`).
     thirty_day_cost: Option<f64>,
     latest_tokens: Option<u64>,
+    /// Published pipe contract: always the trailing 30 days.
     thirty_day_tokens: Option<u64>,
     top_model: Option<String>,
     updated_at: String,
@@ -178,6 +181,9 @@ mod tests {
             reserve_percent: None,
             reserve_description: None,
             reserve_eta_seconds: None,
+            pace: None,
+            monthly_limit_block: None,
+            description_is_detail: false,
             reserve_will_last_to_reset: false,
         }
     }
@@ -191,6 +197,7 @@ mod tests {
             primary_label: Some("Session".to_string()),
             secondary: None,
             secondary_label: None,
+            secondary_label_key: None,
             model_specific: None,
             tertiary: None,
             tertiary_label: None,
@@ -200,6 +207,7 @@ mod tests {
             cost: None,
             plan_name: Some("Team".to_string()),
             account_email: Some("dev@example.com".to_string()),
+            account_label: None,
             subscription: None,
             source_label: "web".to_string(),
             has_successful_claude_cli_quota: false,
@@ -211,6 +219,8 @@ mod tests {
             tray_status_label: None,
             fetch_duration_ms: None,
             wayfinder_usage: None,
+            quota_burndown: None,
+            open_ai_api_usage: None,
             session_equivalent_forecast: None,
         });
         let value = serde_json::to_value(snapshot).unwrap();
@@ -227,10 +237,15 @@ mod tests {
                 today_cost: Some(1.25),
                 thirty_day_cost: Some(12.5),
                 thirty_day_tokens: Some(42_000),
+                // A different History window must not change the pipe values.
+                period_cost: Some(99.0),
+                period_tokens: Some(99_000),
+                reporting_period: "month-to-date".to_string(),
                 latest_tokens: Some(1_200),
                 top_model: Some("gpt-5".to_string()),
                 estimate_note: "cached".to_string(),
                 token_cost_updated_at_ms: 1234,
+                incomplete_request_count: None,
             }),
         );
 
@@ -241,6 +256,7 @@ mod tests {
             primary_label: Some("Session".to_string()),
             secondary: None,
             secondary_label: None,
+            secondary_label_key: None,
             model_specific: None,
             tertiary: None,
             tertiary_label: None,
@@ -250,6 +266,7 @@ mod tests {
             cost: None,
             plan_name: None,
             account_email: None,
+            account_label: None,
             subscription: None,
             source_label: "web".to_string(),
             has_successful_claude_cli_quota: false,
@@ -261,7 +278,9 @@ mod tests {
             tray_status_label: None,
             fetch_duration_ms: None,
             wayfinder_usage: None,
+            open_ai_api_usage: None,
             session_equivalent_forecast: None,
+            quota_burndown: None,
         });
         let value = serde_json::to_value(snapshot).unwrap();
 

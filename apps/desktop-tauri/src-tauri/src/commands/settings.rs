@@ -7,6 +7,7 @@ use super::*;
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SettingsUpdate {
+    pub preferred_currency_code: Option<String>,
     pub enabled_providers: Option<Vec<String>>,
     pub refresh_interval_secs: Option<u64>,
     pub adaptive_refresh: Option<bool>,
@@ -21,14 +22,26 @@ pub struct SettingsUpdate {
     pub notification_sound_paths: Option<codexbar::settings::NotificationSoundPaths>,
     pub high_usage_threshold: Option<f64>,
     pub critical_usage_threshold: Option<f64>,
-    pub provider_usage_thresholds:
-        Option<std::collections::HashMap<String, codexbar::settings::UsageThresholdOverride>>,
+    /// Map of provider CLI name → that provider's full quota warning settings
+    /// (replaces the stored value; an empty object means Global).
+    pub provider_quota_warnings:
+        Option<std::collections::HashMap<String, codexbar::settings::ProviderQuotaWarnings>>,
     pub predictive_pace_warning_enabled: Option<bool>,
+    pub credential_expiry_notifications_enabled: Option<bool>,
+    pub session_quota_notifications_enabled: Option<bool>,
     pub show_pace: Option<bool>,
     pub tray_icon_mode: Option<String>,
+    pub stacked_tray_top_provider: Option<String>,
+    pub stacked_tray_bottom_provider: Option<String>,
     pub switcher_shows_icons: Option<bool>,
     pub menu_bar_shows_highest_usage: Option<bool>,
     pub menu_bar_shows_percent: Option<bool>,
+    pub menu_bar_icon_style: Option<codexbar::settings::MenuBarIconStyle>,
+    pub merged_overview_selected_providers: Option<Vec<String>>,
+    pub quota_warning_markers_visible: Option<bool>,
+    pub workday_tick_style: Option<codexbar::settings::WorkdayTickStyle>,
+    pub menu_bar_color_pace: Option<bool>,
+    pub providers_sorted_alphabetically: Option<bool>,
     pub show_as_used: Option<bool>,
     pub show_all_token_accounts_in_menu: Option<bool>,
     pub enable_animations: Option<bool>,
@@ -41,8 +54,11 @@ pub struct SettingsUpdate {
     pub auto_download_updates: Option<bool>,
     pub install_updates_on_quit: Option<bool>,
     pub global_shortcut: Option<String>,
+    /// Provider-switcher shortcut overrides; replaces the stored overrides.
+    pub switcher_shortcuts: Option<std::collections::BTreeMap<String, String>>,
     pub codex_custom_sessions_dirs: Option<Vec<String>>,
     pub agent_sessions_enabled: Option<bool>,
+    pub stay_awake_enabled: Option<bool>,
     pub agent_session_ssh_hosts: Option<Vec<String>>,
     pub hooks_enabled: Option<bool>,
     pub http_proxy_enabled: Option<bool>,
@@ -60,6 +76,11 @@ pub struct SettingsUpdate {
     pub claude_swap_enabled: Option<bool>,
     pub claude_swap_executable_path: Option<String>,
     pub codex_spark_usage_visible: Option<bool>,
+    pub codex_openai_web_extras: Option<bool>,
+    pub codex_historical_tracking: Option<bool>,
+    pub codex_external_oauth_sources_allowed: Option<bool>,
+    pub codex_local_session_cost_ledger_enabled: Option<bool>,
+    pub codex_openai_web_battery_saver_enabled: Option<bool>,
     pub disable_keychain_access: Option<bool>,
     /// Map of provider CLI name → metric preference label.
     pub provider_metrics: Option<std::collections::HashMap<String, String>>,
@@ -81,16 +102,28 @@ pub struct SettingsUpdate {
     /// Optional user-entered Copilot seat AI-credit allowance; `null` clears it.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub copilot_seat_credit_entitlement: Option<Option<f64>>,
-    pub weekly_progress_work_days: Option<u8>,
+    /// Work-week length (2..=7); `null` or an out-of-range value selects Automatic.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub weekly_progress_work_days: Option<Option<u8>>,
     pub cost_summary_display_style: Option<String>,
     pub open_codex_usage_logs_enabled: Option<bool>,
     pub hide_native_codex_cost_when_open_codex_present: Option<bool>,
+    /// History window: `rolling:N` (1..=365), `month-to-date`, or `all`.
+    pub cost_reporting_period: Option<String>,
+    /// "Track costs" in Usage & Spend.
+    pub cost_usage_enabled: Option<bool>,
+    /// Usage & Spend time range, same format as `cost_reporting_period`.
+    pub spend_dashboard_period: Option<String>,
+    /// Usage & Spend sources left out of the dashboard; stored sorted and unique.
+    pub spend_dashboard_hidden_source_ids: Option<Vec<String>>,
 }
 
 impl SettingsUpdate {
     fn refreshes_provider_data(&self) -> bool {
         self.enabled_providers.is_some()
             || self.claude_allow_reading_claude_code_credentials.is_some()
+            || self.codex_openai_web_extras.is_some()
+            || self.codex_external_oauth_sources_allowed.is_some()
             || self.alibaba_token_plan_region.is_some()
             || self.copilot_seat_credit_entitlement.is_some()
             || self.weekly_progress_work_days.is_some()
@@ -103,9 +136,11 @@ impl SettingsUpdate {
             || self.low_power_mode_preference.is_some()
             || self.adaptive_refresh.is_some()
             || self.codex_custom_sessions_dirs.is_some()
+            || self.cost_reporting_period.is_some()
+            || self.cost_usage_enabled.is_some()
             || self.high_usage_threshold.is_some()
             || self.critical_usage_threshold.is_some()
-            || self.provider_usage_thresholds.is_some()
+            || self.provider_quota_warnings.is_some()
             || self.show_as_used.is_some()
             || self.reset_time_relative.is_some()
             || self.show_reset_when_exhausted.is_some()
@@ -121,17 +156,24 @@ impl SettingsUpdate {
 
     fn refreshes_tray_presentation(&self) -> bool {
         self.tray_icon_mode.is_some()
+            || self.stacked_tray_top_provider.is_some()
+            || self.stacked_tray_bottom_provider.is_some()
             || self.switcher_shows_icons.is_some()
             || self.menu_bar_shows_highest_usage.is_some()
             || self.menu_bar_shows_percent.is_some()
+            || self.menu_bar_icon_style.is_some()
+            || self.menu_bar_color_pace.is_some()
             || self.show_as_used.is_some()
             || self.reset_time_relative.is_some()
             || self.menu_bar_display_mode.is_some()
             || self.overview_layout.is_some()
             || self.provider_metrics.is_some()
             || self.provider_hidden_usage_item_ids.is_some()
+            || self.provider_quota_warnings.is_some()
+            || self.preferred_currency_code.is_some()
             || self.codex_spark_usage_visible.is_some()
             || self.copilot_seat_credit_entitlement.is_some()
+            || self.cost_reporting_period.is_some()
             || self.enabled_providers.is_some()
             || self.ui_language.is_some()
     }
@@ -167,6 +209,31 @@ impl SettingsUpdate {
         if let Some(v) = self.refresh_all_providers_on_menu_open {
             settings.refresh_all_providers_on_menu_open = v;
         }
+        if let Some(v) = self
+            .cost_reporting_period
+            .as_deref()
+            .and_then(codexbar::cost_reporting_period::CostReportingPeriod::parse)
+        {
+            settings.cost_reporting_period = v;
+        }
+        if let Some(v) = self
+            .spend_dashboard_period
+            .as_deref()
+            .and_then(codexbar::cost_reporting_period::CostReportingPeriod::parse)
+        {
+            settings.spend_dashboard_period = v;
+        }
+        if let Some(ids) = self.spend_dashboard_hidden_source_ids.clone() {
+            settings.spend_dashboard_hidden_source_ids =
+                codexbar::settings::normalize_spend_dashboard_hidden_source_ids(ids);
+        }
+        if let Some(v) = self.cost_usage_enabled {
+            if v && !settings.cost_usage_enabled {
+                // Mac pins the bucket zone when cost tracking is turned on.
+                settings.pin_cost_usage_bucket_time_zone();
+            }
+            settings.cost_usage_enabled = v;
+        }
         if let Some(v) = self.open_codex_usage_logs_enabled {
             settings.open_codex_usage_logs_enabled = v;
         }
@@ -190,6 +257,12 @@ impl SettingsUpdate {
         {
             settings.tray_icon_mode = mode;
         }
+        if let Some(provider) = self.stacked_tray_top_provider.clone() {
+            settings.stacked_tray_top_provider = normalize_optional_provider_id(provider);
+        }
+        if let Some(provider) = self.stacked_tray_bottom_provider.clone() {
+            settings.stacked_tray_bottom_provider = normalize_optional_provider_id(provider);
+        }
         if let Some(v) = self.provider_metrics.clone() {
             apply_provider_metrics(settings, v);
         }
@@ -200,6 +273,13 @@ impl SettingsUpdate {
     }
 
     fn apply_general_settings(self, settings: &mut Settings) -> Result<Self, String> {
+        if let Some(value) = self.preferred_currency_code.as_deref() {
+            let normalized = codexbar::currency::normalize_preferred_currency(value);
+            if !value.trim().eq_ignore_ascii_case("AUTO") && normalized == "AUTO" {
+                return Err(format!("Unsupported preferred currency: {value}"));
+            }
+            settings.preferred_currency_code = normalized;
+        }
         if let Some(v) = self.start_at_login {
             settings.set_start_at_login(v).map_err(|e| e.to_string())?;
         }
@@ -257,6 +337,34 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.menu_bar_shows_percent {
             settings.menu_bar_shows_percent = v;
+            // Legacy callers that still send the flag drive the new key too.
+            if self.menu_bar_icon_style.is_none() {
+                settings.menu_bar_icon_style = if v {
+                    codexbar::settings::MenuBarIconStyle::Percent
+                } else {
+                    codexbar::settings::MenuBarIconStyle::Bars
+                };
+            }
+        }
+        if let Some(v) = self.menu_bar_icon_style {
+            settings.menu_bar_icon_style = v;
+            // Keep the legacy flag in step for one release so a downgrade keeps the look.
+            settings.menu_bar_shows_percent = v == codexbar::settings::MenuBarIconStyle::Percent;
+        }
+        if let Some(ids) = self.merged_overview_selected_providers.clone() {
+            settings.set_merged_overview_selected_providers(ids);
+        }
+        if let Some(v) = self.quota_warning_markers_visible {
+            settings.quota_warning_markers_visible = v;
+        }
+        if let Some(v) = self.workday_tick_style {
+            settings.workday_tick_style = v;
+        }
+        if let Some(v) = self.menu_bar_color_pace {
+            settings.menu_bar_color_pace = v;
+        }
+        if let Some(v) = self.providers_sorted_alphabetically {
+            settings.providers_sorted_alphabetically = v;
         }
         if let Some(v) = self.show_all_token_accounts_in_menu {
             settings.show_all_token_accounts_in_menu = v;
@@ -291,12 +399,17 @@ impl SettingsUpdate {
         if let Some(v) = self.critical_usage_threshold {
             settings.critical_usage_threshold = v.clamp(0.0, 100.0);
         }
-        if let Some(values) = self.provider_usage_thresholds.clone() {
-            settings.provider_usage_thresholds =
-                codexbar::settings::normalize_usage_threshold_overrides(values);
+        if let Some(values) = self.provider_quota_warnings.clone() {
+            apply_provider_quota_warnings(settings, values);
         }
         if let Some(v) = self.predictive_pace_warning_enabled {
             settings.predictive_pace_warning_enabled = v;
+        }
+        if let Some(v) = self.credential_expiry_notifications_enabled {
+            settings.credential_expiry_notifications_enabled = v;
+        }
+        if let Some(v) = self.session_quota_notifications_enabled {
+            settings.session_quota_notifications_enabled = v;
         }
         if let Some(v) = self.show_pace {
             settings.show_pace = v;
@@ -326,6 +439,9 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.agent_sessions_enabled {
             settings.agent_sessions_enabled = v;
+        }
+        if let Some(v) = self.stay_awake_enabled {
+            settings.stay_awake_enabled = v;
         }
         if let Some(v) = self.agent_session_ssh_hosts.clone() {
             settings.agent_session_ssh_hosts =
@@ -367,6 +483,21 @@ impl SettingsUpdate {
         if let Some(v) = self.codex_spark_usage_visible {
             settings.set_codex_spark_usage_visible(v);
         }
+        if let Some(v) = self.codex_openai_web_extras {
+            settings.set_codex_openai_web_extras(v);
+        }
+        if let Some(v) = self.codex_historical_tracking {
+            settings.set_codex_historical_tracking(v);
+        }
+        if let Some(v) = self.codex_external_oauth_sources_allowed {
+            settings.codex_external_oauth_sources_allowed = v;
+        }
+        if let Some(v) = self.codex_local_session_cost_ledger_enabled {
+            settings.set_local_session_cost_ledger_enabled(codexbar::core::ProviderId::Codex, v);
+        }
+        if let Some(v) = self.codex_openai_web_battery_saver_enabled {
+            settings.set_openai_web_battery_saver_enabled(codexbar::core::ProviderId::Codex, v);
+        }
         if let Some(v) = self.disable_keychain_access {
             settings.disable_keychain_access = v;
             if v {
@@ -384,7 +515,8 @@ impl SettingsUpdate {
             );
         }
         if let Some(v) = self.weekly_progress_work_days {
-            settings.weekly_progress_work_days = if (2..=6).contains(&v) { Some(v) } else { None };
+            settings.weekly_progress_work_days =
+                codexbar::settings::normalize_weekly_progress_work_days(v);
         }
         if let Some(v) = self
             .cost_summary_display_style
@@ -417,6 +549,21 @@ impl SettingsUpdate {
         {
             return Err(format!("Invalid low power mode preference: {value}"));
         }
+        if let Some(value) = self.cost_reporting_period.as_deref()
+            && codexbar::cost_reporting_period::CostReportingPeriod::parse(value).is_none()
+        {
+            return Err(format!("Invalid cost reporting period: {value}"));
+        }
+        if let Some(value) = self.spend_dashboard_period.as_deref()
+            && codexbar::cost_reporting_period::CostReportingPeriod::parse(value).is_none()
+        {
+            return Err(format!("Invalid spend dashboard period: {value}"));
+        }
+        if let Some(overrides) = &self.switcher_shortcuts {
+            settings.switcher_shortcuts =
+                codexbar::switcher_shortcuts::normalize_overrides(overrides)
+                    .map_err(|error| error.to_string())?;
+        }
         if let Some(value) = self.copilot_seat_credit_entitlement {
             settings.set_seat_credit_entitlement(codexbar::core::ProviderId::Copilot, value)?;
         }
@@ -431,11 +578,14 @@ impl SettingsUpdate {
     }
 }
 
-fn deserialize_double_option<'de, D>(deserializer: D) -> Result<Option<Option<f64>>, D::Error>
+/// Present key → `Some(value)`, explicit `null` → `Some(None)`; a missing key
+/// stays `None` through `#[serde(default)]`.
+fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
 {
-    Ok(Some(Option::<f64>::deserialize(deserializer)?))
+    Ok(Some(Option::<T>::deserialize(deserializer)?))
 }
 
 fn normalize_custom_sessions_dirs(dirs: Vec<String>) -> Vec<String> {
@@ -467,6 +617,17 @@ fn apply_provider_metrics(
     }
 }
 
+fn apply_provider_quota_warnings(
+    settings: &mut Settings,
+    values: std::collections::HashMap<String, codexbar::settings::ProviderQuotaWarnings>,
+) {
+    for (provider, warnings) in values {
+        if let Ok(provider_id) = super::parse_provider_arg(&provider) {
+            settings.set_quota_warnings(provider_id, warnings);
+        }
+    }
+}
+
 fn apply_provider_hidden_usage_item_ids(
     settings: &mut Settings,
     values: std::collections::HashMap<String, Vec<String>>,
@@ -482,8 +643,14 @@ fn parse_tray_icon_mode(s: &str) -> Option<TrayIconMode> {
     match s {
         "single" => Some(TrayIconMode::Single),
         "perProvider" => Some(TrayIconMode::PerProvider),
+        "stacked" => Some(TrayIconMode::Stacked),
         _ => None,
     }
+}
+
+fn normalize_optional_provider_id(value: String) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 fn parse_update_channel(s: &str) -> Option<UpdateChannel> {
@@ -498,17 +665,28 @@ fn parse_language(s: &str) -> Option<Language> {
     Language::resolve(s)
 }
 
+/// Serializes the load -> patch -> save of `update_settings`. Commands run
+/// concurrently, so two overlapping patches would otherwise both load the same
+/// file and the later save would drop the earlier change.
+static UPDATE_SETTINGS_LOCK: Mutex<()> = Mutex::new(());
+
 #[tauri::command]
 pub async fn update_settings(
     app: tauri::AppHandle,
     patch: SettingsUpdate,
 ) -> Result<SettingsSnapshot, String> {
+    let write_guard = UPDATE_SETTINGS_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut settings = Settings::load();
     let notify_float_bar = patch.notifies_float_bar();
     let refresh_provider_data = patch.refreshes_provider_data();
-    let clear_local_usage_cache = patch.codex_custom_sessions_dirs.is_some();
+    let clear_local_usage_cache = patch.codex_custom_sessions_dirs.is_some()
+        || patch.cost_reporting_period.is_some()
+        || patch.cost_usage_enabled.is_some();
     let rebuild_tray_menu = patch.rebuilds_tray_menu();
     let refresh_tray_presentation = patch.refreshes_tray_presentation();
+    let stay_awake_changed = patch.stay_awake_enabled.is_some();
     let tray_promotion_changed = patch.changes_tray_promotion();
     let tray_panel_always_on_top_changed = patch.tray_panel_always_on_top.is_some();
     let previous_promoted = settings.promote_tray_icon;
@@ -522,6 +700,7 @@ pub async fn update_settings(
     }
 
     settings.save().map_err(|e| e.to_string())?;
+    drop(write_guard);
     if clear_local_usage_cache {
         crate::commands::clear_provider_local_usage_cache();
     }
@@ -536,6 +715,9 @@ pub async fn update_settings(
     }
 
     crate::floatbar::after_settings_saved(&app, &float_bar_patch, &settings, notify_float_bar);
+    if stay_awake_changed {
+        crate::stay_awake::settings_changed(&app, settings.stay_awake_enabled);
+    }
     if rebuild_tray_menu {
         crate::tray_bridge::rebuild_tray_menu(&app);
     }
@@ -571,6 +753,25 @@ pub async fn update_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preferred_currency_patch_accepts_supported_codes_and_rejects_unknown_codes() {
+        let mut settings = Settings::default();
+        SettingsUpdate {
+            preferred_currency_code: Some("try".to_string()),
+            ..SettingsUpdate::default()
+        }
+        .apply_to(&mut settings)
+        .expect("TRY is supported");
+        assert_eq!(settings.preferred_currency_code, "TRY");
+
+        let result = SettingsUpdate {
+            preferred_currency_code: Some("BTC".to_string()),
+            ..SettingsUpdate::default()
+        }
+        .apply_to(&mut settings);
+        assert!(matches!(result, Err(error) if error.contains("Unsupported preferred currency")));
+    }
 
     #[test]
     fn only_data_affecting_settings_refresh_providers() {
@@ -611,6 +812,68 @@ mod tests {
                 ..Default::default()
             }
             .refreshes_provider_data()
+        );
+    }
+
+    #[test]
+    fn codex_options_and_quota_warnings_round_trip_through_the_bridge() {
+        let patch: SettingsUpdate = serde_json::from_value(serde_json::json!({
+            "codexOpenaiWebExtras": false,
+            "codexHistoricalTracking": true,
+            "codexExternalOauthSourcesAllowed": true,
+            "codexLocalSessionCostLedgerEnabled": true,
+            "codexOpenaiWebBatterySaverEnabled": true,
+            "providerQuotaWarnings": {
+                "codex": {
+                    "session": { "high": 60.0, "critical": 85.0 },
+                    "weekly": { "enabled": false }
+                },
+                "not-a-provider": { "session": { "high": 10.0 } }
+            }
+        }))
+        .expect("bridge patch deserializes");
+        assert!(patch.notifies_float_bar());
+        assert!(patch.refreshes_tray_presentation());
+        assert!(patch.refreshes_provider_data());
+
+        let mut settings = Settings::default();
+        assert!(
+            settings.codex_openai_web_extras(),
+            "Windows default stays on"
+        );
+        patch.apply_to(&mut settings).expect("apply");
+
+        let snapshot = serde_json::to_value(crate::commands::bridge::SettingsSnapshot::from(
+            settings.clone(),
+        ))
+        .expect("snapshot serializes");
+        assert_eq!(snapshot["codexOpenaiWebExtras"], false);
+        assert_eq!(snapshot["codexHistoricalTracking"], true);
+        assert_eq!(snapshot["codexExternalOauthSourcesAllowed"], true);
+        assert_eq!(snapshot["codexLocalSessionCostLedgerEnabled"], true);
+        assert_eq!(snapshot["codexOpenaiWebBatterySaverEnabled"], true);
+        assert_eq!(
+            snapshot["providerQuotaWarnings"],
+            serde_json::json!({
+                "codex": {
+                    "session": { "high": 60.0, "critical": 85.0 },
+                    "weekly": { "enabled": false }
+                }
+            })
+        );
+        assert!(snapshot.get("providerUsageThresholds").is_none());
+        assert!(!settings.quota_warning_enabled(codexbar::core::ProviderId::Codex, "weekly"));
+
+        // An empty object returns the provider to Global.
+        let reset: SettingsUpdate = serde_json::from_value(serde_json::json!({
+            "providerQuotaWarnings": { "codex": {} }
+        }))
+        .expect("reset patch");
+        reset.apply_to(&mut settings).expect("apply reset");
+        assert!(
+            settings
+                .quota_warnings(codexbar::core::ProviderId::Codex)
+                .is_empty()
         );
     }
 
@@ -685,6 +948,87 @@ mod tests {
     }
 
     #[test]
+    fn cost_reporting_period_update_is_validated_and_applied() {
+        use codexbar::cost_reporting_period::CostReportingPeriod;
+
+        let mut settings = Settings::default();
+        let bad: SettingsUpdate =
+            serde_json::from_str(r#"{"costReportingPeriod":"rolling:0"}"#).unwrap();
+        let error = bad
+            .apply_to(&mut settings)
+            .expect_err("zero-day window must be rejected");
+        assert_eq!(error, "Invalid cost reporting period: rolling:0");
+
+        let good: SettingsUpdate =
+            serde_json::from_str(r#"{"costReportingPeriod":"month-to-date"}"#).unwrap();
+        good.apply_to(&mut settings).expect("valid period applies");
+        assert_eq!(
+            settings.cost_reporting_period,
+            CostReportingPeriod::MonthToDate
+        );
+    }
+
+    #[test]
+    fn spend_dashboard_updates_are_validated_and_applied() {
+        use codexbar::cost_reporting_period::CostReportingPeriod;
+
+        let mut settings = Settings::default();
+        let bad: SettingsUpdate =
+            serde_json::from_str(r#"{"spendDashboardPeriod":"fortnight"}"#).unwrap();
+        let error = bad
+            .apply_to(&mut settings)
+            .expect_err("unknown dashboard period must be rejected");
+        assert_eq!(error, "Invalid spend dashboard period: fortnight");
+
+        let good: SettingsUpdate = serde_json::from_str(
+            r#"{"spendDashboardPeriod":"rolling:90","spendDashboardHiddenSourceIds":["pi"," Codex","pi"]}"#,
+        )
+        .unwrap();
+        good.apply_to(&mut settings)
+            .expect("valid dashboard patch applies");
+        assert_eq!(
+            settings.spend_dashboard_period,
+            CostReportingPeriod::Rolling(90)
+        );
+        // The menu / float-bar period is a separate key.
+        assert_eq!(
+            settings.cost_reporting_period,
+            CostReportingPeriod::Rolling(30)
+        );
+        assert_eq!(settings.spend_dashboard_hidden_source_ids, ["codex", "pi"]);
+    }
+
+    #[test]
+    fn turning_cost_tracking_on_pins_the_bucket_zone_and_off_keeps_it() {
+        let mut settings = Settings {
+            cost_usage_enabled: false,
+            cost_usage_bucket_time_zone: String::new(),
+            ..Settings::default()
+        };
+        let on: SettingsUpdate = serde_json::from_str(r#"{"costUsageEnabled":true}"#).unwrap();
+        assert!(on.notifies_float_bar());
+        on.apply_to(&mut settings).expect("enable applies");
+        assert!(settings.cost_usage_enabled);
+        let mut expected = Settings {
+            cost_usage_bucket_time_zone: String::new(),
+            ..Settings::default()
+        };
+        expected.pin_cost_usage_bucket_time_zone();
+        assert_eq!(
+            settings.cost_usage_bucket_time_zone,
+            expected.cost_usage_bucket_time_zone
+        );
+
+        let off: SettingsUpdate = serde_json::from_str(r#"{"costUsageEnabled":false}"#).unwrap();
+        off.apply_to(&mut settings).expect("disable applies");
+        assert!(!settings.cost_usage_enabled);
+        assert_eq!(
+            settings.cost_usage_bucket_time_zone,
+            expected.cost_usage_bucket_time_zone
+        );
+    }
+
+    #[test]
     fn display_settings_that_affect_tray_trigger_presentation_refresh() {
         assert!(
             SettingsUpdate {
@@ -699,6 +1043,160 @@ mod tests {
                 ..Default::default()
             }
             .refreshes_tray_presentation()
+        );
+        assert!(
+            SettingsUpdate {
+                menu_bar_color_pace: Some(true),
+                ..Default::default()
+            }
+            .refreshes_tray_presentation()
+        );
+        assert!(
+            SettingsUpdate {
+                stacked_tray_top_provider: Some("claude".to_string()),
+                ..Default::default()
+            }
+            .refreshes_tray_presentation()
+        );
+    }
+
+    #[test]
+    fn apply_display_settings_updates_tray_pace_color() {
+        let mut settings = Settings::default();
+        assert!(!settings.menu_bar_color_pace);
+
+        SettingsUpdate {
+            menu_bar_color_pace: Some(true),
+            ..Default::default()
+        }
+        .apply_display_settings(&mut settings);
+        assert!(settings.menu_bar_color_pace);
+
+        SettingsUpdate {
+            menu_bar_color_pace: Some(false),
+            ..Default::default()
+        }
+        .apply_display_settings(&mut settings);
+        assert!(!settings.menu_bar_color_pace);
+    }
+
+    #[test]
+    fn menu_bar_icon_style_update_repaints_tray_and_mirrors_legacy_flag() {
+        let mut settings = Settings::default();
+        let update: SettingsUpdate =
+            serde_json::from_str(r#"{"menuBarIconStyle":"percent"}"#).unwrap();
+        assert!(update.refreshes_tray_presentation());
+        update.apply_display_settings(&mut settings);
+        assert_eq!(
+            settings.menu_bar_icon_style,
+            codexbar::settings::MenuBarIconStyle::Percent
+        );
+        assert!(settings.menu_bar_shows_percent);
+
+        let update: SettingsUpdate =
+            serde_json::from_str(r#"{"menuBarIconStyle":"bars"}"#).unwrap();
+        update.apply_display_settings(&mut settings);
+        assert_eq!(
+            settings.menu_bar_icon_style,
+            codexbar::settings::MenuBarIconStyle::Bars
+        );
+        assert!(!settings.menu_bar_shows_percent);
+    }
+
+    #[test]
+    fn menu_pane_keys_apply_from_camel_case_patch() {
+        let mut settings = Settings::default();
+        let update: SettingsUpdate = serde_json::from_str(
+            r#"{"quotaWarningMarkersVisible":false,"workdayTickStyle":"high_contrast",
+                "mergedOverviewSelectedProviders":["claude","Codex","claude","gemini","cursor","copilot","zai","kimi"],
+                "weeklyProgressWorkDays":7}"#,
+        )
+        .unwrap();
+        update
+            .apply_display_settings(&mut settings)
+            .apply_advanced_settings(&mut settings);
+        assert!(!settings.quota_warning_markers_visible);
+        assert_eq!(
+            settings.workday_tick_style,
+            codexbar::settings::WorkdayTickStyle::HighContrast
+        );
+        assert_eq!(
+            settings.merged_overview_selected_providers,
+            ["claude", "codex", "gemini", "cursor", "copilot", "zai"]
+                .map(String::from)
+                .to_vec()
+        );
+        assert_eq!(settings.weekly_progress_work_days, Some(7));
+
+        let update: SettingsUpdate =
+            serde_json::from_str(r#"{"weeklyProgressWorkDays":8}"#).unwrap();
+        update
+            .apply_display_settings(&mut settings)
+            .apply_advanced_settings(&mut settings);
+        assert_eq!(settings.weekly_progress_work_days, None);
+
+        settings.weekly_progress_work_days = Some(5);
+        let update: SettingsUpdate =
+            serde_json::from_str(r#"{"weeklyProgressWorkDays":null}"#).unwrap();
+        assert!(update.refreshes_provider_data());
+        update
+            .apply_display_settings(&mut settings)
+            .apply_advanced_settings(&mut settings);
+        assert_eq!(
+            settings.weekly_progress_work_days, None,
+            "null selects Automatic"
+        );
+    }
+
+    #[test]
+    fn settings_snapshot_emits_snake_case_style_values() {
+        let settings = Settings {
+            menu_bar_icon_style: codexbar::settings::MenuBarIconStyle::Percent,
+            workday_tick_style: codexbar::settings::WorkdayTickStyle::HighContrast,
+            ..Settings::default()
+        };
+        let json = serde_json::to_value(crate::commands::SettingsSnapshot::from(settings)).unwrap();
+        assert_eq!(json["menuBarIconStyle"], "percent");
+        assert_eq!(json["workdayTickStyle"], "high_contrast");
+        assert_eq!(json["quotaWarningMarkersVisible"], true);
+        assert_eq!(
+            json["mergedOverviewSelectedProviders"],
+            serde_json::json!([])
+        );
+    }
+
+    #[test]
+    fn providers_sidebar_sort_applies_without_touching_order_or_tray() {
+        let mut settings = Settings::default();
+        let order = settings.provider_order.clone();
+        let update: SettingsUpdate =
+            serde_json::from_str(r#"{"providersSortedAlphabetically":true}"#).unwrap();
+        assert!(!update.refreshes_tray_presentation());
+        update.apply_display_settings(&mut settings);
+        assert!(settings.providers_sorted_alphabetically);
+        assert_eq!(settings.provider_order, order);
+    }
+
+    #[test]
+    fn stacked_tray_update_accepts_mode_and_clears_automatic_provider() {
+        let mut settings = Settings {
+            stacked_tray_top_provider: Some("codex".to_string()),
+            ..Settings::default()
+        };
+
+        SettingsUpdate {
+            tray_icon_mode: Some("stacked".to_string()),
+            stacked_tray_top_provider: Some(String::new()),
+            stacked_tray_bottom_provider: Some("claude".to_string()),
+            ..Default::default()
+        }
+        .apply_provider_settings(&mut settings);
+
+        assert_eq!(settings.tray_icon_mode, TrayIconMode::Stacked);
+        assert_eq!(settings.stacked_tray_top_provider, None);
+        assert_eq!(
+            settings.stacked_tray_bottom_provider.as_deref(),
+            Some("claude")
         );
     }
 
@@ -805,5 +1303,88 @@ mod tests {
             settings.notification_sound_paths,
             codexbar::settings::NotificationSoundPaths::default()
         );
+    }
+
+    fn switcher_patch(json: &str) -> SettingsUpdate {
+        serde_json::from_str(&format!(r#"{{"switcherShortcuts":{json}}}"#)).unwrap()
+    }
+
+    #[test]
+    fn switcher_shortcuts_patch_stores_normalized_non_default_overrides() {
+        let mut settings = Settings::default();
+        switcher_patch(r#"{"select2":"Alt+Cmd+2","previous":"left","next":"none"}"#)
+            .apply_to(&mut settings)
+            .expect("valid overrides are stored");
+
+        assert_eq!(
+            settings.switcher_shortcuts,
+            std::collections::BTreeMap::from([
+                ("select2".to_string(), "ctrl+alt+2".to_string()),
+                ("next".to_string(), "none".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn switcher_shortcuts_empty_patch_restores_defaults() {
+        let mut settings = Settings::default();
+        switcher_patch(r#"{"next":"shift+right"}"#)
+            .apply_to(&mut settings)
+            .unwrap();
+        switcher_patch("{}").apply_to(&mut settings).unwrap();
+
+        assert!(settings.switcher_shortcuts.is_empty());
+    }
+
+    #[test]
+    fn switcher_shortcuts_patch_rejects_invalid_maps_and_keeps_stored_value() {
+        let mut settings = Settings::default();
+        switcher_patch(r#"{"next":"shift+right"}"#)
+            .apply_to(&mut settings)
+            .unwrap();
+
+        for (json, message) in [
+            (
+                r#"{"bogus":"ctrl+1"}"#,
+                "Unknown switcher shortcut action: bogus",
+            ),
+            (
+                r#"{"next":"left"}"#,
+                "Each switcher shortcut can be assigned to only one action",
+            ),
+            (
+                r#"{"next":"ctrl+r"}"#,
+                "ctrl+r is reserved and cannot be used as a switcher shortcut",
+            ),
+            (r#"{"next":"f1"}"#, "f1 is not a valid switcher shortcut"),
+        ] {
+            let error = switcher_patch(json)
+                .apply_to(&mut settings)
+                .expect_err(json);
+            assert_eq!(error, message);
+        }
+        assert_eq!(
+            settings.switcher_shortcuts.get("next").map(String::as_str),
+            Some("shift+right")
+        );
+    }
+
+    #[test]
+    fn switcher_shortcuts_snapshot_exposes_the_fully_resolved_map() {
+        let settings = Settings {
+            switcher_shortcuts: std::collections::BTreeMap::from([(
+                "next".to_string(),
+                "none".to_string(),
+            )]),
+            ..Settings::default()
+        };
+        let value =
+            serde_json::to_value(super::super::bridge::SettingsSnapshot::from(settings)).unwrap();
+        let map = &value["switcherShortcuts"];
+
+        assert_eq!(map["next"], "none");
+        assert_eq!(map["previous"], "left");
+        assert_eq!(map["select9"], "ctrl+9");
+        assert_eq!(map.as_object().unwrap().len(), 11);
     }
 }

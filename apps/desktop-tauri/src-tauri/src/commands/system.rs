@@ -7,6 +7,7 @@ pub fn get_app_info() -> AppInfoBridge {
         name: "CodexBar".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         build_number: option_env!("BUILD_NUMBER").unwrap_or("dev").to_string(),
+        build_date: option_env!("CODEXBAR_BUILD_DATE").map(str::to_string),
         update_channel: update_channel_label(settings.update_channel).to_string(),
         tagline: "May your tokens never run out—keep agent limits in view.".to_string(),
     }
@@ -171,6 +172,39 @@ pub fn get_work_area_rect(app: tauri::AppHandle) -> Result<WorkAreaRect, String>
 // ── Misc UX ────────────────────────────────────────────────────────────
 
 #[tauri::command]
+pub fn get_system_accent_color() -> Option<String> {
+    system_accent_abgr().map(abgr_to_hex)
+}
+
+#[cfg(windows)]
+fn system_accent_abgr() -> Option<u32> {
+    use winreg::RegKey;
+    use winreg::enums::HKEY_CURRENT_USER;
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    [
+        (
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\Accent",
+            "AccentColorMenu",
+        ),
+        (r"Software\Microsoft\Windows\DWM", "AccentColor"),
+    ]
+    .into_iter()
+    .find_map(|(path, name)| hkcu.open_subkey(path).ok()?.get_value::<u32, _>(name).ok())
+}
+
+#[cfg(not(windows))]
+fn system_accent_abgr() -> Option<u32> {
+    None
+}
+
+/// Windows stores accent colors as 0xAABBGGRR.
+fn abgr_to_hex(value: u32) -> String {
+    let [r, g, b, _] = value.to_le_bytes();
+    format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+#[tauri::command]
 pub fn play_notification_sound(
     event: codexbar::sound::NotificationSoundEvent,
 ) -> Result<(), String> {
@@ -205,36 +239,9 @@ pub fn quit_app(app: tauri::AppHandle) {
 }
 
 fn dashboard_url_for_provider(provider_id: &str) -> Option<String> {
-    if provider_id == ProviderId::MiniMax.cli_name() {
-        let settings = Settings::load();
-        return Some(
-            codexbar::providers::MiniMaxProvider::dashboard_url_for_region(Some(
-                settings.api_region(ProviderId::MiniMax),
-            )),
-        );
-    }
-
-    // OpenRouter's Usage Dashboard is the Activity page. Resolve it from the
-    // provider metadata before the legacy API-key catalog entry, which still
-    // points at the credits settings page.
-    if provider_id == ProviderId::OpenRouter.cli_name() {
-        return instantiate_provider(ProviderId::OpenRouter)
-            .metadata()
-            .dashboard_url
-            .map(|s| s.to_string());
-    }
-
-    if let Some(url) = codexbar::settings::get_api_key_providers()
-        .into_iter()
-        .find(|p| p.id.cli_name() == provider_id)
-        .and_then(|p| p.dashboard_url.map(|s| s.to_string()))
-    {
-        return Some(url);
-    }
-
     let id = ProviderId::from_cli_name(provider_id)?;
-    let provider = instantiate_provider(id);
-    provider.metadata().dashboard_url.map(|s| s.to_string())
+    let settings = Settings::load();
+    provider_dashboard_url(id, &settings)
 }
 
 fn status_page_url_for_provider(provider_id: &str) -> Option<String> {
@@ -244,10 +251,25 @@ fn status_page_url_for_provider(provider_id: &str) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn open_provider_dashboard(provider_id: String) -> Result<(), String> {
+pub fn open_provider_dashboard(
+    state: tauri::State<'_, Mutex<AppState>>,
+    provider_id: String,
+) -> Result<(), String> {
     let provider_id = canonical_provider_arg(&provider_id)?;
-    let url = dashboard_url_for_provider(&provider_id)
-        .ok_or_else(|| format!("No dashboard URL registered for provider '{provider_id}'"))?;
+    let url = if provider_id == ProviderId::Helmcode.cli_name() {
+        let organization = state.lock().ok().and_then(|guard| {
+            guard
+                .provider_cache
+                .iter()
+                .find(|snapshot| snapshot.provider_id == provider_id)
+                .and_then(|snapshot| snapshot.account_organization.clone())
+        });
+        codexbar::providers::helmcode::dashboard_url_for_organization(organization.as_deref())
+            .to_string()
+    } else {
+        dashboard_url_for_provider(&provider_id)
+            .ok_or_else(|| format!("No dashboard URL registered for provider '{provider_id}'"))?
+    };
     open_url_in_browser(&url)
 }
 
@@ -438,10 +460,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn accent_registry_dword_reads_as_abgr() {
+        assert_eq!(abgr_to_hex(0xffd4_7800), "#0078d4");
+        assert_eq!(abgr_to_hex(0xff00_b9ff), "#ffb900");
+    }
+
+    #[test]
     fn dashboard_url_resolves_from_codex_provider_metadata() {
         assert_eq!(
             dashboard_url_for_provider("codex").as_deref(),
-            Some("https://chatgpt.com/codex/settings/usage")
+            Some("https://chatgpt.com/codex/cloud/settings/analytics#usage")
         );
     }
 

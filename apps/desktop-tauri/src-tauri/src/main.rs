@@ -14,11 +14,13 @@ mod proof_harness;
 mod shell;
 mod shortcut_bridge;
 mod state;
+mod stay_awake;
 mod surface;
 mod surface_target;
 mod tray_accounts;
 mod tray_bridge;
 mod tray_menu;
+mod tray_presentation;
 mod tray_visibility;
 mod usage_coin;
 mod usage_metric;
@@ -28,7 +30,6 @@ use std::sync::Mutex;
 
 use state::AppState;
 use surface::SurfaceMode;
-use surface_target::SurfaceTarget;
 use tauri::Manager;
 
 const PROOF_ACTIVATION_DELAY: Duration = Duration::from_millis(0);
@@ -47,12 +48,32 @@ fn should_hide_close_request(mode: SurfaceMode) -> bool {
     )
 }
 
-fn primary_window_request() -> shell::ShellTransitionRequest {
-    shell::ShellTransitionRequest {
-        mode: SurfaceMode::PopOut,
-        target: SurfaceTarget::Dashboard,
-        position: None,
-    }
+/// Open the primary window: the tray-panel flyout, the only dashboard
+/// layout. The legacy PopOut layout on `main` is retired, so launches and
+/// relaunches use that same panel near the cursor, while tray clicks anchor it to the tray.
+///
+/// Spawned because building the flyout window synchronously can deadlock on
+/// Windows (see `shell::flyout_window::open_or_focus`).
+///
+/// Launch and relaunch are not clicks in CodexBar, so the panel only asks
+/// Windows for the foreground (`Activation::IfAllowed`): a launch from Start
+/// or Explorer gets focus, a login-time or background launch does not.
+fn open_primary_window(app: &tauri::AppHandle, delay: Duration) {
+    // Capture the launch location before startup work or a delayed reveal moves the cursor.
+    let cursor = app.cursor_position().ok().map(|point| (point.x, point.y));
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        if let Err(error) = shell::flyout_window::open_near_cursor(
+            &app,
+            cursor,
+            shell::activation::Activation::IfAllowed,
+        ) {
+            tracing::warn!(%error, "failed to open the tray panel window");
+        }
+    });
 }
 
 fn should_open_primary_window_from_args<I, S>(args: I) -> bool
@@ -123,7 +144,9 @@ fn main() {
     let proof_config = proof_harness::ProofConfig::from_env();
     let is_proof_mode = proof_config.is_some();
     let force_start_visible = std::env::var_os("CODEXBAR_START_VISIBLE").is_some();
-    let settings = codexbar::settings::Settings::load();
+    let mut settings = codexbar::settings::Settings::load();
+    settings.apply_display_mode_fold_migration();
+    settings.apply_quota_warning_migration();
     let launch = launch_behavior(
         force_start_visible,
         settings.start_minimized,
@@ -132,34 +155,56 @@ fn main() {
 
     let mut initial_state = AppState::new();
     initial_state.proof_config = proof_config;
-    // Proof-harness seed: CODEXBAR_SEED_USAGE_JSON plants one synthetic Codex
-    // ProviderUsageSnapshot before the event loop and any WebView read. The
-    // cache timestamp makes the seeded cache count as fresh so the first
-    // frontend refresh-if-stale call does not evict the synthetic data.
-    if let Some(snapshot) = proof_harness::seed_usage_snapshot_from_env() {
-        tracing::info!(
-            "proof-harness: seeded provider snapshot for '{}'",
-            snapshot.provider_id
-        );
-        initial_state.provider_cache.push(snapshot);
-        initial_state.provider_cache_updated_at = Some(std::time::Instant::now());
+    // Validate the complete proof seed before installing any snapshots, so an
+    // invalid multi-provider fixture cannot leave a partial cache behind.
+    if let Some(snapshots) = proof_harness::seed_usage_snapshots_from_env(
+        initial_state.proof_config.as_ref(),
+        settings.weekly_progress_work_days,
+    ) {
+        let seeded_at = std::time::Instant::now();
+        for snapshot in &snapshots {
+            tracing::info!(
+                "proof-harness: seeded provider snapshot for '{}'",
+                snapshot.provider_id
+            );
+            if let Some(provider) = codexbar::core::ProviderId::from_cli_name(&snapshot.provider_id)
+            {
+                initial_state
+                    .provider_cache_updated_at_by_provider
+                    .insert(provider, seeded_at);
+            }
+        }
+        initial_state.provider_cache.extend(snapshots);
+        initial_state.provider_cache_seeded = true;
+        initial_state.provider_cache_updated_at = Some(seeded_at);
+    }
+
+    let context = tauri::generate_context!();
+    if is_proof_mode {
+        // Proof runs show surfaces for automation but never take focus.
+        shell::activation::suppress_all();
+    } else {
+        // If CodexBar is already running, the single-instance plugin hands
+        // this launch off to it; pass our foreground permission along first.
+        shell::activation::grant_foreground_to_running_instance(&context.config().identifier);
     }
 
     tauri::Builder::default()
         .manage(Mutex::new(initial_state))
+        .manage(commands::CurrencyRateCache::default())
         .plugin(shortcut_bridge::plugin())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if should_reopen_primary_window_from_instance_args(args.iter().skip(1)) {
-                let request = primary_window_request();
-                let _ =
-                    shell::reopen_to_target(app, request.mode, request.target, request.position);
+                open_primary_window(app, Duration::ZERO);
             }
         }))
         .invoke_handler(tauri::generate_handler![
             commands::get_bootstrap_state,
             commands::get_provider_catalog,
             commands::get_settings_snapshot,
+            commands::get_currency_rates,
+            stay_awake::get_stay_awake_status,
             commands::list_agent_sessions,
             commands::focus_agent_session,
             commands::update_settings,
@@ -171,8 +216,6 @@ fn main() {
             commands::open_settings_window,
             commands::open_flyout_window,
             commands::close_settings_window,
-            commands::set_flyout_size,
-            commands::flyout_stored_size,
             commands::get_current_surface_state,
             commands::refresh_providers,
             commands::refresh_providers_if_stale,
@@ -180,6 +223,7 @@ fn main() {
             commands::get_deepseek_pricing_status,
             commands::codex_accounts_list,
             commands::claude_accounts_list,
+            commands::get_claude_accounts_state,
             commands::claude_reconciliation_state,
             commands::claude_account_add,
             commands::claude_account_cancel_login,
@@ -188,6 +232,7 @@ fn main() {
             commands::claude_account_switch,
             commands::grok_accounts_list,
             commands::grok_account_add,
+            commands::grok_account_reauthenticate,
             commands::grok_account_cancel_login,
             commands::grok_account_save_current,
             commands::grok_account_remove,
@@ -231,12 +276,15 @@ fn main() {
             commands::get_provider_local_usage_summary,
             commands::get_usage_spend_summary,
             commands::write_usage_spend_export,
+            commands::export_preferences,
+            commands::import_preferences,
             commands::get_spend_contract,
             commands::get_codex_workspaces_snapshot,
             commands::reorder_providers,
             commands::set_provider_cookie_source,
             commands::set_provider_usage_source,
             commands::set_provider_auto_resume_after_quota_reset,
+            commands::set_provider_optional_details,
             commands::has_openrouter_management_api_key,
             commands::set_openrouter_management_api_key,
             commands::remove_openrouter_management_api_key,
@@ -247,6 +295,7 @@ fn main() {
             commands::get_provider_region_options,
             commands::set_provider_workspace_id,
             commands::set_provider_gateway_url,
+            commands::get_provider_gateway_url,
             commands::get_provider_workspace_id,
             commands::get_gemini_cli_signed_in,
             commands::get_vertexai_status,
@@ -256,6 +305,7 @@ fn main() {
             commands::register_global_shortcut,
             commands::unregister_global_shortcut,
             commands::get_work_area_rect,
+            commands::get_system_accent_color,
             commands::play_notification_sound,
             commands::open_external_url,
             commands::reanchor_tray_panel,
@@ -292,6 +342,7 @@ fn main() {
             floatbar::install(app.handle());
             usage_coin::install(app.handle());
             auto_refresh::install(app.handle().clone());
+            stay_awake::install(app.handle().clone());
             if settings.powertoys_status_pipe_enabled {
                 powertoys::install(app.handle().clone());
             }
@@ -306,17 +357,10 @@ fn main() {
                     proof_harness::activate(&app_handle);
                 });
             } else if launch.open_primary_window_at_start {
-                let app = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(VISIBLE_START_ACTIVATION_DELAY).await;
-                    let request = primary_window_request();
-                    let _ = shell::reopen_to_target(
-                        &app,
-                        request.mode,
-                        request.target,
-                        request.position,
-                    );
-                });
+                if launch.suppress_blur_dismiss {
+                    shell::flyout_window::keep_open_on_blur();
+                }
+                open_primary_window(app.handle(), VISIBLE_START_ACTIVATION_DELAY);
             }
 
             Ok(())
@@ -365,11 +409,6 @@ fn main() {
                     {
                         return;
                     }
-                    // Gesture guard: ignore blur while a resize-grip drag or
-                    // HTML5 drag-reorder is running its Win32/OLE modal loop.
-                    // Windows produces a spurious Focused(false) the instant
-                    // such a loop starts even though the user never left the
-                    // window; see AppState::begin_gesture_blur_guard.
                     if let Some(st) = window.app_handle().try_state::<Mutex<AppState>>()
                         && st
                             .lock()
@@ -422,8 +461,13 @@ fn main() {
                 _ => {}
             }
         })
-        .run(tauri::generate_context!())
-        .expect("failed to run CodexBar desktop shell");
+        .build(context)
+        .expect("failed to build CodexBar desktop shell")
+        .run(|_app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                stay_awake::shutdown();
+            }
+        });
 }
 
 #[cfg(test)]
@@ -440,14 +484,6 @@ mod tests {
     #[test]
     fn close_request_leaves_hidden_surface_alone() {
         assert!(!should_hide_close_request(SurfaceMode::Hidden));
-    }
-
-    #[test]
-    fn primary_window_request_targets_popout_dashboard() {
-        let request = primary_window_request();
-        assert_eq!(request.mode, SurfaceMode::PopOut);
-        assert_eq!(request.target, SurfaceTarget::Dashboard);
-        assert_eq!(request.position, None);
     }
 
     #[test]

@@ -1,9 +1,9 @@
-import { useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ProviderUsageSnapshot } from "../types/bridge";
 import { ProviderIcon } from "./providers/ProviderIcon";
 import { getProviderIcon } from "./providers/providerIcons";
 import { useLocale } from "../hooks/useLocale";
-import { prioritizeProviders } from "./providerGridUtils";
+import { prioritizeProviders, switcherWeeklyPercent } from "./providerGridUtils";
 
 export default function ProviderGrid({
   providers,
@@ -36,6 +36,15 @@ export default function ProviderGrid({
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const canReorder = typeof onReorder === "function";
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  // Keep the selected item visible when it changes (keyboard switching in the
+  // scrollable dense grid); this never expands a collapsed grid.
+  useEffect(() => {
+    gridRef.current
+      ?.querySelector(".provider-grid__item--active")
+      ?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [selectedProviderId]);
 
   const applyReorder = (targetId: string) => {
     if (!onReorder || !dragId || dragId === targetId) return;
@@ -57,12 +66,8 @@ export default function ProviderGrid({
     if (expanded === undefined) setUncontrolledExpanded(next);
     onExpandedChange?.(next);
   };
-  const gridPercent = (provider: ProviderUsageSnapshot) => {
-    const pct = showAsUsed
-      ? provider.primary.usedPercent
-      : provider.primary.remainingPercent;
-    return Math.max(0, Math.min(100, pct));
-  };
+  const gridPercent = (provider: ProviderUsageSnapshot) =>
+    switcherWeeklyPercent(provider, showAsUsed);
   const totalItems = providers.length + 1;
   const shouldCollapse = totalItems > 32;
   const collapsedProviders = useMemo(
@@ -85,6 +90,7 @@ export default function ProviderGrid({
 
   return (
     <div
+      ref={gridRef}
       className={`provider-grid${densityClass}${showProviderIcons ? "" : " provider-grid--no-icons"}`}
       data-provider-count={totalItems}
       data-expanded={isExpanded ? "true" : "false"}

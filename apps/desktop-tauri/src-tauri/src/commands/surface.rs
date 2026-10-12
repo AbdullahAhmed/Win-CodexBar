@@ -1,4 +1,5 @@
 use super::*;
+use crate::shell::activation::Activation;
 
 // ── Surface-mode commands ────────────────────────────────────────────
 
@@ -11,8 +12,15 @@ pub fn set_surface_mode(
     let mode = SurfaceMode::parse(&mode).ok_or_else(|| format!("unknown surface mode: {mode}"))?;
     let target = validate_surface_target(mode, target)?;
 
-    crate::shell::transition_to_target(window.app_handle(), mode, target, None)
-        .map(|mode| mode.as_str().to_string())
+    // The frontend only calls this from a click (e.g. a Settings tab).
+    crate::shell::transition_to_target(
+        window.app_handle(),
+        mode,
+        target,
+        None,
+        Activation::UserAction,
+    )
+    .map(|mode| mode.as_str().to_string())
 }
 
 #[tauri::command]
@@ -20,9 +28,6 @@ pub fn dismiss_tray_panel(app: tauri::AppHandle) -> Result<(), String> {
     crate::shell::flyout_window::hide(&app)
 }
 
-/// Arm the gesture blur guard before a resize-grip drag or drag-reorder
-/// gesture starts its Win32/OLE modal loop, so the transient
-/// `Focused(false)` that loop produces doesn't auto-hide the flyout.
 #[tauri::command]
 pub fn begin_flyout_gesture(app: tauri::AppHandle) -> Result<(), String> {
     let state = app
@@ -59,24 +64,23 @@ pub async fn open_settings_window(app: tauri::AppHandle, tab: String) -> Result<
     crate::shell::settings_window::open_or_focus(&app, &tab)
 }
 
-/// Open (or focus) the detached flyout ("Pop Out Dashboard") window.
-///
-/// Used by `PopOutPanel`'s "back to tray" action, which previously called
-/// `set_surface_mode("trayPanel", ...)` on the shared window — now that the
-/// flyout is its own window, that action opens it directly instead.  Same
-/// `async` requirement as `open_settings_window`: `WebviewWindowBuilder::build`
-/// deadlocks inside synchronous Tauri commands on Windows.
+/// Open (or focus) the detached flyout ("Pop Out Dashboard") window, the
+/// only dashboard layout. Used by the frontend global-shortcut fallback.
+/// Same `async` requirement as `open_settings_window`:
+/// `WebviewWindowBuilder::build` deadlocks inside synchronous Tauri commands
+/// on Windows.
 #[tauri::command]
 pub async fn open_flyout_window(app: tauri::AppHandle) -> Result<(), String> {
-    crate::shell::flyout_window::open_or_focus(&app, None)
+    crate::shell::flyout_window::open_or_focus(&app, None, Activation::UserAction)
 }
 
 /// Reveal the flyout window after the frontend's first layout pass. Called by
-/// `useTrayPanelLayout` once content has been measured/auto-fit (or the
-/// remembered fixed size re-applied), so Windows never shows a pre-measure
-/// blank/backing frame.
+/// `useTrayPanelLayout` once content has been measured and auto-fit, so
+/// Windows never shows a pre-measure blank/backing frame.
 ///
 /// No-ops when the flyout window doesn't exist or no one-shot reveal is pending.
+/// The window takes focus only as far as the pending reveal's activation
+/// allows (see `shell::activation`).
 #[tauri::command]
 pub fn reveal_tray_panel_window(
     app: tauri::AppHandle,
@@ -88,17 +92,16 @@ pub fn reveal_tray_panel_window(
         return Ok(());
     };
     let mut guard = state.lock().map_err(|e| e.to_string())?;
-    if !guard.take_pending_flyout_reveal() {
+    let Some(activation) = guard.take_pending_flyout_reveal() else {
         return Ok(());
-    }
+    };
     drop(guard);
     window.show().map_err(|e| e.to_string())?;
     state
         .lock()
         .map_err(|e| e.to_string())?
         .mark_tray_panel_shown(std::time::Instant::now());
-    window.set_focus().map_err(|e| e.to_string())?;
-    Ok(())
+    crate::shell::activation::apply(&window, activation)
 }
 
 #[tauri::command]
@@ -107,30 +110,6 @@ pub fn close_settings_window(
     window: tauri::WebviewWindow,
 ) -> Result<(), String> {
     crate::shell::settings_window::dismiss(&app, &window)
-}
-
-/// Persist a user-chosen size for the "Pop Out Dashboard" flyout window.
-/// Only the size is stored (via a size-only `StoredSize` entry — no
-/// fabricated `x`/`y`); the flyout is always re-anchored above the tray on
-/// open. The frontend calls this on genuine user drag-resizes, not on its own
-/// auto-fit resizes, so auto-fit sizes never freeze the panel.
-#[tauri::command]
-pub fn set_flyout_size(width: f64, height: f64) -> Result<(), String> {
-    let width = (width.round() as i64).clamp(1, i64::from(u32::MAX)) as u32;
-    let height = (height.round() as i64).clamp(1, i64::from(u32::MAX)) as u32;
-    crate::shell::flyout_window::save_stored_size(width, height);
-    Ok(())
-}
-
-/// Return the remembered flyout size, if the user has manually resized it.
-/// The frontend uses this to decide whether to auto-fit (no stored size) or
-/// honor the user's size (stored) on open. Transparently migrates a
-/// pre-existing size stored under the legacy `SurfaceMode::TrayPanel`
-/// shared-window geometry key (from before the flyout became its own
-/// window), so upgrading users don't lose their remembered size.
-#[tauri::command]
-pub fn flyout_stored_size() -> Result<Option<(u32, u32)>, String> {
-    Ok(crate::shell::flyout_window::stored_size())
 }
 
 #[tauri::command]
@@ -150,6 +129,12 @@ pub(crate) fn validate_surface_target(
 ) -> Result<SurfaceTarget, String> {
     if mode == SurfaceMode::Hidden {
         return Err("set_surface_mode only supports visible surfaces".into());
+    }
+
+    // The legacy PopOut layout on `main` is retired; the dashboard is the
+    // tray-panel flyout, opened with `open_flyout_window`.
+    if mode == SurfaceMode::PopOut {
+        return Err("the popOut surface is retired; use open_flyout_window".into());
     }
 
     if target.mode() != mode {

@@ -3,6 +3,7 @@ use super::*;
 #[test]
 fn test_settings_default() {
     let settings = Settings::default();
+    assert_eq!(settings.preferred_currency_code, "AUTO");
     assert!(settings.enabled_providers.contains("claude"));
     assert!(settings.enabled_providers.contains("codex"));
     assert_eq!(settings.refresh_interval_secs, 300);
@@ -19,9 +20,12 @@ fn test_settings_default() {
     assert_eq!(settings.critical_usage_threshold, 90.0);
     assert!(!settings.show_reset_when_exhausted);
     assert!(!settings.predictive_pace_warning_enabled);
+    assert!(!settings.credential_expiry_notifications_enabled);
+    assert!(settings.session_quota_notifications_enabled);
+    assert!(settings.adaptive_refresh);
     assert!(!settings.float_bar_show_cost);
     assert!(!settings.tray_panel_always_on_top);
-    assert_eq!(settings.overview_layout, "compact");
+    assert_eq!(settings.overview_layout, "detailed");
     assert!(settings.promote_tray_icon);
     assert!(settings.claude_daily_routines_usage_visible);
     assert!(!settings.claude_allow_reading_claude_code_credentials);
@@ -32,10 +36,91 @@ fn test_settings_default() {
 }
 
 #[test]
-fn overview_layout_defaults_to_compact_and_round_trips() {
+fn kimi_cookie_source_defaults_to_automatic_discovery() {
+    let settings = Settings::default();
+    assert_eq!(settings.cookie_source(ProviderId::Kimi), "auto");
+    assert_eq!(settings.cookie_source(ProviderId::Claude), "manual");
+}
+
+#[test]
+fn hyper_cookie_source_defaults_to_automatic_session_import() {
+    // Upstream resolves `hyperCookieSource` with an `.auto` fallback.
+    let mut settings = Settings::default();
+    assert_eq!(settings.cookie_source(ProviderId::Hyper), "auto");
+    settings.set_cookie_source(ProviderId::Hyper, "off");
+    assert_eq!(settings.cookie_source(ProviderId::Hyper), "off");
+}
+
+#[test]
+fn groq_cookie_source_defaults_to_automatic_session_import() {
+    // Upstream resolves `groqCookieSource` with an `.auto` fallback.
+    let mut settings = Settings::default();
+    assert_eq!(settings.cookie_source(ProviderId::Groq), "auto");
+    settings.set_cookie_source(ProviderId::Groq, "manual");
+    assert_eq!(settings.cookie_source(ProviderId::Groq), "manual");
+}
+
+#[test]
+fn langdock_cookie_source_defaults_to_automatic_session_import() {
+    // Upstream has no Langdock source picker (it reads one Edge profile), so
+    // Windows defaults to automatic browser import.
+    let mut settings = Settings::default();
+    assert_eq!(settings.cookie_source(ProviderId::Langdock), "auto");
+    settings.set_cookie_source(ProviderId::Langdock, "off");
+    assert_eq!(settings.cookie_source(ProviderId::Langdock), "off");
+}
+
+#[test]
+fn lithosai_cookie_source_defaults_to_automatic_session_import() {
+    // Upstream's LithosAI cookie source falls back to `.auto`.
+    let mut settings = Settings::default();
+    assert_eq!(settings.cookie_source(ProviderId::LithosAI), "auto");
+    settings.set_cookie_source(ProviderId::LithosAI, "off");
+    assert_eq!(settings.cookie_source(ProviderId::LithosAI), "off");
+}
+
+#[test]
+fn museai_cookie_source_defaults_to_automatic_session_import() {
+    // Upstream's Muse (muse.ai) cookie source falls back to `.auto`.
+    let mut settings = Settings::default();
+    assert_eq!(settings.cookie_source(ProviderId::MuseAI), "auto");
+    settings.set_cookie_source(ProviderId::MuseAI, "off");
+    assert_eq!(settings.cookie_source(ProviderId::MuseAI), "off");
+}
+
+#[test]
+fn workbuddy_cookie_source_defaults_to_automatic_session_import() {
+    // Upstream's WorkBuddy cookie source falls back to `.auto`.
+    let mut settings = Settings::default();
+    assert_eq!(settings.cookie_source(ProviderId::WorkBuddy), "auto");
+    settings.set_cookie_source(ProviderId::WorkBuddy, "off");
+    assert_eq!(settings.cookie_source(ProviderId::WorkBuddy), "off");
+}
+
+#[test]
+fn preferred_currency_defaults_validates_and_round_trips() {
+    let legacy: Settings = serde_json::from_str(r#"{"enabled_providers": []}"#)
+        .expect("legacy settings without a preferred currency remain valid");
+    assert_eq!(legacy.preferred_currency_code, "AUTO");
+
+    let selected: Settings =
+        serde_json::from_str(r#"{"enabled_providers": [], "preferred_currency_code": "try"}"#)
+            .expect("supported currency loads");
+    assert_eq!(selected.preferred_currency_code, "TRY");
+    let encoded = serde_json::to_string(&selected).expect("serialize selected currency");
+    assert!(encoded.contains(r#""preferred_currency_code":"TRY""#));
+
+    let invalid: Settings =
+        serde_json::from_str(r#"{"enabled_providers": [], "preferred_currency_code": "BTC"}"#)
+            .expect("unknown currency is normalized safely");
+    assert_eq!(invalid.preferred_currency_code, "AUTO");
+}
+
+#[test]
+fn overview_layout_defaults_to_detailed_and_round_trips() {
     let defaulted: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
-        .expect("missing overview layout defaults to compact");
-    assert_eq!(defaulted.overview_layout, "compact");
+        .expect("missing overview layout defaults to detailed");
+    assert_eq!(defaulted.overview_layout, "detailed");
 
     let compact = Settings {
         overview_layout: "compact".to_string(),
@@ -48,7 +133,7 @@ fn overview_layout_defaults_to_compact_and_round_trips() {
     let unknown: Settings =
         serde_json::from_str(r#"{ "enabled_providers": [], "overview_layout": "unsupported" }"#)
             .expect("unknown overview layout is accepted and normalized");
-    assert_eq!(unknown.overview_layout, "compact");
+    assert_eq!(unknown.overview_layout, "detailed");
 }
 
 #[test]
@@ -113,6 +198,78 @@ fn open_codex_usage_logs_default_off_and_round_trip() {
     let loaded: Settings = serde_json::from_str(&json).expect("deserialize OpenCodex usage opt-in");
     assert!(loaded.open_codex_usage_logs_enabled);
     assert!(loaded.hide_native_codex_cost_when_open_codex_present);
+}
+
+#[test]
+fn tray_pace_color_defaults_off_and_round_trips() {
+    let defaulted: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
+        .expect("missing tray pace color defaults false");
+    assert!(!defaulted.menu_bar_color_pace);
+
+    let enabled = Settings {
+        menu_bar_color_pace: true,
+        ..Settings::default()
+    };
+    let json = serde_json::to_string(&enabled).expect("serialize tray pace color");
+    assert!(json.contains(r#""menu_bar_color_pace":true"#));
+
+    let loaded: Settings = serde_json::from_str(&json).expect("deserialize tray pace color");
+    assert!(loaded.menu_bar_color_pace);
+}
+
+#[test]
+fn providers_sorted_alphabetically_defaults_off_and_round_trips() {
+    assert!(!Settings::default().providers_sorted_alphabetically);
+
+    let legacy: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
+        .expect("legacy file without the sidebar sort key");
+    assert!(!legacy.providers_sorted_alphabetically);
+
+    let sorted = Settings {
+        providers_sorted_alphabetically: true,
+        ..Settings::default()
+    };
+    let json = serde_json::to_string(&sorted).expect("serialize sidebar sort");
+    assert!(json.contains(r#""providers_sorted_alphabetically":true"#));
+
+    let loaded: Settings = serde_json::from_str(&json).expect("deserialize sidebar sort");
+    assert!(loaded.providers_sorted_alphabetically);
+}
+
+#[test]
+fn cost_reporting_period_defaults_to_thirty_days_and_round_trips() {
+    let defaulted: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
+        .expect("missing cost_reporting_period defaults");
+    assert_eq!(
+        defaulted.cost_reporting_period,
+        CostReportingPeriod::Rolling(30)
+    );
+
+    for period in [
+        CostReportingPeriod::Rolling(90),
+        CostReportingPeriod::MonthToDate,
+        CostReportingPeriod::AllAvailable,
+    ] {
+        let settings = Settings {
+            cost_reporting_period: period,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).expect("serialize cost period");
+        assert!(json.contains(&format!(r#""cost_reporting_period":"{}""#, period.raw())));
+        let loaded: Settings = serde_json::from_str(&json).expect("deserialize cost period");
+        assert_eq!(loaded.cost_reporting_period, period);
+    }
+}
+
+#[test]
+fn unreadable_cost_reporting_period_loads_as_the_default() {
+    let loaded: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "cost_reporting_period": "weekly" }"#)
+            .expect("an unreadable period must not fail the whole settings file");
+    assert_eq!(
+        loaded.cost_reporting_period,
+        CostReportingPeriod::Rolling(30)
+    );
 }
 
 #[test]
@@ -183,23 +340,29 @@ fn new_warning_and_reset_settings_are_backward_compatible() {
 
     assert!(!loaded.show_reset_when_exhausted);
     assert!(!loaded.predictive_pace_warning_enabled);
+    assert!(!loaded.credential_expiry_notifications_enabled);
+}
+
+fn load_settings_json(json: &str) -> Settings {
+    serde_json::from_str(json).expect("parse settings")
+}
+
+fn custom(high: Option<f64>, critical: Option<f64>) -> QuotaWarningWindow {
+    QuotaWarningWindow {
+        enabled: None,
+        high,
+        critical,
+    }
 }
 
 #[test]
-fn usage_thresholds_inherit_from_window_provider_and_global_levels() {
+fn custom_quota_warnings_win_over_global_thresholds() {
     let mut settings = Settings::default();
-    settings.provider_usage_thresholds.insert(
-        "codex".into(),
-        UsageThresholdOverride {
-            high: Some(75.0),
-            critical: None,
-        },
-    );
-    settings.provider_usage_thresholds.insert(
-        "codex:weekly".into(),
-        UsageThresholdOverride {
-            high: None,
-            critical: Some(95.0),
+    settings.set_quota_warnings(
+        ProviderId::Codex,
+        ProviderQuotaWarnings {
+            session: QuotaWarningWindow::default(),
+            weekly: custom(Some(75.0), Some(95.0)),
         },
     );
 
@@ -210,6 +373,14 @@ fn usage_thresholds_inherit_from_window_provider_and_global_levels() {
             critical: 95.0,
         }
     );
+    // Global window and another provider keep the global values.
+    assert_eq!(
+        settings.usage_thresholds(ProviderId::Codex, "session"),
+        UsageThresholds {
+            high: 70.0,
+            critical: 90.0,
+        }
+    );
     assert_eq!(
         settings.usage_thresholds(ProviderId::Claude, "session"),
         UsageThresholds {
@@ -217,27 +388,181 @@ fn usage_thresholds_inherit_from_window_provider_and_global_levels() {
             critical: 90.0,
         }
     );
+    // A partial Custom value inherits the missing one from global.
+    settings.set_quota_warnings(
+        ProviderId::Claude,
+        ProviderQuotaWarnings {
+            session: custom(None, Some(98.0)),
+            weekly: QuotaWarningWindow::default(),
+        },
+    );
+    assert_eq!(
+        settings.usage_thresholds(ProviderId::Claude, "session"),
+        UsageThresholds {
+            high: 70.0,
+            critical: 98.0,
+        }
+    );
 }
 
 #[test]
-fn empty_and_out_of_range_threshold_overrides_are_normalized_on_load() {
-    let loaded: Settings = serde_json::from_str(
+fn quota_warning_off_is_per_window_and_keeps_saved_values() {
+    let mut settings = Settings::default();
+    assert!(settings.quota_warning_enabled(ProviderId::Codex, "session"));
+    settings.set_quota_warnings(
+        ProviderId::Codex,
+        ProviderQuotaWarnings {
+            session: QuotaWarningWindow {
+                enabled: Some(false),
+                high: Some(60.0),
+                critical: Some(80.0),
+            },
+            weekly: QuotaWarningWindow::default(),
+        },
+    );
+    assert!(!settings.quota_warning_enabled(ProviderId::Codex, "session"));
+    assert!(settings.quota_warning_enabled(ProviderId::Codex, "weekly"));
+    assert!(settings.quota_warning_enabled(ProviderId::Claude, "session"));
+
+    let reloaded = load_settings_json(&serde_json::to_string(&settings).expect("serialize"));
+    let session = reloaded.quota_warnings(ProviderId::Codex).session;
+    assert_eq!(session.enabled, Some(false));
+    assert_eq!(session.high, Some(60.0));
+    assert_eq!(session.critical, Some(80.0));
+}
+
+#[test]
+fn global_quota_warnings_are_not_serialized() {
+    let mut settings = Settings::default();
+    settings.set_quota_warnings(ProviderId::Codex, ProviderQuotaWarnings::default());
+    let value = serde_json::to_value(&settings).expect("serialize");
+    assert!(
+        value["provider_configs"]["codex"]
+            .get("quota_warnings")
+            .is_none()
+    );
+}
+
+#[test]
+fn migration_moves_a_window_key_into_quota_warnings() {
+    let loaded = load_settings_json(
+        r#"{ "provider_usage_thresholds": { "codex:session": { "high": 80.0 } } }"#,
+    );
+    let codex = loaded.quota_warnings(ProviderId::Codex);
+    assert_eq!(codex.session, custom(Some(80.0), None));
+    assert!(codex.weekly.is_global());
+    assert_eq!(
+        loaded.usage_thresholds(ProviderId::Codex, "session"),
+        UsageThresholds {
+            high: 80.0,
+            critical: 90.0,
+        }
+    );
+    // Only the new key is written back.
+    let saved = serde_json::to_value(&loaded).expect("serialize");
+    assert!(saved.get("provider_usage_thresholds").is_none());
+    assert_eq!(
+        saved["provider_configs"]["codex"]["quota_warnings"]["session"]["high"],
+        serde_json::json!(80.0)
+    );
+}
+
+#[test]
+fn migration_spreads_a_provider_key_over_both_windows() {
+    let loaded = load_settings_json(
+        r#"{ "provider_usage_thresholds": { "claude": { "high": 65.0, "critical": 85.0 } } }"#,
+    );
+    let claude = loaded.quota_warnings(ProviderId::Claude);
+    assert_eq!(claude.session, custom(Some(65.0), Some(85.0)));
+    assert_eq!(claude.weekly, custom(Some(65.0), Some(85.0)));
+}
+
+#[test]
+fn migration_merges_window_and_provider_keys_per_field() {
+    let loaded = load_settings_json(
         r#"{
             "provider_usage_thresholds": {
-                "codex": {"high": 120.0},
-                "claude": {},
-                "codex:weekly": {"critical": -10.0}
+                "codex": { "high": 75.0 },
+                "codex:weekly": { "critical": 95.0 }
             }
         }"#,
-    )
-    .expect("parse settings");
-
-    assert_eq!(loaded.provider_usage_thresholds.len(), 2);
-    assert_eq!(loaded.provider_usage_thresholds["codex"].high, Some(100.0));
-    assert_eq!(
-        loaded.provider_usage_thresholds["codex:weekly"].critical,
-        Some(0.0)
     );
+    let codex = loaded.quota_warnings(ProviderId::Codex);
+    assert_eq!(codex.weekly, custom(Some(75.0), Some(95.0)));
+    assert_eq!(codex.session, custom(Some(75.0), None));
+}
+
+#[test]
+fn migration_without_legacy_keys_leaves_every_window_global() {
+    let loaded = load_settings_json(r#"{ "provider_usage_thresholds": {} }"#);
+    assert!(
+        loaded
+            .provider_configs
+            .values()
+            .all(|config| config.quota_warnings.is_empty())
+    );
+    let loaded = load_settings_json(r#"{ "refresh_interval_secs": 300 }"#);
+    assert!(loaded.quota_warnings(ProviderId::Codex).is_empty());
+}
+
+#[test]
+fn migration_keeps_existing_quota_warnings() {
+    let loaded = load_settings_json(
+        r#"{
+            "provider_usage_thresholds": { "codex": { "high": 50.0 } },
+            "provider_configs": {
+                "codex": { "quota_warnings": { "session": { "enabled": false } } }
+            }
+        }"#,
+    );
+    let codex = loaded.quota_warnings(ProviderId::Codex);
+    assert_eq!(
+        codex.session,
+        QuotaWarningWindow {
+            enabled: Some(false),
+            high: None,
+            critical: None,
+        }
+    );
+    assert_eq!(codex.weekly, custom(Some(50.0), None));
+}
+
+#[test]
+fn migration_normalizes_out_of_range_and_unknown_entries() {
+    let loaded = load_settings_json(
+        r#"{
+            "provider_usage_thresholds": {
+                "codex": { "high": 120.0 },
+                "claude": {},
+                "codex:weekly": { "critical": -10.0 },
+                "codex:monthly": { "high": 10.0 },
+                "future-provider": { "high": 10.0 }
+            },
+            "provider_configs": {
+                "zai": { "quota_warnings": { "weekly": { "high": 140.0 } } }
+            }
+        }"#,
+    );
+    let codex = loaded.quota_warnings(ProviderId::Codex);
+    assert_eq!(codex.session, custom(Some(100.0), None));
+    assert_eq!(codex.weekly, custom(Some(100.0), Some(0.0)));
+    assert!(loaded.quota_warnings(ProviderId::Claude).is_empty());
+    assert_eq!(
+        loaded.quota_warnings(ProviderId::Zai).weekly,
+        custom(Some(100.0), None)
+    );
+}
+
+#[test]
+fn codex_option_toggles_round_trip_through_settings_json() {
+    let mut settings = Settings::default();
+    settings.set_local_session_cost_ledger_enabled(ProviderId::Codex, true);
+    settings.set_openai_web_battery_saver_enabled(ProviderId::Codex, true);
+    let reloaded = load_settings_json(&serde_json::to_string(&settings).expect("serialize"));
+    assert!(reloaded.local_session_cost_ledger_enabled(ProviderId::Codex));
+    assert!(reloaded.openai_web_battery_saver_enabled(ProviderId::Codex));
+    assert!(!Settings::default().local_session_cost_ledger_enabled(ProviderId::Codex));
+    assert!(!Settings::default().openai_web_battery_saver_enabled(ProviderId::Codex));
 }
 
 #[test]
@@ -418,6 +743,16 @@ fn float_bar_raw_clamps_out_of_range_opacity_on_load() {
 }
 
 #[test]
+fn provider_listing_hides_retired_providers_unless_enabled() {
+    let mut settings = Settings::default();
+    settings.enabled_providers.clear();
+    assert!(!settings.is_provider_listed(ProviderId::KimiK2));
+    settings.enable_provider(ProviderId::KimiK2);
+    assert!(settings.is_provider_listed(ProviderId::KimiK2));
+    assert!(settings.is_provider_listed(ProviderId::Codex));
+}
+
+#[test]
 fn test_settings_provider_enabled() {
     let settings = Settings::default();
     assert!(settings.is_provider_enabled(ProviderId::Claude));
@@ -546,6 +881,34 @@ fn test_api_key_provider_catalog_includes_token_providers() {
             "{id} should be configurable from the API Keys UI"
         );
     }
+}
+
+#[test]
+fn groq_api_key_help_matches_upstream_copy() {
+    let info = get_api_key_providers()
+        .into_iter()
+        .find(|info| info.id == ProviderId::Groq)
+        .expect("Groq api key metadata");
+    assert_eq!(
+        info.api_key_help,
+        Some(
+            "Usage & spend come from your console.groq.com browser session automatically. An API key is optional and only adds Enterprise Prometheus metrics."
+        )
+    );
+}
+
+#[test]
+fn openrouter_api_key_help_explains_management_keys() {
+    let info = get_api_key_providers()
+        .into_iter()
+        .find(|info| info.id == ProviderId::OpenRouter)
+        .expect("OpenRouter api key metadata");
+    assert_eq!(
+        info.api_key_help,
+        Some(
+            "Required. Enter a regular API key or a Management API key here. Management keys also enable account Activity on the official OpenRouter API."
+        )
+    );
 }
 
 #[test]
@@ -684,15 +1047,17 @@ fn test_language_defaults_to_english() {
 #[test]
 fn test_language_all_variants_available() {
     let languages = Language::all();
-    assert_eq!(languages.len(), 8);
+    assert_eq!(languages.len(), 10);
     assert!(languages.contains(&Language::English));
     assert!(languages.contains(&Language::Chinese));
     assert!(languages.contains(&Language::ChineseTraditional));
     assert!(languages.contains(&Language::Japanese));
     assert!(languages.contains(&Language::Korean));
     assert!(languages.contains(&Language::Spanish));
+    assert!(languages.contains(&Language::PortugueseBrazil));
     assert!(languages.contains(&Language::Russian));
     assert!(languages.contains(&Language::Turkish));
+    assert!(languages.contains(&Language::Ukrainian));
 }
 
 #[test]
@@ -703,6 +1068,30 @@ fn test_language_display_names() {
     assert_eq!(Language::Japanese.display_name(), "日本語");
     assert_eq!(Language::Russian.display_name(), "Русский");
     assert_eq!(Language::Turkish.display_name(), "Türkçe");
+    assert_eq!(Language::Ukrainian.display_name(), "Українська");
+    assert_eq!(
+        Language::PortugueseBrazil.display_name(),
+        "Português (Brasil)"
+    );
+}
+
+#[test]
+fn test_language_resolves_brazilian_portuguese_aliases() {
+    for alias in [
+        "portuguesebrazil",
+        "pt",
+        "pt-BR",
+        "Portuguese",
+        "Português",
+        "portugues",
+        "Português (Brasil)",
+    ] {
+        assert_eq!(
+            Language::resolve(alias),
+            Some(Language::PortugueseBrazil),
+            "failed to resolve {alias}"
+        );
+    }
 }
 
 #[test]
@@ -718,6 +1107,14 @@ fn test_language_resolves_turkish_aliases() {
     assert_eq!(Language::resolve("tr-TR"), Some(Language::Turkish));
     assert_eq!(Language::resolve("Türkçe"), Some(Language::Turkish));
     assert_eq!(Language::resolve("turkce"), Some(Language::Turkish));
+}
+
+#[test]
+fn test_language_resolves_ukrainian_aliases() {
+    assert_eq!(Language::resolve("ukrainian"), Some(Language::Ukrainian));
+    assert_eq!(Language::resolve("uk"), Some(Language::Ukrainian));
+    assert_eq!(Language::resolve("uk-UA"), Some(Language::Ukrainian));
+    assert_eq!(Language::resolve("Українська"), Some(Language::Ukrainian));
 }
 
 #[test]
@@ -769,6 +1166,38 @@ fn test_settings_with_utf8_bom_parses_perprovider_tray_mode() {
     let settings: Settings = serde_json::from_str(json.trim_start_matches('\u{feff}')).unwrap();
 
     assert_eq!(settings.tray_icon_mode, TrayIconMode::PerProvider);
+}
+
+#[test]
+fn stacked_tray_mode_preserves_provider_preferences() {
+    let json = r#"{
+        "tray_icon_mode": "stacked",
+        "stacked_tray_top_provider": "claude",
+        "stacked_tray_bottom_provider": "codex"
+    }"#;
+
+    let settings: Settings = serde_json::from_str(json).unwrap();
+
+    assert_eq!(settings.tray_icon_mode, TrayIconMode::Stacked);
+    assert_eq!(
+        settings.stacked_tray_top_provider.as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        settings.stacked_tray_bottom_provider.as_deref(),
+        Some("codex")
+    );
+
+    let saved = serde_json::to_string(&settings).unwrap();
+    let reloaded: Settings = serde_json::from_str(&saved).unwrap();
+    assert_eq!(
+        reloaded.stacked_tray_top_provider.as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        reloaded.stacked_tray_bottom_provider.as_deref(),
+        Some("codex")
+    );
 }
 
 #[test]
@@ -1045,6 +1474,108 @@ fn test_new_format_provider_configs_only() {
     assert_eq!(settings.api_region(ProviderId::Zai), "global");
 }
 
+#[test]
+fn retired_provider_config_is_ignored_until_explicit_save() {
+    let original = r#"{
+            "enabled_providers": ["codex", "crof"],
+            "refresh_interval_secs": 300,
+            "provider_metrics": { "codex": "weekly", "crof": "session" },
+            "float_bar_provider_ids": ["codex", "crof"],
+            "stacked_tray_top_provider": "crof",
+            "stacked_tray_bottom_provider": "crof",
+            "provider_configs": {
+                "crof": { "api_token": "retired-fixture-key" },
+                "codex": { "cookie_source": "manual", "openai_web_extras": false },
+                "alibaba": { "api_region": "cn", "manual_cookie_header": "ali=PLACEHOLDER" }
+            }
+        }"#;
+    let original_bytes = original.as_bytes().to_vec();
+
+    let settings: Settings =
+        serde_json::from_str(original).expect("load settings with retired key");
+
+    assert_eq!(original.as_bytes(), original_bytes);
+    assert_eq!(settings.cookie_source(ProviderId::Codex), "manual");
+    assert!(!settings.openai_web_extras(ProviderId::Codex));
+    assert_eq!(
+        settings.enabled_providers,
+        HashSet::from(["codex".to_string()])
+    );
+    assert_eq!(settings.provider_metrics.len(), 1);
+    assert_eq!(settings.float_bar_provider_ids, ["codex"]);
+    assert_eq!(settings.stacked_tray_top_provider, None);
+    assert_eq!(settings.stacked_tray_bottom_provider, None);
+    assert_eq!(settings.api_region(ProviderId::Alibaba), "cn");
+    assert_eq!(
+        settings.manual_cookie_header(ProviderId::Alibaba),
+        "ali=PLACEHOLDER"
+    );
+
+    let saved = serde_json::to_string(&settings).expect("serialize sanitized settings");
+    let saved_value: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    let saved_configs = saved_value["provider_configs"].as_object().unwrap();
+    assert!(!saved_configs.contains_key("crof"));
+    assert!(saved_configs.contains_key("codex"));
+    assert!(saved_configs.contains_key("alibaba"));
+    assert!(
+        !saved.contains("\"crof\""),
+        "saved settings retained Crof: {saved}"
+    );
+}
+
+#[test]
+fn provider_aliases_are_canonicalized_at_the_load_boundary() {
+    let settings: Settings = serde_json::from_str(
+        r#"{
+            "enabled_providers": ["openai", "ClAuDe", "not-a-provider"],
+            "provider_metrics": {
+                "openai": "weekly",
+                "CoDeX": "session",
+                "not-a-provider": "weekly"
+            },
+            "float_bar_provider_ids": ["OPENAI", "codex", "ClAuDe", "unknown"],
+            "stacked_tray_top_provider": "OPENAI",
+            "stacked_tray_bottom_provider": "ClAuDe"
+        }"#,
+    )
+    .expect("load settings containing provider aliases");
+
+    assert_eq!(
+        settings.enabled_providers,
+        HashSet::from(["claude".to_string(), "codex".to_string()])
+    );
+    assert_eq!(
+        settings.provider_metrics.get("codex"),
+        Some(&MetricPreference::Session)
+    );
+    assert_eq!(settings.provider_metrics.len(), 1);
+    assert_eq!(settings.float_bar_provider_ids, ["codex", "claude"]);
+    assert_eq!(settings.stacked_tray_top_provider.as_deref(), Some("codex"));
+    assert_eq!(
+        settings.stacked_tray_bottom_provider.as_deref(),
+        Some("claude")
+    );
+}
+
+#[test]
+fn stacked_preferences_preserve_known_disabled_providers() {
+    let settings: Settings = serde_json::from_str(
+        r#"{
+            "enabled_providers": ["claude"],
+            "stacked_tray_top_provider": "OPENAI",
+            "stacked_tray_bottom_provider": "not-a-provider"
+        }"#,
+    )
+    .expect("load stacked preferences independently of enablement");
+
+    assert_eq!(settings.stacked_tray_top_provider.as_deref(), Some("codex"));
+    assert_eq!(settings.stacked_tray_bottom_provider, None);
+    assert_eq!(
+        settings.enabled_providers,
+        HashSet::from(["claude".to_string()])
+    );
+}
+
 /// Default `Settings` should serialize WITHOUT a `provider_configs`
 /// field (empty map skipped).
 #[test]
@@ -1188,5 +1719,596 @@ fn legacy_visibility_setters_preserve_other_explicit_hidden_items() {
     assert_eq!(
         settings.hidden_usage_item_ids(ProviderId::Claude),
         vec!["metric:secondary".to_string()]
+    );
+}
+
+/// Cookie-denial settings must survive the same path-based persistence used by
+/// `Settings::save` and `Settings::load`, including the secure-file wrapper
+/// shared by desktop and CLI settings.
+#[test]
+fn cookie_denial_round_trips_through_settings_persistence() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Codex, "off");
+    settings.set_openai_web_extras(ProviderId::Codex, false);
+
+    settings.save_to_path(&path).unwrap();
+    let loaded = Settings::load_from_path(Some(&path));
+
+    assert_eq!(loaded.cookie_source(ProviderId::Codex), "off");
+    assert!(!loaded.openai_web_extras(ProviderId::Codex));
+}
+
+#[test]
+fn show_as_used_defaults_to_left_without_a_saved_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let new_install = dir.path().join("missing.json");
+    let without_key = dir.path().join("settings.json");
+    std::fs::write(&without_key, r#"{ "enabled_providers": ["claude"] }"#).unwrap();
+
+    assert!(!Settings::load_from_path(Some(&new_install)).show_as_used);
+    assert!(!Settings::load_from_path(Some(&without_key)).show_as_used);
+}
+
+#[test]
+fn show_as_used_keeps_a_saved_used_preference() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(
+        &path,
+        r#"{ "enabled_providers": ["claude"], "show_as_used": true }"#,
+    )
+    .unwrap();
+
+    assert!(Settings::load_from_path(Some(&path)).show_as_used);
+}
+
+/// Migration #1: a file written before the session-quota key existed keeps the
+/// behaviour it had, when depleted/restored alerts followed `show_notifications`.
+#[test]
+fn session_quota_notifications_inherit_show_notifications_from_legacy_files() {
+    let off: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "show_notifications": false }"#)
+            .expect("deserialize legacy settings with notifications off");
+    assert!(!off.session_quota_notifications_enabled);
+
+    let on: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "show_notifications": true }"#)
+            .expect("deserialize legacy settings with notifications on");
+    assert!(on.session_quota_notifications_enabled);
+
+    // Once the key is stored it wins over `show_notifications` in both directions.
+    let explicit_on: Settings = serde_json::from_str(
+        r#"{ "enabled_providers": [], "show_notifications": false,
+             "session_quota_notifications_enabled": true }"#,
+    )
+    .expect("deserialize explicit session quota opt-in");
+    assert!(explicit_on.session_quota_notifications_enabled);
+    assert!(!explicit_on.show_notifications);
+
+    let explicit_off: Settings = serde_json::from_str(
+        r#"{ "enabled_providers": [], "show_notifications": true,
+             "session_quota_notifications_enabled": false }"#,
+    )
+    .expect("deserialize explicit session quota opt-out");
+    assert!(!explicit_off.session_quota_notifications_enabled);
+
+    let round_trip: Settings =
+        serde_json::from_str(&serde_json::to_string(&explicit_on).expect("serialize"))
+            .expect("deserialize round trip");
+    assert!(round_trip.session_quota_notifications_enabled);
+    assert!(!round_trip.show_notifications);
+}
+
+/// Migration #6: adaptive refresh is the default for new installs only.
+#[test]
+fn adaptive_refresh_defaults_on_for_new_installs_only() {
+    // No settings file: a new install.
+    assert!(Settings::load_from_path(None).adaptive_refresh);
+    let dir = tempfile::tempdir().expect("temp dir");
+    let missing = dir.path().join("settings.json");
+    assert!(Settings::load_from_path(Some(&missing)).adaptive_refresh);
+
+    // An existing file without the key keeps the fixed interval it ran with.
+    std::fs::write(&missing, "{}").expect("write legacy settings");
+    let legacy = Settings::load_from_path(Some(&missing));
+    assert!(!legacy.adaptive_refresh);
+    assert_eq!(legacy.refresh_interval_secs, 300);
+
+    let explicit: Settings = serde_json::from_str(r#"{ "adaptive_refresh": true }"#)
+        .expect("deserialize explicit adaptive refresh");
+    assert!(explicit.adaptive_refresh);
+    let explicit_off: Settings = serde_json::from_str(r#"{ "adaptive_refresh": false }"#)
+        .expect("deserialize explicit fixed refresh");
+    assert!(!explicit_off.adaptive_refresh);
+}
+
+// ── Mac parity PR 3: Menu Bar / Menu pane keys ──────────────────────────
+
+#[test]
+fn menu_bar_icon_style_defaults_to_bars_for_new_installs() {
+    assert_eq!(
+        Settings::default().menu_bar_icon_style,
+        MenuBarIconStyle::Bars
+    );
+}
+
+#[test]
+fn menu_bar_icon_style_migrates_from_legacy_percent_flag() {
+    let legacy_percent: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "menu_bar_shows_percent": true }"#)
+            .expect("legacy percent file");
+    assert_eq!(
+        legacy_percent.menu_bar_icon_style,
+        MenuBarIconStyle::Percent
+    );
+
+    let legacy_bars: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "menu_bar_shows_percent": false }"#)
+            .expect("legacy bars file");
+    assert_eq!(legacy_bars.menu_bar_icon_style, MenuBarIconStyle::Bars);
+
+    let legacy_missing: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
+        .expect("legacy file without either key");
+    assert_eq!(legacy_missing.menu_bar_icon_style, MenuBarIconStyle::Bars);
+}
+
+#[test]
+fn stored_menu_bar_icon_style_wins_over_the_legacy_flag() {
+    let bars: Settings = serde_json::from_str(
+        r#"{ "enabled_providers": [], "menu_bar_shows_percent": true, "menu_bar_icon_style": "bars" }"#,
+    )
+    .expect("stored bars");
+    assert_eq!(bars.menu_bar_icon_style, MenuBarIconStyle::Bars);
+
+    let percent: Settings = serde_json::from_str(
+        r#"{ "enabled_providers": [], "menu_bar_shows_percent": false, "menu_bar_icon_style": "percent" }"#,
+    )
+    .expect("stored percent");
+    assert_eq!(percent.menu_bar_icon_style, MenuBarIconStyle::Percent);
+
+    let unknown: Settings = serde_json::from_str(
+        r#"{ "enabled_providers": [], "menu_bar_shows_percent": true, "menu_bar_icon_style": "sparkles" }"#,
+    )
+    .expect("an unknown style must not fail the whole file");
+    assert_eq!(unknown.menu_bar_icon_style, MenuBarIconStyle::Percent);
+}
+
+#[test]
+fn menu_bar_icon_style_round_trips() {
+    for style in [MenuBarIconStyle::Bars, MenuBarIconStyle::Percent] {
+        let settings = Settings {
+            menu_bar_icon_style: style,
+            // The legacy flag disagrees on purpose: the stored key must win.
+            menu_bar_shows_percent: style == MenuBarIconStyle::Bars,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).expect("serialize icon style");
+        assert!(json.contains(&format!(r#""menu_bar_icon_style":"{}""#, style.as_str())));
+        let loaded: Settings = serde_json::from_str(&json).expect("deserialize icon style");
+        assert_eq!(loaded.menu_bar_icon_style, style);
+    }
+}
+
+#[test]
+fn merged_overview_selection_defaults_empty_and_round_trips() {
+    assert!(
+        Settings::default()
+            .merged_overview_selected_providers
+            .is_empty()
+    );
+    let legacy: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [] }"#).expect("legacy file");
+    assert!(legacy.merged_overview_selected_providers.is_empty());
+
+    let settings = Settings {
+        merged_overview_selected_providers: vec!["claude".into(), "codex".into()],
+        ..Settings::default()
+    };
+    let json = serde_json::to_string(&settings).expect("serialize overview selection");
+    assert!(json.contains(r#""merged_overview_selected_providers":["claude","codex"]"#));
+    let loaded: Settings = serde_json::from_str(&json).expect("deserialize overview selection");
+    assert_eq!(
+        loaded.merged_overview_selected_providers,
+        vec!["claude".to_string(), "codex".to_string()]
+    );
+}
+
+#[test]
+fn merged_overview_selection_is_canonical_deduped_and_capped_at_six() {
+    let loaded: Settings = serde_json::from_str(
+        r#"{ "enabled_providers": [], "merged_overview_selected_providers":
+            ["Codex", "codex", "not-a-provider", "claude", "gemini", "cursor", "copilot", "zai", "kimi"] }"#,
+    )
+    .expect("parse overview selection");
+    assert_eq!(
+        loaded.merged_overview_selected_providers,
+        ["codex", "claude", "gemini", "cursor", "copilot", "zai"]
+            .map(String::from)
+            .to_vec()
+    );
+
+    let mut settings = Settings::default();
+    settings.set_merged_overview_selected_providers(
+        [
+            "codex", "claude", "gemini", "cursor", "copilot", "zai", "kimi",
+        ]
+        .map(String::from)
+        .to_vec(),
+    );
+    assert_eq!(
+        settings.merged_overview_selected_providers.len(),
+        MERGED_OVERVIEW_PROVIDER_LIMIT
+    );
+}
+
+#[test]
+fn quota_warning_markers_default_on_and_round_trip() {
+    assert!(Settings::default().quota_warning_markers_visible);
+    let legacy: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [] }"#).expect("legacy file");
+    assert!(legacy.quota_warning_markers_visible);
+
+    let hidden = Settings {
+        quota_warning_markers_visible: false,
+        ..Settings::default()
+    };
+    let json = serde_json::to_string(&hidden).expect("serialize markers");
+    assert!(json.contains(r#""quota_warning_markers_visible":false"#));
+    let loaded: Settings = serde_json::from_str(&json).expect("deserialize markers");
+    assert!(!loaded.quota_warning_markers_visible);
+}
+
+#[test]
+fn workday_tick_style_defaults_subtle_and_round_trips() {
+    assert_eq!(
+        Settings::default().workday_tick_style,
+        WorkdayTickStyle::Subtle
+    );
+    let legacy: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [] }"#).expect("legacy file");
+    assert_eq!(legacy.workday_tick_style, WorkdayTickStyle::Subtle);
+
+    for style in [
+        WorkdayTickStyle::Hidden,
+        WorkdayTickStyle::Subtle,
+        WorkdayTickStyle::HighContrast,
+    ] {
+        let settings = Settings {
+            workday_tick_style: style,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).expect("serialize tick style");
+        assert!(json.contains(&format!(r#""workday_tick_style":"{}""#, style.as_str())));
+        let loaded: Settings = serde_json::from_str(&json).expect("deserialize tick style");
+        assert_eq!(loaded.workday_tick_style, style);
+    }
+
+    let unknown: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "workday_tick_style": "neon" }"#)
+            .expect("an unknown tick style must not fail the whole file");
+    assert_eq!(unknown.workday_tick_style, WorkdayTickStyle::Subtle);
+}
+
+#[test]
+fn weekly_progress_work_days_accepts_two_through_seven() {
+    for days in 2..=7u8 {
+        let loaded: Settings = serde_json::from_str(&format!(
+            r#"{{ "enabled_providers": [], "weekly_progress_work_days": {days} }}"#
+        ))
+        .expect("parse work days");
+        assert_eq!(loaded.weekly_progress_work_days, Some(days));
+    }
+    for days in [0u8, 1, 8, 200] {
+        let loaded: Settings = serde_json::from_str(&format!(
+            r#"{{ "enabled_providers": [], "weekly_progress_work_days": {days} }}"#
+        ))
+        .expect("parse out-of-range work days");
+        assert_eq!(
+            loaded.weekly_progress_work_days, None,
+            "{days} is out of range"
+        );
+    }
+}
+
+#[test]
+fn minimal_display_mode_folds_into_show_most_used_once() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker = dir.path().join(".display-mode-fold-v1");
+    let mut settings: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "menu_bar_display_mode": "minimal" }"#)
+            .expect("legacy minimal file");
+    assert!(!settings.menu_bar_shows_highest_usage);
+
+    let mut persisted = 0;
+    settings.apply_display_mode_fold_with_marker(&marker, |_| {
+        persisted += 1;
+        Ok(())
+    });
+    assert!(settings.menu_bar_shows_highest_usage);
+    assert_eq!(persisted, 1, "the fold is saved once");
+    assert!(marker.exists(), "the marker is written");
+    // The field stays readable for one release.
+    assert_eq!(settings.menu_bar_display_mode, "minimal");
+
+    // The user turns "Show most-used provider" off afterwards: it stays off.
+    settings.menu_bar_shows_highest_usage = false;
+    settings.apply_display_mode_fold_with_marker(&marker, |_| {
+        persisted += 1;
+        Ok(())
+    });
+    assert!(!settings.menu_bar_shows_highest_usage);
+    assert_eq!(persisted, 1, "no second save once the marker exists");
+}
+
+#[test]
+fn display_mode_fold_leaves_other_modes_alone_but_writes_the_marker() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker = dir.path().join(".display-mode-fold-v1");
+    let mut settings: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "menu_bar_display_mode": "detailed" }"#)
+            .expect("detailed file");
+    let mut persisted = 0;
+    settings.apply_display_mode_fold_with_marker(&marker, |_| {
+        persisted += 1;
+        Ok(())
+    });
+    assert!(!settings.menu_bar_shows_highest_usage);
+    assert_eq!(persisted, 0);
+    assert!(marker.exists());
+
+    // A file switched to minimal after the marker exists is not folded.
+    settings.menu_bar_display_mode = "minimal".into();
+    settings.apply_display_mode_fold_with_marker(&marker, |_| {
+        persisted += 1;
+        Ok(())
+    });
+    assert!(!settings.menu_bar_shows_highest_usage);
+    assert_eq!(persisted, 0);
+}
+
+#[test]
+fn display_mode_fold_retries_when_the_save_fails() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker = dir.path().join(".display-mode-fold-v1");
+    let mut settings: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "menu_bar_display_mode": "minimal" }"#)
+            .expect("legacy minimal file");
+
+    settings.apply_display_mode_fold_with_marker(&marker, |_| anyhow::bail!("disk full"));
+    assert!(!marker.exists(), "no marker after a failed save");
+
+    let mut reloaded: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "menu_bar_display_mode": "minimal" }"#)
+            .expect("legacy minimal file");
+    let mut persisted = 0;
+    reloaded.apply_display_mode_fold_with_marker(&marker, |_| {
+        persisted += 1;
+        Ok(())
+    });
+    assert!(reloaded.menu_bar_shows_highest_usage);
+    assert_eq!(persisted, 1, "the next launch saves the fold");
+    assert!(marker.exists());
+}
+
+#[test]
+fn stacked_tray_mode_survives_load_with_the_new_keys() {
+    let loaded: Settings = serde_json::from_str(
+        r#"{ "enabled_providers": ["codex", "claude"], "tray_icon_mode": "stacked",
+             "menu_bar_icon_style": "percent", "workday_tick_style": "high_contrast" }"#,
+    )
+    .expect("stacked file");
+    assert_eq!(loaded.tray_icon_mode, TrayIconMode::Stacked);
+    let json = serde_json::to_string(&loaded).expect("serialize");
+    let reloaded: Settings = serde_json::from_str(&json).expect("reload");
+    assert_eq!(reloaded.tray_icon_mode, TrayIconMode::Stacked);
+    assert_eq!(reloaded.menu_bar_icon_style, MenuBarIconStyle::Percent);
+    assert_eq!(reloaded.workday_tick_style, WorkdayTickStyle::HighContrast);
+}
+
+/// PR 4 / Q10: "Track costs" is on for new installs, and a file written before
+/// the key existed keeps scanning cost logs as it always did.
+#[test]
+fn cost_usage_enabled_defaults_on_for_new_installs_and_legacy_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let new_install = dir.path().join("missing.json");
+    let without_key = dir.path().join("settings.json");
+    std::fs::write(&without_key, r#"{ "enabled_providers": ["codex"] }"#).unwrap();
+
+    assert!(Settings::default().cost_usage_enabled);
+    assert!(Settings::load_from_path(Some(&new_install)).cost_usage_enabled);
+    assert!(Settings::load_from_path(Some(&without_key)).cost_usage_enabled);
+}
+
+#[test]
+fn cost_usage_enabled_off_round_trips_through_settings_persistence() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let settings = Settings {
+        cost_usage_enabled: false,
+        ..Settings::default()
+    };
+    settings.save_to_path(&path).unwrap();
+    assert!(!Settings::load_from_path(Some(&path)).cost_usage_enabled);
+}
+
+/// A file without `spend_dashboard_period` copies the menu period, so the
+/// dashboard keeps showing the range it showed before the split.
+#[test]
+fn spend_dashboard_period_copies_cost_reporting_period_when_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(
+        &path,
+        r#"{ "enabled_providers": [], "cost_reporting_period": "month-to-date" }"#,
+    )
+    .unwrap();
+    let loaded = Settings::load_from_path(Some(&path));
+    assert_eq!(
+        loaded.spend_dashboard_period,
+        CostReportingPeriod::MonthToDate
+    );
+    assert_eq!(
+        loaded.cost_reporting_period,
+        CostReportingPeriod::MonthToDate
+    );
+
+    let null_key: Settings = serde_json::from_str(
+        r#"{ "cost_reporting_period": "all", "spend_dashboard_period": null }"#,
+    )
+    .unwrap();
+    assert_eq!(
+        null_key.spend_dashboard_period,
+        CostReportingPeriod::AllAvailable
+    );
+
+    assert_eq!(
+        Settings::default().spend_dashboard_period,
+        CostReportingPeriod::Rolling(30)
+    );
+}
+
+#[test]
+fn spend_dashboard_period_round_trips_apart_from_cost_reporting_period() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    for period in [
+        CostReportingPeriod::Rolling(7),
+        CostReportingPeriod::Rolling(90),
+        CostReportingPeriod::MonthToDate,
+        CostReportingPeriod::AllAvailable,
+    ] {
+        let settings = Settings {
+            cost_reporting_period: CostReportingPeriod::Rolling(30),
+            spend_dashboard_period: period,
+            ..Settings::default()
+        };
+        settings.save_to_path(&path).unwrap();
+        let loaded = Settings::load_from_path(Some(&path));
+        assert_eq!(loaded.spend_dashboard_period, period);
+        assert_eq!(
+            loaded.cost_reporting_period,
+            CostReportingPeriod::Rolling(30)
+        );
+    }
+}
+
+/// An unreadable saved dashboard period reads as the default (`rolling:30`),
+/// like `cost_reporting_period`; it does not copy the menu period.
+#[test]
+fn unreadable_spend_dashboard_period_loads_as_the_default() {
+    let loaded: Settings = serde_json::from_str(
+        r#"{ "cost_reporting_period": "all", "spend_dashboard_period": "weekly" }"#,
+    )
+    .expect("an unreadable period must not fail the whole settings file");
+    assert_eq!(
+        loaded.spend_dashboard_period,
+        CostReportingPeriod::Rolling(30)
+    );
+}
+
+#[test]
+fn spend_dashboard_hidden_sources_default_empty_normalize_and_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(&path, r#"{ "enabled_providers": [] }"#).unwrap();
+    assert!(
+        Settings::load_from_path(Some(&path))
+            .spend_dashboard_hidden_source_ids
+            .is_empty()
+    );
+    assert!(
+        Settings::default()
+            .spend_dashboard_hidden_source_ids
+            .is_empty()
+    );
+
+    std::fs::write(
+        &path,
+        r#"{ "spend_dashboard_hidden_source_ids": ["pi", " Codex", "", "pi"] }"#,
+    )
+    .unwrap();
+    let loaded = Settings::load_from_path(Some(&path));
+    assert_eq!(loaded.spend_dashboard_hidden_source_ids, ["codex", "pi"]);
+
+    loaded.save_to_path(&path).unwrap();
+    assert_eq!(
+        Settings::load_from_path(Some(&path)).spend_dashboard_hidden_source_ids,
+        ["codex", "pi"]
+    );
+}
+
+#[test]
+fn quota_warning_migration_saves_a_legacy_file_once_without_the_old_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("settings.json");
+    std::fs::write(
+        &path,
+        r#"{ "provider_usage_thresholds": { "codex:session": { "high": 80.0 } } }"#,
+    )
+    .expect("seed legacy file");
+    let mut settings = Settings::load_from_path(Some(&path));
+    assert!(settings.legacy_usage_thresholds_pending);
+
+    let mut saves = 0;
+    settings.apply_quota_warning_migration_with(|s| {
+        saves += 1;
+        s.save_to_path(&path)
+    });
+    assert_eq!(saves, 1);
+    assert!(!settings.legacy_usage_thresholds_pending);
+    let saved: serde_json::Value =
+        serde_json::from_str(&crate::secure_file::read_string(&path).expect("read back"))
+            .expect("saved json");
+    assert!(saved.get("provider_usage_thresholds").is_none());
+    assert_eq!(
+        saved["provider_configs"]["codex"]["quota_warnings"]["session"]["high"],
+        serde_json::json!(80.0)
+    );
+
+    // The rewritten file no longer asks for a save.
+    let mut reloaded = Settings::load_from_path(Some(&path));
+    assert!(!reloaded.legacy_usage_thresholds_pending);
+    reloaded.apply_quota_warning_migration_with(|_| {
+        saves += 1;
+        Ok(())
+    });
+    assert_eq!(saves, 1);
+}
+
+#[test]
+fn quota_warning_migration_retries_after_a_failed_save() {
+    let mut settings = load_settings_json(r#"{ "provider_usage_thresholds": { "claude": {} } }"#);
+    assert!(settings.legacy_usage_thresholds_pending);
+    settings.apply_quota_warning_migration_with(|_| Err(anyhow::anyhow!("disk full")));
+    assert!(settings.legacy_usage_thresholds_pending);
+    assert!(!Settings::default().legacy_usage_thresholds_pending);
+}
+
+#[test]
+fn custom_quota_warnings_with_explicit_enabled_round_trip() {
+    let mut settings = Settings::default();
+    let window = QuotaWarningWindow {
+        enabled: Some(true),
+        high: Some(55.0),
+        critical: Some(85.0),
+    };
+    settings.set_quota_warnings(
+        ProviderId::Codex,
+        ProviderQuotaWarnings {
+            session: window,
+            weekly: QuotaWarningWindow::default(),
+        },
+    );
+    let reloaded = load_settings_json(&serde_json::to_string(&settings).expect("serialize"));
+    assert_eq!(reloaded.quota_warnings(ProviderId::Codex).session, window);
+    assert!(reloaded.quota_warning_enabled(ProviderId::Codex, "session"));
+    assert_eq!(
+        reloaded.usage_thresholds(ProviderId::Codex, "session"),
+        UsageThresholds {
+            high: 55.0,
+            critical: 85.0,
+        }
     );
 }

@@ -1,12 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use codexbar::core::ProviderId;
-
 use crate::surface::SurfaceMode;
 
 // Must mirror the frontend `SettingsTabId` union
 // (apps/desktop-tauri/src/types/bridge.ts) and `TAB_META` in
-// apps/desktop-tauri/src/surfaces/Settings.tsx.
+// apps/desktop-tauri/src/surfaces/settings/settingsTabs.ts.
 const SETTINGS_TAB_IDS: &[&str] = &[
     "general",
     "providers",
@@ -83,19 +81,20 @@ impl SurfaceTarget {
     }
 }
 
-pub fn is_supported_provider_id(provider_id: &str) -> bool {
-    ProviderId::all()
-        .iter()
-        .any(|provider| provider.cli_name() == provider_id)
-}
-
+/// A settings tab id, or `providers:<cli_name>` for one provider's pane in
+/// the Settings sidebar (frontend `parseSettingsTabRequest`). Only the exact
+/// canonical `cli_name` is accepted, not CLI aliases such as `openai`.
 pub fn is_supported_settings_tab(tab: &str) -> bool {
+    if let Some(provider) = tab.strip_prefix("providers:") {
+        return codexbar::core::ProviderId::from_cli_name(provider)
+            .is_some_and(|id| id.cli_name() == provider);
+    }
     SETTINGS_TAB_IDS.contains(&tab)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{SurfaceTarget, is_supported_provider_id, is_supported_settings_tab};
+    use super::{SurfaceTarget, is_supported_settings_tab};
     use serde_json::json;
 
     #[test]
@@ -170,17 +169,30 @@ mod tests {
     }
 
     #[test]
-    fn supported_provider_ids_match_catalog() {
-        assert!(is_supported_provider_id("codex"));
-        assert!(is_supported_provider_id("bedrock"));
-        assert!(!is_supported_provider_id("not-a-provider"));
-    }
-
-    #[test]
     fn supported_settings_tabs_match_shell_tabs() {
         assert!(is_supported_settings_tab("menuBar"));
         assert!(is_supported_settings_tab("about"));
         assert!(!is_supported_settings_tab("apiKeys"));
         assert!(!is_supported_settings_tab("security"));
+    }
+
+    #[test]
+    fn provider_pane_tabs_need_a_known_provider() {
+        assert!(is_supported_settings_tab("providers:codex"));
+        assert!(is_supported_settings_tab("providers:claude"));
+        assert!(!is_supported_settings_tab("providers:nope"));
+        assert!(!is_supported_settings_tab("providers:"));
+        assert!(!is_supported_settings_tab("providers:openai"));
+        assert!(!is_supported_settings_tab("apiKeys"));
+    }
+
+    #[test]
+    fn every_provider_catalog_id_is_a_valid_provider_pane_tab() {
+        // The Settings catalog sends `cli_name` as the provider id, and the
+        // sidebar builds `providers:<id>` from it.
+        for id in codexbar::core::ProviderId::all() {
+            let tab = format!("providers:{}", id.cli_name());
+            assert!(is_supported_settings_tab(&tab), "{tab} rejected");
+        }
     }
 }

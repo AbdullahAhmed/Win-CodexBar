@@ -1,11 +1,14 @@
 //! Grok provider implementation.
 //!
-//! Uses the grok.com billing gRPC-web endpoint via either browser cookies or
-//! `~/.grok/auth.json` produced by `grok login`.
+//! Bearer logins (`~/.grok/auth.json` from `grok login`) read credits from the
+//! Grok CLI credits proxy first, then fall back to the grok.com billing
+//! gRPC-web endpoint. Browser cookies use the gRPC-web endpoint only.
 
 pub mod accounts;
 mod billing;
+mod credits_proxy;
 pub mod local_sessions;
+mod product_usage;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -24,6 +27,7 @@ use crate::core::{
 
 use self::accounts::{GrokAuthKind, ParsedGrokAuthFile};
 use self::billing::GrokBillingSnapshot;
+use self::credits_proxy::{BearerBilling, CREDITS_PROXY_ENDPOINT};
 
 const BILLING_ENDPOINT: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
 const BILLING_REQUEST_BODY: [u8; 7] = [0, 0, 0, 0, 2, 0x08, 0];
@@ -33,10 +37,18 @@ const CLI_SETTINGS_ENDPOINT: &str = "https://cli-chat-proxy.grok.com/v1/settings
 const RESET_CREDITS_TIMEOUT: Duration = Duration::from_secs(2);
 const RESET_CREDITS_JOIN_GRACE: Duration = Duration::from_millis(250);
 
+/// Reset-window pace (upstream `GrokProviderDescriptor.pace`, v0.70.0): weekly
+/// windows inside their length, see [`reset_window_pace_matches`].
+pub(crate) const PACE_CAPABILITY: crate::core::ProviderPaceCapability =
+    crate::core::ProviderPaceCapability::reset_window(crate::core::PaceWindowRule::Custom(
+        reset_window_pace_matches,
+    ));
+
 pub struct GrokProvider {
     metadata: ProviderMetadata,
     client: Client,
     billing_endpoint: String,
+    credits_proxy_endpoint: String,
 }
 
 impl GrokProvider {
@@ -60,6 +72,7 @@ impl GrokProvider {
                 .build()
                 .unwrap_or_else(|_| Client::new()),
             billing_endpoint: BILLING_ENDPOINT.to_string(),
+            credits_proxy_endpoint: CREDITS_PROXY_ENDPOINT.to_string(),
         }
     }
 
@@ -83,7 +96,20 @@ impl GrokProvider {
         self
     }
 
-    fn load_credentials(kind: GrokAuthKind) -> Result<GrokCredentials, ProviderError> {
+    #[cfg(test)]
+    fn with_credits_proxy_endpoint_for_tests(mut self, endpoint: String) -> Self {
+        self.credits_proxy_endpoint = endpoint;
+        self
+    }
+
+    async fn load_credentials(kind: GrokAuthKind) -> Result<GrokCredentials, ProviderError> {
+        if kind == GrokAuthKind::OAuth {
+            let text = accounts::AccountManager::new()
+                .map_err(|_| ProviderError::AuthRequired)?
+                .ambient_auth_text_for_usage()
+                .await?;
+            return GrokCredentials::parse_for_kind(&text, kind);
+        }
         let path = Self::auth_file_path()
             .ok_or_else(|| ProviderError::NotInstalled("Grok auth path not found".to_string()))?;
         let text = std::fs::read_to_string(&path).map_err(|_| {
@@ -96,15 +122,21 @@ impl GrokProvider {
         &self,
         text: &str,
     ) -> Result<crate::providers::grok::accounts::GrokAccountUsage, ProviderError> {
-        let (credentials, kind) =
-            if let Ok(credentials) = GrokCredentials::parse_for_kind(text, GrokAuthKind::OAuth) {
-                (credentials, GrokAuthKind::OAuth)
-            } else {
-                (
-                    GrokCredentials::parse_for_kind(text, GrokAuthKind::Cli)?,
-                    GrokAuthKind::Cli,
-                )
-            };
+        // A saved row identifies its OAuth entry. An expired OAuth login must
+        // not fall back to a different CLI identity in the same auth file.
+        let parsed =
+            ParsedGrokAuthFile::parse(text).map_err(|e| ProviderError::Parse(e.to_string()))?;
+        let kind = if parsed
+            .view()
+            .map_err(|e| ProviderError::Parse(e.to_string()))?
+            .select(GrokAuthKind::OAuth)
+            .is_some()
+        {
+            GrokAuthKind::OAuth
+        } else {
+            GrokAuthKind::Cli
+        };
+        let credentials = GrokCredentials::parse_for_kind(text, kind)?;
         let result = self
             .fetch_with_auth(&credentials, kind, &FetchContext::default())
             .await?;
@@ -117,17 +149,21 @@ impl GrokProvider {
         kind: GrokAuthKind,
         ctx: &FetchContext,
     ) -> Result<ProviderFetchResult, ProviderError> {
+        // Validate before starting the optional reset-credit request.
+        if credentials.is_expired(Utc::now()) {
+            return Err(ProviderError::AuthRequired);
+        }
         let reset_lookup = GrokProvider::spawn_remaining_resets(
             ctx,
             Some(credentials.access_token.clone()),
             None,
             self.client.clone(),
         );
-        let billing = match self
-            .fetch_billing(Some(format!("Bearer {}", credentials.access_token)), None)
-            .await
-        {
-            Ok(billing) => billing,
+        let BearerBilling {
+            billing,
+            subscription_tier,
+        } = match self.fetch_bearer_billing(credentials).await {
+            Ok(bearer) => bearer,
             Err(error) => {
                 reset_lookup.abort();
                 return Err(error);
@@ -138,6 +174,7 @@ impl GrokProvider {
         } else {
             None
         }
+        .or(subscription_tier)
         .or_else(|| credentials.login_method());
         let reset_credits = reset_lookup
             .join(ctx.requires_optional_usage_completeness)
@@ -250,8 +287,7 @@ impl GrokProvider {
                 .is_some_and(|token| !token.trim().is_empty()),
             ctx.manual_cookie_header
                 .as_deref()
-                .is_some_and(|cookie| !cookie.trim().is_empty())
-                && allow_browser_cookie_fallback,
+                .is_some_and(|cookie| !cookie.trim().is_empty()),
             allow_browser_cookie_fallback,
         ) {
             match step {
@@ -291,7 +327,7 @@ impl GrokProvider {
         kind: GrokAuthKind,
         ctx: &FetchContext,
     ) -> Option<Result<ProviderFetchResult, ProviderError>> {
-        let credentials = Self::load_credentials(kind).ok()?;
+        let credentials = Self::load_credentials(kind).await.ok()?;
         match self.fetch_with_auth(&credentials, kind, ctx).await {
             Ok(result) => Some(Ok(result)),
             Err(ProviderError::AuthRequired) => None,
@@ -550,14 +586,14 @@ impl Provider for GrokProvider {
                 self.fetch_with_cookie_refresh(ctx).await
             }
             SourceMode::Cli => {
-                let credentials = Self::load_credentials(GrokAuthKind::Cli)?;
+                let credentials = Self::load_credentials(GrokAuthKind::Cli).await?;
                 self.fetch_with_auth(&credentials, GrokAuthKind::Cli, ctx)
                     .await
             }
             SourceMode::OAuth => {
                 // Prefer the switched ~/.grok/auth.json over a leftover token
                 // account so Weekly/notifications follow Grok account Switch.
-                let credentials = match Self::load_credentials(GrokAuthKind::OAuth) {
+                let credentials = match Self::load_credentials(GrokAuthKind::OAuth).await {
                     Ok(credentials) => credentials,
                     Err(error) => {
                         let Some(token) = ctx.api_key.as_deref() else {
@@ -614,7 +650,8 @@ fn grok_auto_steps(
     if has_api_key {
         steps.push(GrokAutoStep::ApiKey);
     }
-    if has_manual_cookie && allow_browser_cookie_fallback {
+    // Explicit cookies remain available even when automatic browser discovery is disabled.
+    if has_manual_cookie {
         steps.push(GrokAutoStep::ManualCookie);
     }
     if allow_browser_cookie_fallback {
@@ -668,6 +705,10 @@ impl GrokCredentials {
             team_id: text_field(entry.value(), "team_id"),
             expires_at,
         })
+    }
+
+    fn is_expired(&self, now: DateTime<Utc>) -> bool {
+        self.expires_at.is_some_and(|expires_at| expires_at <= now)
     }
 
     fn login_method(&self) -> Option<String> {
@@ -725,6 +766,44 @@ fn primary_label_for_cycle_minutes(minutes: u32) -> Option<&'static str> {
     }
 }
 
+/// Upstream `GrokProviderDescriptor.primaryLabel(window:now:)`: the label of
+/// the window's duration, or of the distance to its reset when the duration
+/// is unknown.
+fn primary_label_for_window(window: &RateWindow, now: DateTime<Utc>) -> Option<&'static str> {
+    if let Some(minutes) = window.window_minutes {
+        return primary_label_for_cycle_minutes(minutes);
+    }
+    let resets_at = window.resets_at?;
+    let seconds = (resets_at - now).num_milliseconds() as f64 / 1_000.0;
+    if seconds <= 3_600.0 {
+        return None;
+    }
+    let days = (seconds / 86_400.0).round();
+    if (4.0..=12.0).contains(&days) {
+        Some("Weekly")
+    } else if (20.0..=45.0).contains(&days) {
+        Some("Monthly")
+    } else {
+        None
+    }
+}
+
+/// Upstream Grok `ProviderPaceCapability.resetWindowPace`: a window labelled
+/// "Weekly" whose reset falls inside its length (7 days when unknown).
+pub(crate) fn reset_window_pace_matches(window: &RateWindow, now: DateTime<Utc>) -> bool {
+    if primary_label_for_window(window, now) != Some("Weekly") {
+        return false;
+    }
+    let Some(resets_at) = window.resets_at else {
+        return false;
+    };
+    let window_minutes = window.window_minutes.unwrap_or(7 * 24 * 60);
+    let until_reset = resets_at - now;
+    window_minutes > 0
+        && until_reset > chrono::Duration::zero()
+        && until_reset <= chrono::Duration::minutes(i64::from(window_minutes))
+}
+
 fn result_from_cookie_billing(billing: GrokBillingSnapshot) -> ProviderFetchResult {
     result_from_billing(billing, "grok-browser", None, None, None)
 }
@@ -733,8 +812,13 @@ fn account_usage_from_result(
     result: &ProviderFetchResult,
 ) -> crate::providers::grok::accounts::GrokAccountUsage {
     let primary = &result.usage.primary;
-    let usage_available = !primary.is_informational;
+    let usage_available = !primary.is_informational && primary.used_percent.is_finite();
     crate::providers::grok::accounts::GrokAccountUsage {
+        status: if usage_available {
+            accounts::GrokUsageStatus::Ready
+        } else {
+            accounts::GrokUsageStatus::Unavailable
+        },
         usage_available,
         used_percent: usage_available.then_some(primary.used_percent),
         plan: result
@@ -784,7 +868,13 @@ fn result_from_billing(
     usage.account_email = email;
     usage.account_organization = team_id;
     usage.login_method = login_method;
-    ProviderFetchResult::new(usage, source_label)
+    // Reset-credit enrichment adds inventory only, so the breakdown survives it.
+    product_usage::display_details(&billing.product_usage)
+        .into_iter()
+        .fold(
+            ProviderFetchResult::new(usage, source_label),
+            |result, detail| result.with_display_detail(Some(detail)),
+        )
 }
 
 /// Whether a cookie-path error should invalidate the cached browser session.
@@ -817,3 +907,11 @@ fn cookie_refresh_action(
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "credits_proxy_tests.rs"]
+mod credits_proxy_tests;
+
+#[cfg(test)]
+#[path = "product_usage_tests.rs"]
+mod product_usage_tests;

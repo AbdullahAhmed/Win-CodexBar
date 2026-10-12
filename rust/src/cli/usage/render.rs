@@ -10,6 +10,7 @@ use crate::core::{
     CostSnapshot, ProviderDisplayDetail, ProviderFetchResult, ProviderId, ProviderInventoryItem,
     RateWindow, UsagePace, UsageSnapshot, instantiate_provider,
 };
+use crate::spend_contract::CostProvenance;
 use crate::status::{ProviderStatus as StatusInfo, StatusLevel};
 
 pub fn render_text_error(provider_id: ProviderId, error_msg: &str, use_color: bool) -> String {
@@ -21,23 +22,39 @@ pub fn render_text_error(provider_id: ProviderId, error_msg: &str, use_color: bo
     format!("{}  Error: {}", header, error_msg)
 }
 
+/// `pace_work_days` is `Settings::weekly_progress_work_days`; it only changes
+/// pace on 10080-minute windows (upstream `CLIRenderer.computePace`).
 pub fn render_json_result(
     provider_id: ProviderId,
     result: ProviderFetchResult,
     status: Option<&StatusInfo>,
+    pace_work_days: Option<u8>,
 ) -> serde_json::Value {
     let usage = &result.usage;
-    let primary_pace = usage
-        .primary
-        .window_minutes
-        .is_some_and(|m| m == crate::core::SESSION_WINDOW_MINUTES)
-        .then(|| UsagePace::weekly(&usage.primary, None, crate::core::SESSION_WINDOW_MINUTES))
-        .flatten()
-        .map(pace_json);
+    let primary_pace = lane_pace(provider_id, &usage.primary, pace_work_days, || {
+        usage
+            .primary
+            .window_minutes
+            .is_some_and(|m| m == crate::core::SESSION_WINDOW_MINUTES)
+            .then(|| {
+                UsagePace::weekly(
+                    &usage.primary,
+                    None,
+                    crate::core::SESSION_WINDOW_MINUTES,
+                    pace_work_days,
+                )
+            })
+            .flatten()
+    })
+    .map(pace_json);
     let secondary_pace = usage
         .secondary
         .as_ref()
-        .and_then(|w| UsagePace::weekly(w, None, w.window_minutes.unwrap_or(10080)))
+        .and_then(|w| {
+            lane_pace(provider_id, w, pace_work_days, || {
+                UsagePace::weekly(w, None, w.window_minutes.unwrap_or(10080), pace_work_days)
+            })
+        })
         .map(pace_json);
 
     let mut json_result = serde_json::json!({
@@ -81,6 +98,7 @@ pub fn render_json_result(
                         "title": detail.title(),
                         "value": detail.value(),
                         "secondaryValue": detail.secondary_value(),
+                        "sectionTitle": detail.section_title(),
                         "progress": detail.progress().map(|progress| {
                             serde_json::json!({
                                 "used": progress.used(),
@@ -143,12 +161,48 @@ pub(super) fn is_terminal() -> bool {
     std::io::stdout().is_terminal()
 }
 
-/// Render usage as text with optional status
+/// Pace of one card lane. Providers that opt into reset-window pace score the
+/// lane against their resolved reset window (upstream `CLIRenderer.computePace`);
+/// every other window keeps the lane's own rule, `fallback`.
+fn lane_pace(
+    provider: ProviderId,
+    window: &RateWindow,
+    pace_work_days: Option<u8>,
+    fallback: impl FnOnce() -> Option<UsagePace>,
+) -> Option<UsagePace> {
+    lane_pace_at(provider, window, Utc::now(), pace_work_days, fallback)
+}
+
+/// Upstream `CLIRenderer.paceMinimumExpectedPercent`: reset-window pace is
+/// hidden until at least 3% of the window is expected to be used.
+const RESET_WINDOW_MINIMUM_EXPECTED_PERCENT: f64 = 3.0;
+
+/// `lane_pace` at a fixed clock.
+pub(super) fn lane_pace_at(
+    provider: ProviderId,
+    window: &RateWindow,
+    now: chrono::DateTime<Utc>,
+    pace_work_days: Option<u8>,
+    fallback: impl FnOnce() -> Option<UsagePace>,
+) -> Option<UsagePace> {
+    let capability = provider.pace_capability();
+    if capability.supports_reset_window_pace(window, now) {
+        capability
+            .reset_window_pace(window, now, pace_work_days)
+            .filter(|pace| pace.expected_used_percent >= RESET_WINDOW_MINIMUM_EXPECTED_PERCENT)
+    } else {
+        fallback()
+    }
+}
+
+/// Render usage as text with optional status. `pace_work_days` is
+/// `Settings::weekly_progress_work_days` (weekly pace only).
 pub fn render_text_with_status(
     provider: ProviderId,
     result: &ProviderFetchResult,
     status: Option<&StatusInfo>,
     use_color: bool,
+    pace_work_days: Option<u8>,
 ) -> String {
     let mut lines = Vec::new();
     let metadata = instantiate_provider(provider).metadata().clone();
@@ -156,7 +210,14 @@ pub fn render_text_with_status(
     lines.push(render_usage_header(provider, result, status, use_color));
     append_status_line(&mut lines, status);
     append_account_lines(&mut lines, &result.usage);
-    append_usage_window_lines(&mut lines, &result.usage, &metadata, use_color);
+    append_usage_window_lines(
+        &mut lines,
+        provider,
+        &result.usage,
+        &metadata,
+        use_color,
+        pace_work_days,
+    );
     append_inventory_lines(&mut lines, &result.inventory);
     append_display_detail_lines(&mut lines, result.display_details());
     append_cost_line(&mut lines, result.cost.as_ref());
@@ -228,9 +289,11 @@ fn append_account_lines(lines: &mut Vec<String>, usage: &UsageSnapshot) {
 
 fn append_usage_window_lines(
     lines: &mut Vec<String>,
+    provider: ProviderId,
     usage: &UsageSnapshot,
     metadata: &crate::core::ProviderMetadata,
     use_color: bool,
+    pace_work_days: Option<u8>,
 ) {
     let primary_label = usage
         .primary_label
@@ -242,9 +305,11 @@ fn append_usage_window_lines(
         *minutes == crate::core::SESSION_WINDOW_MINUTES
             || *minutes >= crate::core::WEEKLY_WINDOW_MINUTES
     });
-    if let Some(minutes) = pace_minutes
-        && let Some(pace) = UsagePace::weekly(&usage.primary, None, minutes)
-    {
+    let primary_pace = lane_pace(provider, &usage.primary, pace_work_days, || {
+        pace_minutes
+            .and_then(|minutes| UsagePace::weekly(&usage.primary, None, minutes, pace_work_days))
+    });
+    if let Some(pace) = primary_pace {
         lines.push(format!(
             "  Pace:    {} {}",
             pace.stage.emoji(),
@@ -253,12 +318,14 @@ fn append_usage_window_lines(
     }
     append_secondary_window_line(
         lines,
+        provider,
         usage.secondary.as_ref(),
         usage
             .secondary_label
             .as_deref()
             .unwrap_or(metadata.weekly_label),
         use_color,
+        pace_work_days,
     );
     append_model_specific_line(lines, usage.model_specific.as_ref(), use_color);
     // F5 (upstream 0.48.0): monthly (30-day) lane. Label by duration cadence.
@@ -298,7 +365,14 @@ fn append_inventory_lines(lines: &mut Vec<String>, inventory: &[ProviderInventor
 }
 
 fn append_display_detail_lines(lines: &mut Vec<String>, details: &[ProviderDisplayDetail]) {
+    let mut current_section: Option<&str> = None;
     for detail in details {
+        if detail.section_title() != current_section {
+            current_section = detail.section_title();
+            if let Some(section) = current_section {
+                lines.push(format!("  {section}:"));
+            }
+        }
         let secondary = detail
             .secondary_value()
             .map(|value| format!(" ({value})"))
@@ -325,29 +399,51 @@ fn append_window_line(lines: &mut Vec<String>, label: &str, window: &RateWindow,
     }
 
     let bar = render_progress_bar(window.used_percent, 20, use_color);
-    let reset = window
-        .format_countdown()
-        .map(|c| format!(" (resets in {})", c))
-        .unwrap_or_default();
+    let countdown = window.format_countdown();
+    let reset_suffix = match (window.description_is_detail, countdown.as_deref()) {
+        (false, Some(countdown)) => format!(" (resets in {countdown})"),
+        _ => String::new(),
+    };
     lines.push(format!(
         "  {:<8} {} {} used{}",
         format!("{}:", label),
         bar,
         format_percent(window.used_percent),
-        reset
+        reset_suffix,
     ));
+
+    if window.description_is_detail {
+        // The description is a detail line (for example spend amounts), so
+        // the reset stays on its own line and only exists with a real date.
+        if let Some(countdown) = countdown {
+            lines.push(format!("    resets in {countdown}"));
+        }
+        if let Some(detail) = window
+            .reset_description
+            .as_deref()
+            .map(str::trim)
+            .filter(|detail| !detail.is_empty())
+        {
+            lines.push(format!("    {detail}"));
+        }
+    }
 }
 
 fn append_secondary_window_line(
     lines: &mut Vec<String>,
+    provider: ProviderId,
     secondary: Option<&RateWindow>,
     label: &str,
     use_color: bool,
+    pace_work_days: Option<u8>,
 ) {
     if let Some(secondary) = secondary {
         append_window_line(lines, label, secondary, use_color);
         let window_minutes = secondary.window_minutes.unwrap_or(10080);
-        if let Some(pace) = UsagePace::weekly(secondary, None, window_minutes) {
+        let pace = lane_pace(provider, secondary, pace_work_days, || {
+            UsagePace::weekly(secondary, None, window_minutes, pace_work_days)
+        });
+        if let Some(pace) = pace {
             lines.push(format!(
                 "  Pace:    {} {}",
                 pace.stage.emoji(),
@@ -427,11 +523,12 @@ fn append_cost_line(lines: &mut Vec<String>, cost: Option<&CostSnapshot>) {
 
     // Provider-supplied Activity history is a completed reporting window,
     // rather than the ordinary current-cost meter. Providers mark such
-    // snapshots `always_visible`; keep their source period and known zero
-    // visible in text output without adding a second generic cost line. The
-    // daily points remain available in the JSON cost payload.
+    // snapshots `always_visible`; keep their source period, known zero, token
+    // total and cost provenance visible in text output without adding a second
+    // generic cost line or recomputing totals from the daily points. The daily
+    // points remain available in the JSON cost payload.
     if cost.limit.is_none() && cost.always_visible {
-        lines.push(format!("  {}: {}", cost.period, cost.format_used()));
+        lines.push(format_history_line(cost));
         return;
     }
 
@@ -451,9 +548,32 @@ fn append_cost_line(lines: &mut Vec<String>, cost: Option<&CostSnapshot>) {
     }
 }
 
+/// One provider-history line: `<period>: <spend> (<provenance>) · <tokens> tokens`.
+///
+/// Mirrors upstream `CLIRenderer.liveHistoryLine` (0.61.0). The spend and token
+/// totals are the provider's own; nothing is summed from daily points.
+fn format_history_line(cost: &CostSnapshot) -> String {
+    let spend = cost.format_used();
+    let spend = match cost.provenance {
+        Some(CostProvenance::VendorMetered) => format!("{spend} (reported)"),
+        Some(CostProvenance::ListPriceEstimate) => format!("{spend} (estimated)"),
+        Some(CostProvenance::Mixed) => format!("{spend} (includes estimates)"),
+        Some(CostProvenance::Unknown) | None => spend,
+    };
+    let mut values = vec![spend];
+    if let Some(tokens) = cost.history_tokens {
+        let unit = if tokens == 1 { "token" } else { "tokens" };
+        values.push(format!(
+            "{} {unit}",
+            crate::providers::format::token_count(tokens)
+        ));
+    }
+    format!("  {}: {}", cost.period, values.join(" · "))
+}
+
 /// Render usage as text (backwards compatible version)
 pub fn render_text(provider: ProviderId, result: &ProviderFetchResult, use_color: bool) -> String {
-    render_text_with_status(provider, result, None, use_color)
+    render_text_with_status(provider, result, None, use_color, None)
 }
 
 /// Render a text-based progress bar

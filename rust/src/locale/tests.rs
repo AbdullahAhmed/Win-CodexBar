@@ -9,11 +9,11 @@ fn test_locale_key_english() {
     );
     assert_eq!(
         get_text(Language::English, LocaleKey::InterfaceLanguage),
-        "Interface Language"
+        "Language"
     );
     assert_eq!(
         get_text(Language::English, LocaleKey::StartAtLogin),
-        "Start at Login"
+        "Start at login"
     );
 }
 
@@ -80,6 +80,8 @@ fn test_japanese_menu_card_locale_values_are_translated() {
         (LocaleKey::DetailCostLimit, "上限"),
         (LocaleKey::DetailCostRemaining, "残り"),
         (LocaleKey::DetailCostBalance, "残高"),
+        (LocaleKey::AtlasCloudAvailableBalance, "利用可能残高"),
+        (LocaleKey::AtlasCloudBalance, "Atlas Cloud の残高"),
         (LocaleKey::DetailCostResets, "リセット"),
         (LocaleKey::DetailChartCost, "コスト（30日間）"),
         (LocaleKey::DetailChartCredits, "使用クレジット（30日間）"),
@@ -143,11 +145,8 @@ fn test_japanese_tray_panel_locale_values_are_translated() {
         (LocaleKey::StateError, "エラー"),
         (LocaleKey::PanelAllProviders, "すべてのプロバイダー"),
         (LocaleKey::PanelAllProvidersShort, "すべて"),
-        (LocaleKey::PanelZoom, "ズーム"),
         (LocaleKey::PanelMenu, "メニュー"),
         (LocaleKey::PanelToday, "今日"),
-        (LocaleKey::PanelThirtyDayCost, "30日間のコスト"),
-        (LocaleKey::PanelThirtyDayTokens, "30日間のトークン"),
         (LocaleKey::PanelLatestTokens, "最新トークン"),
         (LocaleKey::PanelTopModelPrefix, "トップモデル"),
         (LocaleKey::PanelUsedSuffix, "使用済み"),
@@ -157,11 +156,8 @@ fn test_japanese_tray_panel_locale_values_are_translated() {
         (LocaleKey::PanelOneHour, "1時間"),
         (LocaleKey::PanelFiveHours, "5時間"),
         (LocaleKey::PanelTodayBudget, "今日"),
-        (LocaleKey::PanelReserveSuffix, "予備"),
-        (
-            LocaleKey::PanelReserveLastsUntilReset,
-            "リセットまで持ちます",
-        ),
+        (LocaleKey::PaceOnPace, "想定ペース"),
+        (LocaleKey::PaceLastsUntilReset, "リセットまで持ちます"),
         (
             LocaleKey::PanelShowAllProviders,
             "すべてのプロバイダーを表示",
@@ -181,11 +177,8 @@ fn test_chinese_tray_panel_locale_values_are_translated() {
     let cases = [
         (LocaleKey::PanelAllProviders, "所有提供者"),
         (LocaleKey::PanelAllProvidersShort, "全部"),
-        (LocaleKey::PanelZoom, "缩放"),
         (LocaleKey::PanelMenu, "菜单"),
         (LocaleKey::PanelToday, "今日"),
-        (LocaleKey::PanelThirtyDayCost, "30天成本"),
-        (LocaleKey::PanelThirtyDayTokens, "30天令牌"),
         (LocaleKey::PanelLatestTokens, "最新令牌"),
         (LocaleKey::PanelTopModelPrefix, "热门模型"),
         (LocaleKey::PanelUsedSuffix, "已使用"),
@@ -195,8 +188,8 @@ fn test_chinese_tray_panel_locale_values_are_translated() {
         (LocaleKey::PanelOneHour, "1小时"),
         (LocaleKey::PanelFiveHours, "5小时"),
         (LocaleKey::PanelTodayBudget, "今日"),
-        (LocaleKey::PanelReserveSuffix, "储备"),
-        (LocaleKey::PanelReserveLastsUntilReset, "持续到重置"),
+        (LocaleKey::PaceOnPace, "节奏正常"),
+        (LocaleKey::PaceLastsUntilReset, "持续到重置"),
         (
             LocaleKey::PanelEstimatedFromLocalLogs,
             "根据本地日志估算；可能与账单不同",
@@ -217,11 +210,8 @@ fn test_korean_tray_panel_locale_values_are_translated() {
     let cases = [
         (LocaleKey::PanelAllProviders, "모든 제공자"),
         (LocaleKey::PanelAllProvidersShort, "전체"),
-        (LocaleKey::PanelZoom, "확대/축소"),
         (LocaleKey::PanelMenu, "메뉴"),
         (LocaleKey::PanelToday, "오늘"),
-        (LocaleKey::PanelThirtyDayCost, "30일 비용"),
-        (LocaleKey::PanelThirtyDayTokens, "30일 토큰"),
         (LocaleKey::PanelLatestTokens, "최신 토큰"),
         (LocaleKey::PanelTopModelPrefix, "상위 모델"),
         (LocaleKey::PanelUsedSuffix, "사용됨"),
@@ -231,8 +221,8 @@ fn test_korean_tray_panel_locale_values_are_translated() {
         (LocaleKey::PanelOneHour, "1시간"),
         (LocaleKey::PanelFiveHours, "5시간"),
         (LocaleKey::PanelTodayBudget, "오늘"),
-        (LocaleKey::PanelReserveSuffix, "예비"),
-        (LocaleKey::PanelReserveLastsUntilReset, "리셋까지 지속"),
+        (LocaleKey::PaceOnPace, "정상 속도"),
+        (LocaleKey::PaceLastsUntilReset, "리셋까지 지속"),
         (
             LocaleKey::PanelEstimatedFromLocalLogs,
             "로컬 로그에서 추정; 청구서와 다를 수 있음",
@@ -253,11 +243,8 @@ fn test_spanish_tray_panel_locale_values_are_translated() {
     let cases = [
         (LocaleKey::PanelAllProviders, "Todos los proveedores"),
         (LocaleKey::PanelAllProvidersShort, "Todos"),
-        (LocaleKey::PanelZoom, "Zoom"),
         (LocaleKey::PanelMenu, "Menú"),
         (LocaleKey::PanelToday, "Hoy"),
-        (LocaleKey::PanelThirtyDayCost, "Costo 30d"),
-        (LocaleKey::PanelThirtyDayTokens, "Tokens 30d"),
         (LocaleKey::PanelLatestTokens, "Últimos tokens"),
         (LocaleKey::PanelTopModelPrefix, "Modelo principal"),
         (LocaleKey::PanelUsedSuffix, "usado"),
@@ -267,11 +254,8 @@ fn test_spanish_tray_panel_locale_values_are_translated() {
         (LocaleKey::PanelOneHour, "1h"),
         (LocaleKey::PanelFiveHours, "5h"),
         (LocaleKey::PanelTodayBudget, "hoy"),
-        (LocaleKey::PanelReserveSuffix, "en reserva"),
-        (
-            LocaleKey::PanelReserveLastsUntilReset,
-            "Dura hasta el reinicio",
-        ),
+        (LocaleKey::PaceOnPace, "Al ritmo previsto"),
+        (LocaleKey::PaceLastsUntilReset, "Dura hasta el reinicio"),
         (
             LocaleKey::PanelEstimatedFromLocalLogs,
             "Estimado desde logs locales; puede diferir de tu factura",
@@ -323,6 +307,40 @@ fn test_locale_key_russian() {
 }
 
 #[test]
+fn provider_switcher_shortcut_strings_are_translated_in_design_locales() {
+    let keys = [
+        LocaleKey::SwitcherShortcutsTitle,
+        LocaleKey::SwitcherShortcutsHelper,
+        LocaleKey::SwitcherShortcutPrevious,
+        LocaleKey::SwitcherShortcutNext,
+        LocaleKey::SwitcherShortcutSelect,
+        LocaleKey::SwitcherShortcutNone,
+        LocaleKey::SwitcherShortcutRecordingHint,
+        LocaleKey::SwitcherShortcutReset,
+        LocaleKey::SwitcherShortcutErrorUnknown,
+        LocaleKey::SwitcherShortcutErrorDuplicate,
+        LocaleKey::SwitcherShortcutErrorReserved,
+        LocaleKey::SwitcherShortcutErrorInvalid,
+    ];
+    let languages = [
+        (Language::Spanish, "es-MX"),
+        (Language::Japanese, "ja-JP"),
+        (Language::Korean, "ko-KR"),
+        (Language::Russian, "ru-RU"),
+    ];
+
+    for (language, locale) in languages {
+        for key in keys {
+            assert_ne!(
+                get_text(language, key),
+                get_text(Language::English, key),
+                "{key:?} is falling back to English in {locale}"
+            );
+        }
+    }
+}
+
+#[test]
 fn test_locale_key_turkish() {
     assert_eq!(get_text(Language::Turkish, LocaleKey::TabGeneral), "Genel");
     assert_eq!(
@@ -332,6 +350,22 @@ fn test_locale_key_turkish() {
     assert_eq!(
         get_text(Language::Turkish, LocaleKey::StartAtLogin),
         "Girişte başlat"
+    );
+}
+
+#[test]
+fn test_locale_key_ukrainian() {
+    assert_eq!(
+        get_text(Language::Ukrainian, LocaleKey::TabGeneral),
+        "Загальні"
+    );
+    assert_eq!(
+        get_text(Language::Ukrainian, LocaleKey::InterfaceLanguage),
+        "Мова інтерфейсу"
+    );
+    assert_eq!(
+        get_text(Language::Ukrainian, LocaleKey::StartAtLogin),
+        "Запускати під час входу в систему"
     );
 }
 
@@ -370,6 +404,10 @@ fn test_locale_respects_language_setting() {
     let lang = Language::Spanish;
     assert_eq!(get_text(lang, LocaleKey::TabAbout), "Acerca de");
 
+    // Test that Brazilian Portuguese returns Portuguese strings
+    let lang = Language::PortugueseBrazil;
+    assert_eq!(get_text(lang, LocaleKey::TabAbout), "Sobre");
+
     // Test that Russian language returns Russian strings
     let lang = Language::Russian;
     assert_eq!(get_text(lang, LocaleKey::TabAbout), "О программе");
@@ -377,6 +415,10 @@ fn test_locale_respects_language_setting() {
     // Test that Turkish language returns Turkish strings
     let lang = Language::Turkish;
     assert_eq!(get_text(lang, LocaleKey::TabAbout), "Hakkında");
+
+    // Test that Ukrainian language returns Ukrainian strings
+    let lang = Language::Ukrainian;
+    assert_eq!(get_text(lang, LocaleKey::TabAbout), "Про програму");
 }
 
 #[test]
@@ -388,8 +430,10 @@ fn test_english_is_complete_and_other_languages_can_fallback() {
         ("ja-JP", include_str!("ja-JP.ftl")),
         ("ko-KR", include_str!("ko-KR.ftl")),
         ("es-MX", include_str!("es-MX.ftl")),
+        ("pt-BR", include_str!("pt-BR.ftl")),
         ("ru-RU", include_str!("ru-RU.ftl")),
         ("tr-TR", include_str!("tr-TR.ftl")),
+        ("uk-UA", include_str!("uk-UA.ftl")),
     ];
 
     let resource_keys: Vec<(&str, HashSet<&str>)> = resources
@@ -397,12 +441,37 @@ fn test_english_is_complete_and_other_languages_can_fallback() {
         .map(|(locale, resource)| (locale, resource_key_names(resource)))
         .collect();
     let locale_key_names: HashSet<&str> = LocaleKey::ALL.iter().map(|(_, name)| *name).collect();
+    let aixy_gateway_keys = [
+        "AixyGatewayTitle",
+        "AixyGatewayLabel",
+        "AixyGatewayHelp",
+        "ClawRouterGatewayTitle",
+        "ClawRouterGatewayHelp",
+    ];
+    let credential_expiry_keys = [
+        "CredentialExpiryNotifications",
+        "CredentialExpiryNotificationsHelper",
+        "CredentialExpiryTitle",
+        "CredentialExpiryBody",
+    ];
 
     for (locale, keys) in &resource_keys {
+        for name in aixy_gateway_keys {
+            assert!(
+                keys.contains(name),
+                "missing gateway Fluent key {name} in {locale}"
+            );
+        }
         for name in keys {
             assert!(
                 locale_key_names.contains(name),
                 "unknown Fluent key {name} in {locale}"
+            );
+        }
+        for name in credential_expiry_keys {
+            assert!(
+                keys.contains(name),
+                "missing credential-expiry localization {name} in {locale}"
             );
         }
     }
@@ -445,6 +514,118 @@ fn test_fluent_preserves_literal_placeholders_and_status_spacing() {
         get_text(Language::English, LocaleKey::RemainingAmount),
         "{:.2} remaining"
     );
+    assert_eq!(
+        get_text(Language::English, LocaleKey::UsageSpendKnownSubtotal),
+        "≥{} known"
+    );
+}
+
+#[test]
+fn test_brazilian_portuguese_preserves_placeholders_and_status_spacing() {
+    assert_eq!(
+        get_text(Language::PortugueseBrazil, LocaleKey::TrayStatusError),
+        " (Erro)"
+    );
+    assert_eq!(
+        get_text(Language::PortugueseBrazil, LocaleKey::TrayCreditsRemaining),
+        "Créditos restantes {}%"
+    );
+    assert_eq!(
+        get_text(Language::PortugueseBrazil, LocaleKey::UsedPercent),
+        "{:.0}% usado"
+    );
+}
+
+#[test]
+fn test_settings_tab_names_are_translated() {
+    let keys = [
+        LocaleKey::TabGeneral,
+        LocaleKey::TabProviders,
+        LocaleKey::TabNotifications,
+        LocaleKey::TabMenuBar,
+        LocaleKey::TabMenu,
+        LocaleKey::TabUsageSpend,
+        LocaleKey::TabAdvanced,
+        LocaleKey::TabAbout,
+        LocaleKey::UsageSpendTitle,
+    ];
+    // Words that are spelled the same as English in that language.
+    let same_word = [
+        (Language::Spanish, LocaleKey::TabGeneral),
+        (Language::PortugueseBrazil, LocaleKey::TabMenu),
+    ];
+
+    for &language in Language::all() {
+        if language == Language::English {
+            continue;
+        }
+        for key in keys {
+            if same_word.contains(&(language, key)) {
+                continue;
+            }
+            assert_ne!(
+                get_text(language, key),
+                get_text(Language::English, key),
+                "{language:?} {key:?} falls back to English"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_every_language_translates_every_key_with_the_same_format_placeholders() {
+    let english = resource_entries(include_str!("en-US.ftl"));
+    let resources = [
+        ("zh-CN", include_str!("zh-CN.ftl")),
+        ("zh-TW", include_str!("zh-TW.ftl")),
+        ("ja-JP", include_str!("ja-JP.ftl")),
+        ("ko-KR", include_str!("ko-KR.ftl")),
+        ("es-MX", include_str!("es-MX.ftl")),
+        ("pt-BR", include_str!("pt-BR.ftl")),
+        ("ru-RU", include_str!("ru-RU.ftl")),
+        ("tr-TR", include_str!("tr-TR.ftl")),
+        ("uk-UA", include_str!("uk-UA.ftl")),
+    ];
+
+    for (locale, resource) in resources {
+        let entries = resource_entries(resource);
+        let missing: Vec<&str> = english
+            .keys()
+            .filter(|name| !entries.contains_key(*name))
+            .copied()
+            .collect();
+        assert!(missing.is_empty(), "{locale} is missing keys: {missing:?}");
+        for (name, value) in &entries {
+            if let Some(english_value) = english.get(name) {
+                assert_eq!(
+                    placeables(value),
+                    placeables(english_value),
+                    "{locale} {name} format placeholders differ from en-US"
+                );
+            }
+        }
+    }
+}
+
+fn resource_entries(resource: &str) -> std::collections::HashMap<&str, &str> {
+    resource
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .filter_map(|line| line.split_once('='))
+        .map(|(name, value)| (name.trim(), value.trim()))
+        .filter(|(name, _)| !name.is_empty())
+        .collect()
+}
+
+fn placeables(value: &str) -> Vec<&str> {
+    value
+        .match_indices("{ \"{")
+        .filter_map(|(start, _)| {
+            value[start..]
+                .find("\" }")
+                .map(|end| &value[start..start + end + 3])
+        })
+        .collect()
 }
 
 fn resource_key_names(resource: &str) -> HashSet<&str> {
@@ -453,4 +634,61 @@ fn resource_key_names(resource: &str) -> HashSet<&str> {
         .filter_map(|line| line.split_once('=').map(|(name, _)| name.trim()))
         .filter(|name| !name.is_empty())
         .collect()
+}
+
+/// The Claude keychain-prompt option has no Windows consumer yet, so its helper
+/// (Providers > Claude > Options) must say so instead of
+/// promising skipped credential reads or a macOS `/usr/bin/security` path.
+#[test]
+fn avoid_keychain_prompts_helper_says_it_is_not_enforced_on_windows() {
+    let expected = [
+        (
+            Language::English,
+            "Not enforced on Windows yet: Claude credentials are still read as usual. The choice is saved for when it ships.",
+        ),
+        (
+            Language::Spanish,
+            "Aún no se aplica en Windows: las credenciales de Claude se siguen leyendo como siempre. La opción se guarda para cuando esté disponible.",
+        ),
+        (
+            Language::Japanese,
+            "Windows ではまだ適用されません。Claude の資格情報は通常どおり読み取られます。この選択は機能の提供に備えて保存されます。",
+        ),
+        (
+            Language::Korean,
+            "아직 Windows에서 적용되지 않습니다. Claude 자격 증명은 평소처럼 읽습니다. 이 선택은 기능이 나올 때를 위해 저장됩니다.",
+        ),
+        (
+            Language::PortugueseBrazil,
+            "Ainda não é aplicado no Windows: as credenciais do Claude continuam sendo lidas normalmente. A escolha fica salva para quando o recurso chegar.",
+        ),
+        (
+            Language::Russian,
+            "Пока не применяется в Windows: учётные данные Claude по-прежнему читаются как обычно. Выбор сохраняется до появления функции.",
+        ),
+        (
+            Language::Turkish,
+            "Windows'ta henüz uygulanmıyor: Claude kimlik bilgileri her zamanki gibi okunur. Seçim, özellik geldiğinde kullanılmak üzere kaydedilir.",
+        ),
+        (
+            Language::Ukrainian,
+            "Поки не застосовується в Windows: облікові дані Claude і далі зчитуються як звичайно. Вибір зберігається до появи функції.",
+        ),
+        (
+            Language::Chinese,
+            "Windows 上尚未生效：仍会照常读取 Claude 凭据。此选项会保存，待该功能上线后使用。",
+        ),
+        (
+            Language::ChineseTraditional,
+            "Windows 上尚未生效：仍會照常讀取 Claude 憑據。此選項會儲存，待該功能上線後使用。",
+        ),
+    ];
+    assert_eq!(expected.len(), Language::all().len());
+    for (language, text) in expected {
+        assert_eq!(
+            get_text(language, LocaleKey::ProviderClaudeAvoidKeychainPromptsHelp),
+            text,
+            "{language:?} Providers > Claude"
+        );
+    }
 }

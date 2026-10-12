@@ -8,6 +8,7 @@ import {
   type ResetTimeFormatMode,
 } from "./useFormattedResetTime";
 import * as tauri from "../lib/tauri";
+import type { LocaleKey } from "../i18n/keys";
 
 vi.mock("../lib/tauri", () => ({
   getLocaleStrings: vi.fn(),
@@ -40,6 +41,12 @@ async function mountWithLocale(ui: React.ReactNode) {
       ResetsInHoursMinutes: "Resets in {}h {}m",
       ResetsInMinutes: "Resets in {}m",
       ResetsInDaysHours: "Resets in {}d {}h",
+      ResetsInHoursOnly: "Resets in {}h",
+      ResetsInDaysOnly: "Resets in {}d",
+      ResetsAtLabel: "Resets {}",
+      ResetsAtTime: "Resets at {}",
+      TrayResetsInLabel: "Resets in {}",
+      DetailCostResets: "Resets",
       TrayResetsDueNow: "Resetting",
       NextExpiresInHoursMinutes: "Next expires in {}h {}m",
       NextExpiresInMinutes: "Next expires in {}m",
@@ -51,6 +58,34 @@ async function mountWithLocale(ui: React.ReactNode) {
   await act(async () => {});
   return rendered;
 }
+
+function translator(table: Partial<Record<LocaleKey, string>>) {
+  return (key: LocaleKey) => table[key] ?? key;
+}
+
+const english = translator({
+  DetailCostResets: "Resets",
+  ResetsAtLabel: "Resets {}",
+  ResetsAtTime: "Resets at {}",
+  TrayResetsInLabel: "Resets in {}",
+  ResetsInMinutes: "Resets in {}m",
+  ResetsInHoursMinutes: "Resets in {}h {}m",
+  ResetsInHoursOnly: "Resets in {}h",
+  ResetsInDaysOnly: "Resets in {}d",
+  ResetsInDaysHours: "Resets in {}d {}h",
+});
+
+const russian = translator({
+  DetailCostResets: "Сброс",
+  ResetsAtLabel: "Сброс {}",
+  ResetsAtTime: "Сброс в {}",
+  TrayResetsInLabel: "Сброс через {}",
+  ResetsInMinutes: "Сброс через {} мин",
+  ResetsInHoursMinutes: "Сброс через {} ч {} мин",
+  ResetsInHoursOnly: "Сброс через {} ч",
+  ResetsInDaysOnly: "Сброс через {} д",
+  ResetsInDaysHours: "Сброс через {} д {} ч",
+});
 
 describe("useFormattedResetTime", () => {
   beforeEach(() => {
@@ -75,7 +110,22 @@ describe("useFormattedResetTime", () => {
     ["Resetting soon", "Resets Resetting soon"],
     ["   \n\t", null],
   ] as const)("normalizes reset description %j", (description, expected) => {
-    expect(normalizeResetDescription(description)).toBe(expected);
+    expect(normalizeResetDescription(description, english)).toBe(expected);
+  });
+
+  it.each([
+    ["Resets", "Сброс"],
+    ["Resets in 2h 10m", "Сброс через 2 ч 10 мин"],
+    ["Resets in 12 hours", "Сброс через 12 ч"],
+    ["Resets in 5 days", "Сброс через 5 д"],
+    ["Resets in 1 minute", "Сброс через 1 мин"],
+    ["Resets in 30 seconds", "Сброс через 1 мин"],
+    ["Resets in 3d 4h", "Сброс через 3 д 4 ч"],
+    ["Resets at 23:30 (UTC)", "Сброс в 23:30 (UTC)"],
+    ["Resets Apr 3, 2pm", "Сброс Apr 3, 2pm"],
+    ["Resets in a while", "Сброс через a while"],
+  ] as const)("localizes reset description %j", (description, expected) => {
+    expect(normalizeResetDescription(description, russian)).toBe(expected);
   });
 
   it("returns a complete localized countdown in relative mode", async () => {

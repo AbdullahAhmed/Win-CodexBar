@@ -6,6 +6,10 @@ use crate::core::ProviderError;
 
 use super::{WebCookieSession, console, legacy};
 
+#[allow(
+    clippy::double_must_use,
+    reason = "async-trait marks its boxed futures #[must_use]"
+)]
 #[async_trait]
 pub(super) trait WebTransport: Send + Sync + 'static {
     type LegacySession: Clone + Send + Sync + 'static;

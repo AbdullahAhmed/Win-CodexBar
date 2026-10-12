@@ -15,7 +15,11 @@ describe("Language type", () => {
     const langRu: Language = "russian";
     expect(langRu).toBe("russian");
     const langTr: Language = "turkish";
+    const langPtBr: Language = "portuguesebrazil";
     expect(langTr).toBe("turkish");
+    expect(langPtBr).toBe("portuguesebrazil");
+    const langUk: Language = "ukrainian";
+    expect(langUk).toBe("ukrainian");
   });
 
   it("allows 'spanish' in LocaleStrings payload", () => {
@@ -53,6 +57,13 @@ describe("Language type", () => {
     };
     expect(payloadTr.language).toBe("turkish");
     expect(payloadTr.entries.TabGeneral).toBe("Genel");
+
+    const payloadUk: LocaleStrings = {
+      language: "ukrainian",
+      entries: { TabGeneral: "Загальні" },
+    };
+    expect(payloadUk.language).toBe("ukrainian");
+    expect(payloadUk.entries.TabGeneral).toBe("Загальні");
   });
 
   it("allows 'spanish' in SettingsSnapshot.uiLanguage", () => {
@@ -79,10 +90,17 @@ describe("Language type", () => {
       highUsageThreshold: 70,
       criticalUsageThreshold: 90,
       predictivePaceWarningEnabled: false,
+      credentialExpiryNotificationsEnabled: false,
       trayIconMode: "single",
       switcherShowsIcons: true,
       menuBarShowsHighestUsage: true,
       menuBarShowsPercent: true,
+      menuBarIconStyle: "percent",
+      mergedOverviewSelectedProviders: [],
+      quotaWarningMarkersVisible: true,
+      workdayTickStyle: "subtle",
+      menuBarColorPace: false,
+      providersSortedAlphabetically: false,
       showAsUsed: false,
       showAllTokenAccountsInMenu: true,
       enableAnimations: true,
@@ -98,6 +116,7 @@ describe("Language type", () => {
       autoDownloadUpdates: false,
       installUpdatesOnQuit: false,
       globalShortcut: "",
+      switcherShortcuts: {},
       codexCustomSessionsDirs: [],
       updateChannel: "stable",
       uiLanguage: "spanish",

@@ -16,7 +16,8 @@ const updateMocks = vi.hoisted(() => ({
 
 vi.mock("../../../lib/tauri", () => tauriMocks);
 vi.mock("../../../hooks/useLocale", () => ({
-  useLocale: () => ({ t: (key: string) => key }),
+  // AboutBuilt keeps its Fluent `{}` placeholder so the rendered date is asserted.
+  useLocale: () => ({ t: (key: string) => (key === "AboutBuilt" ? "Built {}" : key) }),
 }));
 vi.mock("../../../hooks/useUpdateState", () => ({
   useUpdateState: () => ({
@@ -60,10 +61,17 @@ const settings: SettingsSnapshot = {
   highUsageThreshold: 70,
   criticalUsageThreshold: 90,
   predictivePaceWarningEnabled: false,
+  credentialExpiryNotificationsEnabled: false,
   trayIconMode: "single",
   switcherShowsIcons: true,
   menuBarShowsHighestUsage: true,
   menuBarShowsPercent: true,
+  menuBarIconStyle: "percent",
+  mergedOverviewSelectedProviders: [],
+  quotaWarningMarkersVisible: true,
+  workdayTickStyle: "subtle",
+  menuBarColorPace: false,
+  providersSortedAlphabetically: false,
   showAsUsed: false,
   showAllTokenAccountsInMenu: true,
   enableAnimations: true,
@@ -75,6 +83,7 @@ const settings: SettingsSnapshot = {
   autoDownloadUpdates: false,
   installUpdatesOnQuit: false,
   globalShortcut: "",
+  switcherShortcuts: {},
   codexCustomSessionsDirs: [],
   updateChannel: "stable",
   uiLanguage: "english",
@@ -154,5 +163,76 @@ describe("AboutTab", () => {
     await waitFor(() => {
       expect(screen.getByText("ErrorPrefix no browser")).toBeInTheDocument();
     });
+  });
+});
+
+describe("AboutTab Mac grouped layout", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    tauriMocks.openExternalUrl.mockResolvedValue(undefined);
+  });
+
+  it("shows the build date in the hero when the shell reports one", async () => {
+    tauriMocks.getAppInfo.mockResolvedValue({
+      name: "CodexBar",
+      version: "0.70.0",
+      buildNumber: "7",
+      buildDate: "2026-10-11",
+      updateChannel: "stable",
+      tagline: "Keep agent limits in view.",
+    });
+    render(<AboutTab settings={settings} set={vi.fn()} saving={false} />);
+
+    expect(await screen.findByText("Built 2026-10-11")).toBeInTheDocument();
+    expect(screen.getByText("Version 0.70.0 (7)")).toBeInTheDocument();
+  });
+
+  it("leaves the build line out when no build date is known", async () => {
+    tauriMocks.getAppInfo.mockResolvedValue({
+      name: "CodexBar",
+      version: "0.70.0",
+      buildNumber: "dev",
+      updateChannel: "stable",
+      tagline: "Keep agent limits in view.",
+    });
+    render(<AboutTab settings={settings} set={vi.fn()} saving={false} />);
+
+    await screen.findByText("Keep agent limits in view.");
+    expect(screen.queryByText(/^Built /)).toBeNull();
+  });
+
+  it("groups Updates then Links, with Submit an Issue as a link row", async () => {
+    tauriMocks.getAppInfo.mockResolvedValue({
+      name: "CodexBar",
+      version: "0.70.0",
+      buildNumber: "dev",
+      updateChannel: "stable",
+      tagline: "Keep agent limits in view.",
+    });
+    const { container } = render(
+      <AboutTab settings={settings} set={vi.fn()} saving={false} />,
+    );
+    await screen.findByText("Keep agent limits in view.");
+
+    const titles = Array.from(
+      container.querySelectorAll(".settings-group__title"),
+      (node) => node.textContent,
+    );
+    expect(titles).toEqual(["UpdatesTitle", "SectionLinks"]);
+    const linkRows = Array.from(
+      container.querySelectorAll(".settings-link-row"),
+      (node) => node.textContent,
+    );
+    expect(linkRows).toEqual([
+      "AboutLinkGitHub↗",
+      "AboutLinkWebsite↗",
+      "AboutLinkOriginalProject↗",
+      "SubmitIssue↗",
+    ]);
+    expect(screen.getByRole("checkbox", { name: "AutoDownloadUpdates" })).toHaveClass(
+      "toggle--switch",
+    );
+    expect(screen.getByRole("combobox", { name: "UpdateChannelChoice" })).toHaveValue("stable");
+    expect(screen.getByRole("button", { name: "AboutCheckForUpdates" })).toBeEnabled();
   });
 });
